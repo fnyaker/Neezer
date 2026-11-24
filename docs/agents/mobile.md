@@ -6758,3 +6758,33 @@ ce fichier. Le test instrumenté `AppLinkColdStartTest.aTrackLinkSaysItCannotOpe
 le nœud « ne s'ouvre pas encore » dans l'arbre d'accessibilité (le toast vit 2,4 s :
 `NzToasts.LingerMs`). L'image du worker n'a ni JDK ni émulateur : la capture du toast et la passe du
 test sont prouvées par le job `Emulator smoke` de `mobile.yaml`, pas par une capture jointe au PR.
+### M5 — Soirée : la porte de l'hôte (delivered 2026-11-24)
+
+**La règle.** Le lecteur plein écran porte les deux portes du SPA, dans la rangée du pouce entre
+« + » et « Paroles » : « Soirée d'écoute » (`PartyButton`, MB20) et « Contrôle à distance »
+(`RemoteButton`, MB19). `PlayerSurface` a ces deux slots depuis MB11 (`PlayerSheet.kt`,
+`party`/`remote`) et la coquille n'y passait rien : les deux feuilles existaient mais aucune porte
+ne les ouvrait depuis le lecteur (audit 5 et 6). `NowPlayingHost` passe les deux composables, sans
+état : chacun construit son modèle et se cache de lui-même (noyau absent, serveur sans la route,
+personne non connectée), donc la rangée ne montre jamais une porte qui ne mène nulle part (rule 7).
+`:feature:nowplaying` dépendait déjà de `:feature:remote` et `:feature:party` : aucune dépendance
+Gradle ajoutée.
+
+**Ce que le test prouve, et ce qu'il ne prouve pas.** `NowPlayingScreenshotTest`
+`thePlayerRowHasRoomForTheTwoDoors` compose `PlayerSurface` avec deux `NzIconButton` aux libellés
+« Soirée d'écoute » et « Contrôle à distance » et asserte les deux `contentDescription` : il prouve
+que `Doors` peint les slots, **pas** que l'app les alimente. Cette seconde moitié se lit dans
+`NowPlayingHost` (deux lignes) et se voit à l'écran. Le cas tourne aux trois largeurs de la classe
+(360, 600 et 1280 dp), donc +3 cas ; `mobile.yaml` (`testDebugUnitTest`, `lintDebug`,
+`assembleRelease`) est la mesure.
+
+**+0 requête.** Le diff n'ajoute aucun appel FFI : les deux boutons sondent le serveur une fois à
+leur première composition, comme quand MB19/MB20 les ont écrits, puis vivent de leur état. Un
+lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les deux se cachent.
+
+**La capture de banc n'a pas été produite.** Le plan demandait un PNG du lecteur à 360 dp sous
+`docs/agents/screenshots/mobile/M5/` ; l'image du worker n'a ni JDK, ni SDK Android, ni émulateur
+(même limite que M1), et les deux portes ne se peignent pas sous Robolectric : `PartyButton` sort
+avant de dessiner quand `PartyCore.service()` est nul. La preuve d'écran reste à faire sur le banc
+(`mobile/tools/tone-server.py`) ; le test Robolectric et `Emulator smoke` sont ce que la CI a
+vérifié.

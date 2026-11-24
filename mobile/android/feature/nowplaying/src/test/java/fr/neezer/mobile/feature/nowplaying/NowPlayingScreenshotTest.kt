@@ -12,9 +12,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
 import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
@@ -284,6 +287,38 @@ abstract class NowPlayingScreenshotBase(private val width: Int) {
         assert(NowPlayingState.pane == Pane.Queue)
         NowPlayingState.hide()
         assert(!NowPlayingState.open && NowPlayingState.pane == Pane.None)
+    }
+
+    /**
+     * The two doors of M5: « Soirée d'écoute » and « Contrôle à distance », in the
+     * thumb row between « + » and « Paroles » (`MobileNowPlaying.svelte` §9).
+     *
+     * It proves the SLOTS paint inside [Doors] at every width; that the app passes
+     * them is `NowPlayingHost`'s two lines, and the emulator smoke is what opens
+     * the real player.
+     */
+    @Test
+    fun thePlayerRowHasRoomForTheTwoDoors() {
+        val model = model()
+        // The state is read OUTSIDE the composition (lint's `StateFlow.value` rule).
+        val state = model.state.value
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
+                PlayerSurface(
+                    state = state,
+                    model = model,
+                    nav = navigator,
+                    lyrics = null,
+                    about = null,
+                    onClose = {},
+                    party = { NzIconButton(NzGlyph.Party, "Soirée d'écoute", {}) },
+                    remote = { NzIconButton(NzGlyph.Remote, "Contrôle à distance", {}) },
+                    liveReads = false,
+                )
+            }
+        }
+        rule.onNodeWithContentDescription("Soirée d'écoute").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Contrôle à distance").assertIsDisplayed()
     }
 }
 
