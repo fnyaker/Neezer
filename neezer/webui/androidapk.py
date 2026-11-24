@@ -71,6 +71,13 @@ NATIVE_APK_NAME = "neezer-native.apk"
 # unknown ABI is not an error: it gets the universal APK, which installs
 # anywhere (the app is side-loaded).
 NATIVE_ABIS = ("arm64-v8a", "armeabi-v7a", "x86_64")
+#: The release asset of each split, as LITERALS: `?abi=` is client input and
+#: never becomes text in a URL or a path (CodeQL findings 720 and its siblings).
+NATIVE_ASSETS = {
+    "arm64-v8a": "neezer-native-arm64-v8a.apk",
+    "armeabi-v7a": "neezer-native-armeabi-v7a.apk",
+    "x86_64": "neezer-native-x86_64.apk",
+}
 APK_MIME = "application/vnd.android.package-archive"
 # A release APK is ~10 MB (55 MB for the native universal one); anything past
 # this is not one.
@@ -108,8 +115,8 @@ class _Channel:
         self.cache_stem = cache_stem
 
     def asset_for(self, abi: str | None) -> str:
-        if abi:
-            return f"{self.cache_stem}-{abi}.apk"
+        if self.cache_stem == "neezer-native":
+            return NATIVE_ASSETS.get(abi or "", self.asset)
         return self.asset
 
     def cache_name(self, version: str) -> str:
