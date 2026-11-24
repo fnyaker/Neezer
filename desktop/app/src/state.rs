@@ -2182,10 +2182,15 @@ mod tests {
         // `a_measured_head_and_tail_of_silence_are_both_skipped`; this plays the
         // very meta the app built.)
         let events = engine.events();
+        // Sample the start on a PAUSED engine. The previous row is still
+        // playing here, so loading on a playing engine makes the clock advance
+        // while `Started` is in flight: under a loaded CI runner the reading
+        // landed at 0.768 s (1.141 s once) for a voice that really starts at
+        // 0.500 s, because it included the event's lag. The mixer drains its
+        // commands before the paused return (`mixer::render`), so the voice is
+        // built and its clock set to the server's 0.5 s while nothing renders.
+        engine.pause();
         engine.load("trimmed", nz_audio::Quality::Flac, None);
-        // The mixer consumes its commands only while it renders, so the sink is
-        // pumped here too: a paused device would leave the install command
-        // queued and the voice would never be built.
         let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         let mut started = false;
         while !started {
@@ -2203,8 +2208,8 @@ mod tests {
         // fills its ring in the background, so the sink is pumped until the
         // clock has covered the window (a buffer rendered before the first
         // decoded frame is silence, and correctly does not advance it).
-        engine.play();
         let start_position = engine.position();
+        engine.play();
         let mut peak = 0.0f32;
         let deadline = std::time::Instant::now() + crate::testwait::WAIT;
         let mut played = start_position;
