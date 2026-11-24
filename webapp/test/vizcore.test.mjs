@@ -163,7 +163,11 @@ test("the Rust scope draws what the JavaScript one drew, at every tier", () => {
   }
 });
 
-test("the Rust scope is faster than the JavaScript it replaced", () => {
+// SKIPPED ON CI, RUN EVERYWHERE ELSE (owner decision 2026-11-24): a shared
+// runner's own clock noise reads the same code 0.97 to 1.7 depending on the
+// minute, so the comparison is a benchmark, not a gate. The body stays intact
+// and `npm test` without CI set still runs it.
+test("the Rust scope is faster than the JavaScript it replaced", { skip: Boolean(process.env.CI) }, () => {
   // Measured on this suite's machine (V8, the shipped baseline binary, the
   // high tier: 8192 samples a channel, 120 ms of trigger search, 1868
   // columns): JavaScript ~95 us an analysis frame, Rust ~40 us including the

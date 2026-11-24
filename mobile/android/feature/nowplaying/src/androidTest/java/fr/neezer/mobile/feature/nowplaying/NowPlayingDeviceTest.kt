@@ -38,6 +38,7 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -318,6 +319,15 @@ class NowPlayingDeviceTest {
      */
     @Test
     fun theTapToSoundDelayIsMeasuredOnOneClock() {
+        // A benchmark, not a gate (owner decision 2026-11-24): twenty
+        // tap-to-sound trials on an emulator's shared CPU measure the host's
+        // scheduler, not this code. A real phone still runs it.
+        assumeFalse(
+            "perf benchmark skipped on CI emulator",
+            Build.FINGERPRINT.contains("generic", ignoreCase = true) ||
+                Build.HARDWARE.contains("ranchu", ignoreCase = true) ||
+                Build.HARDWARE.contains("goldfish", ignoreCase = true),
+        )
         val bench = Bench.start()
         val core = install(bench)
         val player = core.player()
