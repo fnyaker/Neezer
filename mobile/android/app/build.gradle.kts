@@ -226,3 +226,11 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
 }
+
+// La garde de l'audit lit les sources (M15) : le chemin lui est donné comme aux
+// captures des modules de fonctionnalité, jamais par une arithmétique `../../..`.
+val repoRoot = rootProject.layout.projectDirectory.dir("../..")
+
+tasks.withType<Test>().configureEach {
+    systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
+}

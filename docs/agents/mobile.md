@@ -6869,6 +6869,18 @@ preuve des vraies portes reste `Emulator smoke` (`doors_opened=6 doors_failed=0`
 leur première composition, comme quand MB19/MB20 les ont écrits, puis vivent de leur état. Un
 lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les deux se cachent.
 
+### M15 — Garde de régression : chaque route a une porte (delivered 2026-11-25)
+
+**La règle.** Deux règles, écrites une fois dans `mobile/android/app/src/test/java/fr/neezer/mobile/app/RoutesHaveADoorTest.kt`, échouent sur les défauts qu'un `mobile.yaml` vert a laissés passer (audit, décision 13). **1)** chaque route de `Routes` est *atteinte* par quelque chose, sauf les 16 de `LINK_ONLY` — chacune avec sa raison écrite, donc une route ajoutée sans porte se voit dans le diff. **2)** aucun composable lié par `NavGraph` n'est un stub : un fichier qui dessine `NzPlaceholder` doit aussi appeler un `…Screen(`. Ni Robolectric ni Android : le test lit les sources, comme les captures de module reçoivent déjà `nz.repoRoot` (`app/build.gradle.kts`), et il tourne en 3,2 s avec le reste de `testDebugUnitTest`.
+
+**Ce qu'« une porte » veut dire, et pourquoi le plan a dû être corrigé.** La forme littérale du plan comptait `contains("${route}Entry(")` — donc la DÉCLARATION `fun SetupEntry(` de son propre fichier passait pour une porte. Mesuré sur `01e7367e` : **0 route sans porte**, alors que l'audit en avait quatre ; la garde ne gardait rien, et son étape 3 (« obtenir l'échec `Routes.Setup` ») était irreproductible. La règle est donc une RÉFÉRENCE (`Routes.X`, `AppLink.X`, ou un APPEL `XEntry(` une fois les déclarations retirées), plus la coquille elle-même (`NavGraph.kt`) pour ses lignes de navigation — mais ni le `composable<Routes.X>` (c'est contre lui que la règle garde) ni `Routes.X::class.qualifiedName` (le titre de l'onglet, qui n'ouvre rien). Mesuré sur `01e7367e` avec cette définition : **4 sans porte — `Setup`, `Login`, `Onboarding`, `Genres`**, les quatre de l'audit.
+
+**Ce que « stub » veut dire.** La forme littérale interdisait `NzPlaceholder` dans tout fichier déclarant une entrée liée : sur l'arbre final elle échoue sur `PartyEntry`, qui n'est pas un stub mais une branche honnête (« pas de noyau natif / serveur sans soirée »), et la réparer demanderait d'éditer un fichier hors du lot. La règle demande donc un `…Screen(` à côté du placeholder : le défaut des podcasts (`PodcastEntries.kt` : deux surcharges, le stub gagnait) échoue, `PartyEntry` passe. **La garde n'est pas affaiblie, elle est rendue vraie.**
+
+**Mesuré.** `gradle :app:testDebugUnitTest --tests 'fr.neezer.mobile.app.RoutesHaveADoorTest' -PskipRust` : **BUILD SUCCESSFUL** sur l'arbre final (`82fe2fc9` + la garde) — **26 routes, 374 fichiers `.kt` lus, 0 sans porte, 0 stub**. Le même test, même classe compilée, `-Dnz.repoRoot=/tmp/…/01e7367e` : **Tests run: 2, Failures: 2** — `la route Setup n'a aucune porte dans l'application` et `le composable PodcastsEntry lié par NavGraph dessine encore un NzPlaceholder (PodcastEntries.kt)`, les deux messages que le plan exigeait. **+0 requête, +0 octet** : le diff n'ajoute ni appel FFI, ni requête, ni lecture à l'exécution — un test JVM et une `systemProperty`.
+
+**Le piège.** `testDebugUnitTest` réécrit les PNG de `docs/agents/screenshots/mobile/MB8` avec le Skia de l'hôte : les restaurer, ne jamais les committer.
+
 ### M13 — Notifications demandées en contexte, mode voiture dans Réglages (delivered 2026-11-24)
 
 **La règle.** `POST_NOTIFICATIONS` est déclarée depuis MB0 et n'était jamais DEMANDÉE : la
