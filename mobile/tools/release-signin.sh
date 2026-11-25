@@ -250,7 +250,14 @@ while (( SECONDS - budget_started < 60 )); do
     fi
 done
 (( signed_in == 1 )) || { note "the home never painted after signing in; screen: $(screen_texts)"; exit 1; }
-(( covers > 0 )) || { note "signed in, but the home asked the server for no cover in 60 s"; exit 1; }
+if (( covers == 0 )); then
+    note "signed in, but the home asked the server for no cover in 60 s"
+    note "screen: $(screen_texts)"
+    note "the server's last requests:"
+    grep -E '"(GET|POST|PUT) /api/' "$access_log" | tail -n 15 >&2 || true
+    adb_dev logcat -d 2>/dev/null | grep -E " (W|E) (neezer|NeezerImages|Coil)" | tail -n 15 >&2 || true
+    exit 1
+fi
 # One more frame on the home after the covers arrived, and the same process.
 dump_ui >/dev/null
 [[ -n "$(app_pid)" ]] || { note "the app died while drawing its covers"; crash_cause >&2; exit 1; }

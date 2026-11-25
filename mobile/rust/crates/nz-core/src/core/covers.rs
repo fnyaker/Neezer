@@ -57,6 +57,22 @@ impl Core {
                 detail: "Pochette sans adresse".to_owned(),
             });
         }
+        // The server names its own sleeves by a ROOT-RELATIVE path
+        // (`/api/cover/<album>`, the SPA's convention, in every payload a screen
+        // draws). It is the configured origin's by definition, so it is made
+        // absolute against that origin — which also keys the disk cache per
+        // server. Measured on v1.6.6 against perf_api: every home card handed
+        // `/api/cover/…` here, the allow-list refused it as "not an origin",
+        // and no cover was ever requested. `//host/…` is protocol-relative,
+        // another host, and stays refused below.
+        let absolute;
+        let url = if url.starts_with('/') && !url.starts_with("//") {
+            let origin = self.origin().ok_or_else(refused)?;
+            absolute = format!("{}{url}", origin.as_str());
+            absolute.as_str()
+        } else {
+            url
+        };
         // A hit costs no request at all, which is what a scrolling list needs.
         if let Some(path) = self.cache().covers().get(url) {
             tracing::trace!(size_px, path = %path.display(), "cover hit");
@@ -287,6 +303,43 @@ mod tests {
         // And it survives a restart of the core (the file and its row).
         let expected = again_path(&dir, &url);
         assert_eq!(expected, Some(second));
+    }
+
+    /// The path a SCREEN hands over is the server's own root-relative one
+    /// (`/api/cover/<album>`): it is asked of the configured origin, with the
+    /// session, exactly once — and a protocol-relative `//host/…` is another
+    /// host and costs nothing. Before the fix the relative path was refused and
+    /// the home drew grooves only.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_root_relative_cover_is_asked_of_the_configured_origin() {
+        let bench = Bench::start(true);
+        let dir = TempDir::new("covers-relative");
+        let core = dir.core("test");
+        core.set_server(&bench.base()).await.expect("server");
+        core.login("bench", "Bench1").await.expect("login");
+
+        let (absolute, sent_bytes) = bench.cover().await;
+        let relative = &absolute[absolute.find("/api/").expect("an API cover")..];
+        let path = core.cover_path(relative, 128).await.expect("a cover");
+        assert_eq!(
+            std::fs::read(&path).expect("the file").len(),
+            sent_bytes,
+            "the configured origin's bytes"
+        );
+        let requests = |core: &crate::core::Core| {
+            core.stats()
+                .into_iter()
+                .find(|stats| stats.tag == TAG_COVER)
+                .map_or(0, |row| row.requests)
+        };
+        assert_eq!(requests(&core), 1);
+
+        let error = core
+            .cover_path("//evil.example/api/cover/1", 128)
+            .await
+            .expect_err("protocol-relative is another host");
+        assert!(matches!(error, CoreError::Invalid { .. }), "{error:?}");
+        assert_eq!(requests(&core), 1, "a refused cover is not a request");
     }
 
     fn again_path(dir: &TempDir, url: &str) -> Option<String> {

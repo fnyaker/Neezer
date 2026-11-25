@@ -191,6 +191,13 @@ never committed; Rust 1.99.1):
   `a_send_opens_its_connection_off_the_polling_thread` fails on the old `request.send().await`.
   Still true and not fixed here: the rest of an FFI future (parsing, cache reads) is polled on the
   caller's thread.
+- **A cover path from the server is root-relative, and it is the configured origin's.** Every payload
+  names a sleeve the SPA's way, `/api/cover/<album>`; `Core::cover_path` refused it as "not an
+  origin" (its allow-list only knew absolute URLs, and the test bench absolutized the path before
+  asking, which hid it), so the home never requested a single cover — found by the release sign-in
+  above on its first run (`covers_served=0`). It is now made absolute against the configured origin
+  (which also keys the disk cache per server); `//host/…` is another host and stays refused
+  (`a_root_relative_cover_is_asked_of_the_configured_origin`).
 - **A `@Composable` compiled without the Compose compiler is a crash at runtime, not a build error.**
   The plugin appends a `Composer` and a `$changed` int to every `@Composable`'s JVM signature, and a
   compose-compiled caller calls that signature. `:bridge` declared `CoilCovers.Image(url, sizePx)`
