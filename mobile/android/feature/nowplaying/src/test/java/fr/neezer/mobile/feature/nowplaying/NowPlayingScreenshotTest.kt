@@ -303,9 +303,10 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
      * It proves the row FITS at every width of the class and at both font scales
      * the plan names: every door keeps a ≥ 48 dp touch target, the five doors stay
      * on ONE line inside the page's usable width, and « À propos » — which left the
-     * row in this lot — sits below it, centred. Run against `dcb78607` (the row
-     * with the chevron inside it) it fails on the « À propos » target: Compose had
-     * shrunk it to ~20 dp.
+     * row in this lot — sits below it, centred. Run against `dcb78607` it fails
+     * first on « Soirée d'écoute » (**32 dp**: the slot was wrapped in `Door`'s
+     * 8 dp pads), then on « Paroles » (no contentDescription); the row of six with
+     * the chevron inside it is the ~20 dp last target MB11's capture measured.
      *
      * That the app PASSES the two slots is `NowPlayingHost`'s two lines, and the
      * emulator smoke is what opens the real player.
