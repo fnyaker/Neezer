@@ -6532,6 +6532,46 @@ un appareil : l'image de ce worker n'a ni JDK, ni SDK Android, ni émulateur —
 M2. Ce que la CI prouve à la place : `testDebugUnitTest`, `lintDebug`, **`assembleRelease`** (R8
 garde `AsyncImage`, le fetcher et le keyer) et `Emulator smoke`.
 
+### M14 — Dernier plantage dans Assistance (delivered 2026-11-24)
+
+**La règle.** Un plantage Kotlin NON rattrapé écrit une trace dans le stockage privé de l'app
+(`CrashRecord`, `:bridge`, un fichier `last-crash.txt`) et la CHAÎNE au gestionnaire par défaut :
+Android tue le processus et montre son dialogue comme avant. Réglages → Assistance montre alors une
+carte « Dernier incident » (date, fil, pile), avec « Partager l'incident » et « Effacer ». Aucun
+incident = aucune carte.
+
+**Pourquoi un fichier et pas SQLite.** Le gestionnaire s'exécute pendant que le processus meurt :
+`File.writeText` ne demande ni noyau, ni runtime, ni allocation de sérialisation, alors qu'une
+écriture `NzCore` traverserait JNA — et si c'est le noyau qui tombe, la trace n'existerait jamais.
+Une seule entrée, la dernière : un journal de plantages serait un deuxième produit.
+
+**Pourquoi la trace n'est PAS dans le rapport de diagnostic.** « Partager le rapport » est déjà un
+bouton ; y ajouter la pile doublerait la taille du texte partagé et mêlerait deux consentements.
+La trace a son propre bouton, qui ne partage qu'elle. Aucune trace ne contient l'ARL, un jeton ou un
+mot de passe : `Throwable.stackTraceToString()` ne rend que la pile.
+
+**Où vit le stockage.** Dans `:bridge`, parce que `:feature:settings` ne dépend pas de `:app` (et ne
+doit pas) : `CrashLog` (`:app`) écrit, `HelpSection` (`:feature:settings`) lit. Conséquence pour la
+CI : `:bridge` a reçu `org.robolectric:robolectric:4.18` + `isIncludeAndroidResources` en
+`testImplementation`/`testOptions` — une dépendance de TEST seulement, hors de la table « Fichiers »
+du plan : sans elle, un test de `CrashRecord` ne peut pas obtenir de `Context.filesDir` (android.jar
+lève « Stub! »), et c'est la recette que les vingt autres modules emploient déjà.
+
+**+0 requête, +0 octet.** Le diff n'ajoute AUCUN appel FFI (vérifié : `grep -n "CrashRecord" …` ne
+touche ni `NzCore` ni `screenFlow`) ; `grep -rn "setDefaultUncaughtExceptionHandler" mobile/android`
+→ **1 fichier, `CrashLog.kt`** ; la carte lit un fichier local (`read`) à la composition de la
+section, donc 0 requête et 0 octet sur le réseau, à froid comme à chaud.
+
+**Mesuré, pas supposé.** `CrashRecordTest` (JVM, Robolectric, `:bridge`) : **3 tests** — l'aller-retour
+garde `thread=` et la pile complète, `clear` puis `read` rend `null`, un second incident remplace le
+premier (`time=` compte une fois). `CrashCardTest` (instrumenté, `:app`, l'émulateur de
+`mobile/tools/ci-emulator.sh`) ouvre Réglages → Assistance sur un incident écrit par la MÊME fonction
+que `CrashLog` : la carte et « Partager l'incident » sont là, « Effacer » la retire, et la rouvrir
+après « Retour aux réglages » ne la fait pas revenir — c'est ce qui distingue un état Compose d'un
+fichier réellement effacé. L'image du worker n'a ni JDK ni émulateur : le vert de `mobile.yaml`
+(`APK` + `Emulator smoke`) est la preuve, et la capture d'écran de la carte reste due à un passage
+sur une machine qui a un émulateur (même limite que M2 et M8).
+
 ### M9 — Les deux portes de la Bibliothèque (delivered 2026-11-24)
 
 **La règle.** Le « + » de la Bibliothèque ouvre une feuille de quatre entrées (`Nouvelle playlist`,

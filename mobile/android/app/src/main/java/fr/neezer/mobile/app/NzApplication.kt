@@ -29,6 +29,8 @@ class NzApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Avant le noyau : si c'est lui qui tombe, la trace existe déjà.
+        CrashLog.install(this)
         NzBridge.install(this)
         // A launch with a cookie — the person is already signed in — restores the
         // session INTO THE CORE (`restore()` is `/api/me`). Without it `Core::me()`
