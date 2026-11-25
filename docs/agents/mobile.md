@@ -605,8 +605,9 @@ For the underrun/battery measures that need a working audio HAL, `-no-audio` is 
 a real phone over `adb` and say so (see *Measures*).
 
 CI: the `mobile.yaml` workflow enables KVM on the runner (udev rule, the documented GitHub Actions
-recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator against
-`tools/perf_api.py --serve` reached at `10.0.2.2`.
+recipe) and runs the shell smoke, the RELEASE JOURNEY (`mobile/tools/release-journey.sh`: signed in
+on the minified APK, then its eight doors — see *Pitfalls*) and the Macrobenchmark job on an API 35
+x86_64 emulator against `tools/perf_api.py --serve` reached at `10.0.2.2`.
 
 **Measured rules around that CI (2026-11-18, completed 2026-11-24).**
 

@@ -188,16 +188,26 @@ app_pid() { adb_dev shell pidof "$ui_package" 2>/dev/null | tr -d '\r'; }
 # exception at startup, leaves the screen black and the accessibility tree empty —
 # the symptom a launch check reports alone ("« Accueil » never painted"), which
 # names nothing actionable. The crash buffer names the cause.
+#
+# Only an entry that NAMES our package counts: the emulator's crash buffer also
+# collects SystemUI's and SwiftShader's crashes, and those are not the app's
+# result. The ANR line is not there at all — ActivityManager writes « ANR in
+# <pkg> » to the main buffer — so it is read from that buffer's last 500 lines.
 app_crash_cause() {
-    local crash
-    # Two lines of context after the verdict: the exception class is what a
-    # reader needs (`IllegalStateException: You need to use a Theme.AppCompat…`),
-    # and the first frame says where.
-    crash="$(adb_dev logcat -d -b crash 2>/dev/null |
-        grep -E -A 2 "FATAL EXCEPTION|ANR in fr\.neezer\.mobile|UnsatisfiedLinkError|dlopen failed" |
-        head -6 || true)"
-    if [[ -n "$crash" ]]; then
-        printf '%s' "$crash"
+    local crash anr
+    crash="$(adb_dev logcat -d -b crash 2>/dev/null | awk '
+        /^--------- beginning of/ { buf = buf $0 "\n"; next }
+        { buf = buf $0 "\n" }
+        END {
+            n = split(buf, block, /--------- beginning of [^\n]*\n/)
+            for (i = 1; i <= n; i++)
+                if (block[i] ~ /fr\.neezer\.mobile/) printf "%s", block[i]
+        }' | head -12)"
+    anr="$(adb_dev logcat -d -b main -t 500 2>/dev/null |
+        grep -F "ANR in fr.neezer.mobile" | head -1 || true)"
+    if [[ -n "$crash$anr" ]]; then
+        if [[ -n "$crash" ]]; then printf '%s' "$crash"; fi
+        if [[ -n "$anr" ]]; then printf '%s' "$anr"; fi
         return 0
     fi
     if [[ -z "$(app_pid)" ]]; then

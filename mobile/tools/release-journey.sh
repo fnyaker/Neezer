@@ -14,9 +14,10 @@
 # Eight doors. Each one is a tap plus the literal ONLY that screen draws, so a
 # tab that opens the previous screen, a screen that silently fails to load, or a
 # route that never arrives fails here instead of passing as "the shell opened".
-# After every step the process must still be `pidof fr.neezer.mobile`, and the
-# crash buffer must carry no `FATAL EXCEPTION` / `ANR in fr.neezer.mobile` /
-# `UnsatisfiedLinkError` — a crash is a failure of the journey, never a result.
+# After every step the process must still be `pidof fr.neezer.mobile`, and
+# neither buffer may name a crash or an ANR of ours (`FATAL EXCEPTION`,
+# `UnsatisfiedLinkError`, `ANR in fr.neezer.mobile`) — a crash is a failure of
+# the journey, never a result.
 #
 # Why it exists. `release-signin.sh` closed the two defects the shell smoke could
 # not see (v1.6.5: the platform verifier stripped by R8; v1.6.6: a crash on the
@@ -28,8 +29,8 @@
 # failure it prints the door that failed, the screen's own texts, the last tree
 # (bounded) and the crash buffer's cause, then exits 1.
 #
-# Bounded everywhere: `await_text` 10 s (30 s for a cold launch), at most five
-# swipes for a below-the-fold control, no `sleep`. The emulator is not started
+# Bounded everywhere: `await_text` 10 s (30 s for a cold launch), eight swipes at
+# most for a below-the-fold control, no `sleep`. The emulator is not started
 # here — `ci-emulator.sh` owns it, and every `adb` call names the serial it was
 # given, never a device this script did not choose.
 
@@ -127,6 +128,11 @@ covers="$(sed -n 's/^release_signin=1 covers_served=\([0-9]*\).*/\1/p' "$signin_
     fail_screen "signed in, but the home asked the server for no cover"
 }
 
+# The walk's crash/ANR verdicts are about the walk: the buffers are emptied here
+# so a line from the sign-in (already judged by release-signin.sh) cannot fail a
+# later door for a reason that is not its own.
+adb_dev logcat -c >/dev/null 2>&1 || true
+
 step "release journey: the screens"
 # The home is already painted by the sign-in; its marker is on the root in every
 # state (hero, skeletons, a failed load), so this door costs no tap.
@@ -189,18 +195,14 @@ fi
 check_app "the Mode voiture door"
 
 # BACK finishes the Activity (it is started NEW_TASK from the settings screen).
-# The pane is still scrolled to its car card — its title is above the fold — so
-# the button that was just tapped is the literal that proves the app is back;
-# the resumed activity then names the shell itself.
+# The pane returns at whatever offset it was left at, so either of its own card
+# titles names it — the car card just tapped, or the quality card at the top if
+# the scroll state was rebuilt; neither exists on the car Activity.
 adb_dev shell input keyevent KEYCODE_BACK >/dev/null
-await_text "Ouvrir les réglages du mode voiture" 15 || {
+if ! await_text "Ouvrir les réglages du mode voiture" 6 &&
+    ! await_text "Qualité demandée au serveur" 10; then
     verdict 0
     fail_screen "BACK from the car settings did not return to Lecture & son"
-}
-if ! adb_dev shell dumpsys activity activities 2>/dev/null |
-    grep -E "mResumedActivity|topResumedActivity" | grep -qF "$ui_package/.app.MainActivity"; then
-    verdict 0
-    fail_screen "the resumed activity is not the app's shell after BACK"
 fi
 if ! tap_text "Accueil" || ! await_text "Accueil Neezer" 15; then
     verdict 0
