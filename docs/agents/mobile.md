@@ -2027,6 +2027,13 @@ and `fmt --check` clean; `nz-audio`'s own suite plus its new `tests/readahead.rs
   that waits for `state == Playing` measures nothing: every audio assertion waits on the ENGINE's
   clock (`pump_until_audio`). Six assertions were reading silence or a previous row's clock before
   that.
+- **An assertion ABOUT a request waits on the request, not on the state it produces.** The Flow
+  test pumped until the third row appeared, then read `flow_calls` — but that row comes from
+  the SECOND call's answer, while the assertion is about the THIRD: on a loaded runner the read fell
+  between the two and the test said **2 calls where 3 are owed** (`mobile.yaml` run 45534618988,
+  `the_flow_asks_one_title_at_a_time_and_refills_once`), on a head that passes on a workstation.
+  The predicate now names the event the assertion is about (`len == 3 && flow_calls() >= 3`), so a
+  real storm still fails the exact count.
 - **A voice that never opened has no `current_id`.** The first fault policy compared the failed id
   with `engine.current_id()`, which is `None` for a 404 that never opened — so every unplayable row
   was treated as "a late failure for a row that is no longer current" and the list froze. The
