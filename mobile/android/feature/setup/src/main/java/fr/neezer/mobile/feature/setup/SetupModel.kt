@@ -69,6 +69,21 @@ class NzScreens(
 }
 
 /**
+ * Whether the probe's leaf is one the person must accept on screen before the
+ * server may be used.
+ *
+ * Two cases, and one non-case:
+ * - the platform does not vouch for the chain (`systemTrusted == false`): the pin
+ *   is the only trust there is, and it must be the person's tap;
+ * - a pin is held and the server now presents another leaf (`pinChanged`): the
+ *   stored pin refuses every request until it is replaced, so accepting is the
+ *   only way forward (the old app re-pinned on save, with no question asked);
+ * - the platform trusts the chain and the pin (if any) is the same leaf: nothing
+ *   to accept, and `CertificateCard` draws no button for it either.
+ */
+internal fun ProbeResult.needsAcceptance(): Boolean = pin != null && (!systemTrusted || pinChanged)
+
+/**
  * The setup screen's state machine (lot MB4).
  *
  * Every rule the old `SetupActivity` learned the hard way is here, in order:
@@ -80,6 +95,11 @@ class NzScreens(
  *   SHA-256 is on screen, `pin` is the value to keep, and a leaf that differs
  *   from the one already pinned says "le certificat a changé" — the pin is
  *   replaced only when the person accepts it.
+ * - **An unaccepted leaf BLOCKS the account screen.** When the probe needs an
+ *   acceptance, `check` stops on the certificate card: it commits nothing and
+ *   navigates nowhere, and `acceptPin` pins first, then commits the origin (so
+ *   the core's client is rebuilt over that pin) and hands the screen on. v1.6.5
+ *   did the opposite, and a phone met a refused certificate on the login.
  * - **A server that does not answer is not a lost setup.** The origin is
  *   remembered, the cause is on screen, and "Continuer quand même" exists for a
  *   LAN server on another link (the old app's escape hatch).
@@ -104,6 +124,14 @@ class SetupModel(
     ) {
         /** Whether "Se connecter" may be pressed. */
         val canCheck: Boolean get() = host.isNotBlank() && !checking
+
+        /**
+         * The probe showed a leaf the person must accept before this server may
+         * be used: it is exactly the condition `CertificateCard` draws its
+         * "Accepter" button under, so the screen and the state machine cannot
+         * disagree about who is waiting for whom.
+         */
+        val needsAcceptance: Boolean get() = probe?.needsAcceptance() ?: false
     }
 
     private val _state = MutableStateFlow(State())
@@ -131,9 +159,19 @@ class SetupModel(
         scope.launch {
             try {
                 val probe = service.probe(state.host, state.port, state.verifySsl)
+                // A leaf the platform does not trust (or one that changed under a
+                // held pin) is NOT a server the person may sign in to yet: the
+                // screen stays on the certificate card and only "Accepter" —
+                // `acceptPin`, which pins FIRST and commits the origin after —
+                // takes them to the account. Measured on v1.6.5: `check`
+                // committed the server and navigated with the leaf unpinned, so
+                // the login request met a certificate the platform refused and
+                // the person read "certificat non accepté" with no way forward.
+                if (probe.needsAcceptance()) {
+                    _state.update { it.copy(checking = false, probe = probe) }
+                    return@launch
+                }
                 service.setServer(state.host, state.port)
-                // A leaf the platform does not trust is pinned ONLY once the
-                // person has seen it — and accepting it is what `acceptPin` does.
                 _state.update { it.copy(checking = false, probe = probe, saved = true) }
                 onDone()
             } catch (error: Exception) {
@@ -170,12 +208,28 @@ class SetupModel(
     }
 
     /** Accepts the leaf the probe showed, which replaces a changed pin. */
-    fun acceptPin() {
-        val probe = _state.value.probe ?: return
+    fun acceptPin(onDone: () -> Unit = {}) {
+        val state = _state.value
+        val probe = state.probe ?: return
         val pin = probe.pin ?: return
         runCatching { service.pin(probe.origin, pin) }
             .onSuccess {
                 _state.update { it.copy(probe = it.probe?.copy(pinChanged = false)) }
+                // ORDER MATTERS, and the core is what proves it: `set_server`
+                // rebuilds the one HTTP client over the pin it finds
+                // (`nz_core::core::server::build_api_with`), so the login and
+                // every later request go through the leaf the person just
+                // accepted. Committing the origin first would hand the session
+                // the platform verifier alone — the v1.6.5 defect.
+                scope.launch {
+                    try {
+                        service.setServer(state.host, state.port)
+                        _state.update { it.copy(saved = true, cause = null) }
+                        onDone()
+                    } catch (error: Exception) {
+                        _state.update { it.copy(cause = NzErrors.text(error)) }
+                    }
+                }
             }
             .onFailure { error ->
                 _state.update { it.copy(cause = NzErrors.text(error)) }

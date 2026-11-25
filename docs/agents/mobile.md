@@ -142,6 +142,24 @@ never committed; Rust 1.99.1):
   "« Accueil » never painted" — which is what hid this for a day.
 - An Android emulator plays its sound on the host by default: always `-no-audio`, or route it to
   a null sink; and never open its window on the user's display.
+- **R8 cannot see a JNI edge, so a class only Rust names must be kept, and the R8 mapping is the
+  guard.** `rustls-platform-verifier`'s Android half calls
+  `org.rustls.platformverifier.CertificateVerifier` by NAME; without
+  `-keep, includedescriptorclasses class org.rustls.platformverifier.** { *; }` in
+  `:bridge/consumer-rules.pro` (the upstream README's own rule) a minified release strips it and
+  EVERY system-trust handshake fails. Measured on v1.6.5's release APK: "Vérifier le certificat"
+  answered the server offline and the login refused a plain Let's Encrypt certificate, while the
+  debug app, the unminified smoke and every CI job were green — the defect exists only in the
+  minified shape. Two guards, both cheap: `mobile.yaml` fails the `apk` job unless
+  `app/build/outputs/mapping/release/mapping.txt` shows `X -> X:` for the three classes, and
+  `ci-emulator.sh` runs `ReleaseTlsTrustTest` against the `benchmark` build type (minified,
+  debug-signed) on a real device.
+- **Autofill is declared, never guessed.** A Compose field a password manager should fill carries
+  `androidx.compose.ui.autofill.ContentType` through `Modifier.semantics { contentType = … }`
+  (`ContentType.Username` / `ContentType.Password` in the account form); the password field's IME
+  action is `Done` and submits, and a successful submit calls `LocalAutofillManager.commit()` so the
+  manager offers to save. Fields that are not credentials (host, port) carry NO content type: v1.6.5
+  declared none on either account field, and Proton Pass mis-detected them on the owner's phone.
 
 ## Architecture
 

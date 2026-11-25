@@ -381,6 +381,40 @@ jobs:
           done
           find mobile/android/app/build/outputs/apk -name '*.apk'
 
+      # THE PLATFORM TLS VERIFIER SURVIVES R8, on the minified build ONLY.
+      #
+      # `rustls-platform-verifier`'s Android half reaches
+      # `org.rustls.platformverifier.CertificateVerifier` through JNI by NAME, so
+      # R8 cannot see the edge and a release that lacks the keep rule ships a
+      # verifier that is stripped or renamed: every system-trust handshake then
+      # fails, and the app says the server is offline (measured on v1.6.5, whose
+      # debug builds and unminified emulator smoke were green throughout).
+      #
+      # R8's mapping is where the truth is: an untouched class appears as
+      # `X -> X:` (a renamed one as `X -> a.b.c:`), and a stripped one not at
+      # all. Run once WITHOUT the rule in `:bridge/consumer-rules.pro` and this
+      # check fails on all three classes — "R8 dropped or renamed …", plus the
+      # mapping's own (absent) lines — which is the regression it exists for. The
+      # emulator job's `ReleaseTlsTrustTest` proves the same edge on a device.
+      - name: The platform TLS verifier survives R8
+        run: |
+          set -euo pipefail
+          mapping=mobile/android/app/build/outputs/mapping/release/mapping.txt
+          test -f "$mapping" || { echo "::error::$mapping is missing (was assembleRelease minified?)"; exit 1; }
+          for class in \
+            org.rustls.platformverifier.CertificateVerifier \
+            org.rustls.platformverifier.StatusCode \
+            org.rustls.platformverifier.VerificationResult; do
+            want="$class -> $class:"
+            if ! grep -qxF -- "$want" "$mapping"; then
+              echo "::error::R8 dropped or renamed $class: the platform TLS verifier is unreachable from JNI"
+              grep -n "org.rustls.platformverifier" "$mapping" || echo "   (no org.rustls.platformverifier line at all)"
+              echo "   the rule is in mobile/android/bridge/consumer-rules.pro (rustls-platform-verifier README, 'Proguard')"
+              exit 1
+            fi
+            printf '   kept unchanged: %s\n' "$class"
+          done
+
       # An APK that cannot be proven is not published: a truncated archive opens
       # as "not a valid application", and a v2-only signature cannot update a
       # device signed with v1 (measured on the old app's v1.3.1). `--min-sdk-version

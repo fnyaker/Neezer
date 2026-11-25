@@ -46,6 +46,7 @@ import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.feature.setup.DeezerAccountCard
 import kotlinx.coroutines.launch
 import uniffi.nz_ffi.AccessAccountData
 import uniffi.nz_ffi.AccountData
@@ -644,13 +645,19 @@ private fun GroupsBlock(model: SettingsModel, access: uniffi.nz_ffi.AccessData) 
 // -- Compte --------------------------------------------------------------------
 
 /**
- * « Compte » (la personne, la déconnexion) puis « Serveur » (changer d'adresse).
+ * « Compte » (la personne, la déconnexion), le lien Deezer volontaire, puis
+ * « Serveur » (changer d'adresse).
  *
  * Les deux portes sortent par [nav] : une déconnexion réussie ramène à la
  * connexion (le serveur enregistré est CONSERVÉ — décision 3), et « Changer de
  * serveur » ouvre l'écran serveur sans rien effacer avant que la nouvelle
  * adresse soit validée. [nav] est `null` dans le banc de captures, où il n'y a
  * pas de coquille à qui demander (même convention que `onOpenViz`).
+ *
+ * La carte Deezer est ICI et nulle part ailleurs : l'écran de connexion la
+ * portait sur v1.6.5, si bien qu'atteindre son propre serveur demandait de
+ * décider quelque chose à propos de Deezer. Relier un compte reste possible,
+ * mais c'est un acte volontaire depuis les réglages.
  */
 @Composable
 internal fun AccountSection(
@@ -707,6 +714,9 @@ internal fun AccountSection(
             kind = NzButtonKind.Secondary,
         )
     }
+    // The voluntary Deezer link, moved here from the sign-in screen (v1.6.5
+    // asked for it before a person could reach their own server).
+    DeezerAccountCard()
     ServicesCard(model, state)
 }
 
