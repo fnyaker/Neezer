@@ -323,10 +323,19 @@ jobs:
 
       # The SPA the WebView loads lives in `neezer/webui/dist`, which a fresh
       # checkout does not carry: `perf_api.py` serves `/app/` from it.
+      #
+      # `webapp/src/lib/measure/measure.wasm` is gitignored, and `npm run
+      # build` imports it (`src/lib/analysis/client.js`): without it the build
+      # fails — on `version.json`'s ENOENT first, which hid the missing module.
+      # Built here by the same recipe as `webapp.yaml` and the Dockerfile.
+      - name: Set up Rust
+        run: rustup target add wasm32-unknown-unknown
+
       - name: Build the SPA the WebView will load
         working-directory: webapp
         run: |
           npm ci --no-audit --no-fund
+          node measure/build.mjs
           npm run build
 
       - uses: actions/download-artifact@v4
