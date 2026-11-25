@@ -185,6 +185,12 @@ private fun PlayerColumn(
     Column(
         Modifier
             .fillMaxSize()
+            // P2: the sheet's own gesture has an alternative for a screen reader —
+            // the chevron (a 48 dp button, above) stays the control a finger or
+            // TalkBack taps, and this sentence says the same thing by swiping.
+            .semantics {
+                contentDescription = "Lecteur plein écran, glisser vers le bas pour réduire"
+            }
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = if (wide) NzSpacing.xl else NzSpacing.pageX)

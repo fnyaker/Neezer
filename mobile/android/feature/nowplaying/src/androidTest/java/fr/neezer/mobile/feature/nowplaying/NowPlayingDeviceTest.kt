@@ -4,11 +4,23 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.advanceEventTime
+import androidx.compose.ui.test.down
+import androidx.compose.ui.test.moveBy
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.up
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -278,6 +290,109 @@ class NowPlayingDeviceTest {
         }
         assertEquals("no read while the device is asleep", asleepReads, model.ticker.reads)
         wake(device)
+        bench.close()
+    }
+
+    /**
+     * **P2 on the device: a downward drag closes the player, and the queue does
+     * not move.**
+     *
+     * The sheet is the real [PlayerSheetFrame] over a real surface, with the
+     * process's player behind it (three titles from the bench, the middle one
+     * playing) and the real [MiniPlayer] beside it. The finger drags 200 dp down
+     * (half of the 400 dp sheet at this density would be 28 %; this is well past),
+     * the release is a real one, and what the test waits for is the STATE
+     * (`NowPlayingState.open == false`) — an event, never a sleep.
+     *
+     * Done when the sheet is gone and the mini player shows the SAME title: a
+     * dismissal that advanced the queue would be a second defect wearing the
+     * first one's clothes.
+     */
+    @Test
+    fun aDragDownClosesThePlayerAndTheQueueDoesNotMove() {
+        val bench = Bench.start()
+        val core = install(bench)
+        val player = core.player()
+        val rows = (0 until 3).map { index ->
+            TrackRef(
+                key = "${9100 + index}",
+                id = "${9100 + index}",
+                title = "Titre ${9100 + index}",
+                artists = "Artiste",
+                album = "Album",
+                albumId = "501",
+                artistId = null,
+                cover = null,
+                durationS = 30u,
+                episode = false,
+                liked = false,
+            )
+        }
+        player.command(
+            PlayerCommand.PlayQueue(tracks = rows, start = 1u, context = PlayContext("queue", "bench")),
+            0uL,
+        )
+        awaitPlayer(20_000) {
+            player.snapshot().len == 3u && player.snapshot().current?.key == rows[1].key
+        }
+        val title = player.snapshot().current?.title ?: error("no current title")
+        val index = player.snapshot().index
+        player.command(PlayerCommand.Pause, 0uL)
+
+        NowPlayingState.hide()
+        val model = NowPlayingModel(
+            player = NzPlayerPort(player),
+            service = NowPlayingCore.service() ?: error("the core's screens"),
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main),
+        )
+        model.refresh()
+        NowPlayingState.show()
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
+                Column {
+                    MiniPlayer()
+                    PlayerSheetFrame(
+                        opened = NowPlayingState.open,
+                        onDismiss = { NowPlayingState.hide() },
+                    ) {
+                        Box(Modifier.fillMaxSize().testTag(SHEET_TAG)) {
+                            PlayerSurface(
+                                state = model.state.collectAsState().value,
+                                model = model,
+                                nav = navigator,
+                                lyrics = null,
+                                about = null,
+                                onClose = { NowPlayingState.hide() },
+                                liveReads = false,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitUntil(timeoutMillis = 20_000) {
+            rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().isNotEmpty()
+        }
+        // 5 × 80 px, 300 ms apart: 400 px of travel, slow enough that the DISTANCE
+        // alone decides (a flick would leave the velocity as the cause).
+        rule.onNodeWithTag(SHEET_TAG).performTouchInput {
+            down(Offset(centerX, top + 40.dp.toPx()))
+            repeat(5) {
+                advanceEventTime(300)
+                moveBy(Offset(0f, 80f))
+            }
+        }
+        rule.onNodeWithTag(SHEET_TAG).performTouchInput { up() }
+        rule.waitUntil(timeoutMillis = 20_000) { !NowPlayingState.open }
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+
+        assertEquals("the drag did not move the queue", index, player.snapshot().index)
+        assertEquals("the drag did not change the queue", 3u, player.snapshot().len)
+        rule.waitUntil(timeoutMillis = 20_000) {
+            rule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
+        }
+        println("MEASURE p2 device: sheet closed by a drag, mini player still « $title »")
+        NowPlayingState.hide()
         bench.close()
     }
 
@@ -738,5 +853,8 @@ class NowPlayingDeviceTest {
 
     companion object {
         private const val KEY = "9001"
+
+        /** P2's sheet node: `Modifier.offset` moves the content, so the tag is on it. */
+        private const val SHEET_TAG = "p2-sheet"
     }
 }

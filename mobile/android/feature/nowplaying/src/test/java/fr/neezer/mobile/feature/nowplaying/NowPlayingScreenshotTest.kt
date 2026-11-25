@@ -13,6 +13,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
@@ -20,8 +22,13 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.advanceEventTime
+import androidx.compose.ui.test.down
+import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import fr.neezer.mobile.bridge.NzNavigator
@@ -84,6 +91,16 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
             "docs/agents/screenshots/mobile/P1",
         )
 
+    /** P2's own images: the sheet held under the finger. */
+    private val p2OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/P2",
+        )
+
     protected val navigator = object : NzNavigator {
         override fun go(link: uniffi.nz_ffi.AppLink) = Unit
         override fun back() = Unit
@@ -106,6 +123,54 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
         content: @Composable () -> Unit,
     ) = captureTo(p1OutputDir, name, theme, fontScale, content)
 
+    /**
+     * P2's image: the sheet, held at [held] of its height with the finger still
+     * down. The whole point of the lot is that this frame exists at all — an
+     * `AnimatedVisibility` could not paint it (the sheet was not movable), and the
+     * exit always restarted at 0.
+     */
+    protected fun captureDraggedSheet(name: String, theme: NzThemeKind, held: Float = 0.25f) {
+        NowPlayingState.hide()
+        NowPlayingState.show()
+        val model = model()
+        // Read outside the composition (lint's `StateFlow.value` rule).
+        val state = model.state.value
+        rule.setContent {
+            NzTheme(kind = theme, motion = NzMotionLevel.Full) {
+                // The page the sheet covers, as the shell draws it: what a dismissal
+                // uncovers is the app's ink, never the window's default white.
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                PlayerSheetFrame(
+                    opened = NowPlayingState.open,
+                    onDismiss = { NowPlayingState.hide() },
+                ) {
+                    Box(Modifier.fillMaxSize().testTag(P2_TAG)) {
+                        PlayerSurface(
+                            state = state,
+                            model = model,
+                            nav = navigator,
+                            lyrics = lyrics(),
+                            about = null,
+                            onClose = {},
+                            liveReads = false,
+                        )
+                    }
+                }
+                }
+            }
+        }
+        rule.mainClock.advanceTimeBy(1_200)
+        shadowOf(Looper.getMainLooper()).idle()
+        rule.waitForIdle()
+        rule.onNodeWithTag(P2_TAG).performTouchInput {
+            down(Offset(centerX, top + 40.dp.toPx()))
+            advanceEventTime(400)
+            moveBy(Offset(0f, height * held))
+        }
+        rule.waitForIdle()
+        writeBitmap(p2OutputDir, name, theme)
+    }
+
     private fun captureTo(
         dir: File,
         name: String,
@@ -127,6 +192,11 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
         rule.mainClock.advanceTimeBy(1_200)
         shadowOf(Looper.getMainLooper()).idle()
         rule.waitForIdle()
+        writeBitmap(dir, name, theme)
+    }
+
+    /** The window as it is now, cropped and written to [dir]/[name]. */
+    private fun writeBitmap(dir: File, name: String, theme: NzThemeKind) {
         val view = rule.activity.window.decorView
         val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(full))
@@ -150,6 +220,11 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
         val height = (last + 24).coerceIn(1, full.height)
         if (height <= 24) return full
         return Bitmap.createBitmap(full, 0, 0, full.width, height)
+    }
+
+    protected companion object {
+        /** P2's sheet node: `Modifier.offset` moves the content, so the tag is on it. */
+        const val P2_TAG = "p2-sheet"
     }
 
     private fun suffix(fontScale: Float) = if (fontScale > 1f) "-font${(fontScale * 100).toInt()}" else ""
@@ -527,6 +602,11 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-xhdpi")
 class NowPlayingPhoneScreenshotTest : NowPlayingScreenshotBase(360) {
+    /** P2: the sheet held at a quarter of its height, the finger still down. */
+    @Test
+    fun p2DraggedSheetPhone() =
+        captureDraggedSheet("p2-glissement-360dp.png", NzThemeKind.Encre)
+
     /** P1: the blurred backdrop under the player (phone, Encre). */
     @Test
     fun p1BlurredBackdropEncre() {
@@ -572,6 +652,11 @@ class NowPlayingPhoneScreenshotTest : NowPlayingScreenshotBase(360) {
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w600dp-h900dp-xhdpi")
 class NowPlayingWideScreenshotTest : NowPlayingScreenshotBase(600) {
+    /** P2: the same drag at 600 dp, where the column is still the phone's. */
+    @Test
+    fun p2DraggedSheetWide() =
+        captureDraggedSheet("p2-glissement-600dp.png", NzThemeKind.Encre)
+
     /** P1: the blurred backdrop at 600 dp. */
     @Test
     fun p1BlurredBackdropWide() {
