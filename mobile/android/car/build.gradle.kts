@@ -68,9 +68,22 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.media3.session)
     implementation(libs.kotlinx.coroutines.android)
-    // The old app's car settings screen (a View host, not Compose): appcompat for
-    // `AppCompatActivity` + `registerForActivityResult`.
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    // The old app's car settings screen (a View host, not Compose): `ComponentActivity`
+    // for `registerForActivityResult`, on the APP's own platform window theme. Never
+    // `AppCompatActivity`: that one refuses any theme that is not a `Theme.AppCompat`
+    // descendant, and this app deliberately ships none (see `:app`'s themes.xml) —
+    // it crashed the screen on the very first `setContentView`.
+    implementation("androidx.activity:activity:1.11.0")
+    // A resolution FLOOR, not a use: `play-services-basement` (through
+    // play-services-location) drags `androidx.fragment:fragment:1.1.0`, and
+    // `androidx.activity`'s own lint refuses `registerForActivityResult` below
+    // 1.3.0 (`InvalidFragmentVersionForActivityResult`: FragmentActivity 1.2
+    // did not call `super.onRequestPermissionsResult()`). appcompat 1.7.0 used
+    // to raise that floor transitively; :car no longer needs appcompat, so the
+    // floor is stated here.
+    constraints {
+        implementation("androidx.fragment:fragment:1.8.9")
+    }
     // The speed lock and the GPS-app trigger: `FusedLocationProviderClient` is
     // the normal path and `CarMotion` falls back to `LocationManager` on a
     // device without Play services, exactly as `android/`'s manifest comment

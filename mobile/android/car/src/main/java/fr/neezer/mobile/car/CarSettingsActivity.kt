@@ -28,8 +28,8 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import fr.neezer.mobile.car.R
 import kotlin.math.max
@@ -54,7 +54,7 @@ import kotlin.math.roundToInt
  * still be un-pinned; the status line names the cause (session, offline,
  * timeout, TLS, server error, unexpected page) and offers one retry.
  */
-class CarSettingsActivity : AppCompatActivity() {
+class CarSettingsActivity : ComponentActivity() {
 
     private lateinit var car: CarPrefs
 

@@ -5717,12 +5717,34 @@ only its two seams changed:
    inside a runtime ("Cannot drop a runtime in a context where blocking is not
    allowed"). The test ends with the process instead; worker rule 5 is about the
    app, not about a test's last line.
+4. **A screen that is not Compose is a `ComponentActivity`, never an
+   `AppCompatActivity`** (2026-11-25). This app ships no `Theme.AppCompat`: `:app`'s
+   window theme descends from `android:Theme.Material.NoActionBar` on purpose
+   ("No appcompat and no Material Views theme"), and `:car`'s settings activity
+   declares that same platform theme. `AppCompatDelegateImpl.createSubDecor`
+   refuses any theme without `windowActionBar`, so `AppCompatActivity` threw
+   `IllegalStateException: You need to use a Theme.AppCompat theme (or descendant)
+   with this activity.` at the FIRST `setContentView` — the whole screen died
+   before its first frame, in debug and release alike, from every door (the
+   notification's « Réglages », the quick-settings tile, the overlay's ghost tile
+   and the Réglages button, which all end in the same intent). Measured on the
+   tree before the fix, `:car:testDebugUnitTest`: `CarSettingsActivityLaunchTest`
+   fails at `AppCompatDelegateImpl.java:902 → CarSettingsActivity.kt:137`
+   (`IllegalStateException`); after it, the same screen paints « Mode voiture »
+   and its six cards, and `CarSettingsActivityDeviceTest` (`:car`'s androidTest)
+   opens the door's exact intent on the emulator and flips every control once
+   (three switches, the GPS chip, the keyboard layout, the letter limit, the
+   position reset, the opacity bar) with each write read back from `CarPrefs`.
+   `:car` depends on `androidx.activity:activity` (for `registerForActivityResult`)
+   and no longer on `androidx.appcompat`; the JVM test is the cheap gate, run by
+   `testDebugUnitTest` in the `apk` job on every mobile PR.
+
 
 **Measured.**
 
 | What | How | Number |
 |---|---|---|
-| The ported policies | `:car:testDebugUnitTest` | **70 tests**, 0 failures: visibility 8, foreground 12, motion 7, pins 7, placement 11, cover policy 10, fanout/format 3, catalogue causes/pins/count 5, watch 7 |
+| The ported policies | `:car:testDebugUnitTest` | **71 tests**, 0 failures: visibility 8, foreground 12, motion 7, pins 7, placement 11, cover policy 10, fanout/format 3, catalogue causes/pins/count 5, watch 7, the settings screen's first frame (Robolectric) 1 |
 | The two seams, Rust | `cargo test -p nz-ffi car::` | **8 tests**: catalogue 2 requests cold + the star count, a failed count leaving it unknown, a 401 as `Session`, no `/app` under `/api` (and a path refused as an origin), the kind/id bounds, the tile-only process, the heart |
 | The catalogue | perf_api, one panel open (`GET` count at the server) | **2 requests** (`/api/me/playlists`, `/api/me/favorite-ids`), **0** for 60 s after; the Favoris tile read its count ("4 titres aimés") without `/api/me/favorites` |
 | Covers | same run, panel + card | **1 request per distinct sleeve** (2 for the panel), **0** on the next repaint (`cover hit` in the journal) |
