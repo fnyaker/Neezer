@@ -485,13 +485,17 @@ the platform decoder.
 
 ### Navigation, screens and the UI
 
-- Single `MainActivity`, Navigation Compose with type-safe routes, a phone shell (bottom bar
-  Accueil / Rechercher / Bibliothèque / Podcasts, the mini-player above it, the full-screen player as
-  a sheet) and a tablet/landscape shell (rail + reading columns, as `DesktopNowPlaying`). Back goes
-  to the SCREEN, not the route (webapp.md's rule).
-- MB0 writes `app/.../NavGraph.kt` ONCE with every route of the inventory, each calling an entry
+- Single `MainActivity`, Navigation Compose with type-safe routes, a phone shell (**no top bar**;
+  a bottom bar of five items — Accueil / Rechercher / Biblio / Podcasts / Réglages — over which the
+  mini-player sits, the full-screen player as a sheet) and a tablet/landscape shell (rail + reading
+  columns, as `DesktopNowPlaying`). The four tab roots live in ONE `HorizontalPager`, so a tab is
+  reachable by tap AND by a horizontal drag; a detail screen gets a single 48 dp `DetailBackRow`
+  instead of a banner. Back goes to the SCREEN, not the route (webapp.md's rule).
+- MB0 wrote `app/.../NavGraph.kt` ONCE with every route of the inventory, each calling an entry
   composable that already exists as a stub in its feature module (`feature/<area>/.../<Area>Entry.kt`).
-  Feature lots fill their module and never edit `NavGraph.kt`.
+  **A feature lot fills its module and never edits `NavGraph.kt`**; the SHELL is the exception, and it
+  is `app/Shell.kt` + `NavGraph.kt` together (L1 is the lot that moved the four tab bindings to the
+  pager; a screen lot still has no business there).
 - Long lists: `LazyColumn` over a `ListHandle` (`items(count = len, key = …)`, pages of 64 rows
   fetched as they near the viewport), never a `List` of 4 000 records.
 - French copy, glyphs through the design system's `Icon` (no emoji), Sillon tokens only (no literal
