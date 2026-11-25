@@ -15,12 +15,16 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.Density
 import fr.neezer.mobile.bridge.ScreenState
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,17 +61,22 @@ abstract class HomeScreenshotBase(private val width: Int) {
     protected fun capture(
         theme: NzThemeKind,
         fontScale: Float = 1f,
-        state: HomeModel.State = HomeModel.State(
-            screen = ScreenState.Ready(HomeFixtures.home()),
-            styles = HomeFixtures.styles(),
-            chosen = listOf("Techno"),
-            flow = HomeFixtures.flow(),
-        ),
+        state: HomeModel.State = defaultState(),
         name: String = "mb5-%s-%ddp%s.png".format(
             theme.name.lowercase(),
             width,
             if (fontScale > 1f) "-font${(fontScale * 100).toInt()}" else "",
         ),
+    ) {
+        render(theme, fontScale, state)
+        write(outputDir, name, theme)
+    }
+
+    /** The page as S2's geometry test and its own screenshot draw it. */
+    protected fun render(
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        state: HomeModel.State = defaultState(),
     ) {
         rule.setContent {
             NzTheme(kind = theme, motion = NzMotionLevel.Full) {
@@ -83,12 +92,23 @@ abstract class HomeScreenshotBase(private val width: Int) {
                 }
             }
         }
+    }
+
+    protected fun defaultState(): HomeModel.State = HomeModel.State(
+        screen = ScreenState.Ready(HomeFixtures.home()),
+        styles = HomeFixtures.styles(),
+        chosen = listOf("Techno"),
+        flow = HomeFixtures.flow(),
+    )
+
+    /** Crop the empty ground away and write the PNG under [dir]. */
+    protected fun write(dir: File, name: String, theme: NzThemeKind) {
         shadowOf(Looper.getMainLooper()).idle()
         val view = rule.activity.window.decorView
         val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(full))
         val bitmap = cropToContent(full, theme)
-        val file = File(outputDir, name)
+        val file = File(dir, name)
         file.parentFile?.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
@@ -122,6 +142,36 @@ abstract class HomeScreenshotBase(private val width: Int) {
     /** 200 %: nothing clips, everything still reads (`webapp.md` §10). */
     @Test
     fun encreAtTwoHundredPercent() = capture(NzThemeKind.Encre, fontScale = 2f)
+
+    /**
+     * S2 : la marge de page (20 dp) et le rythme des sections (32 dp), lus dans
+     * l'arbre de sémantique — la marge sur le héros, l'écart entre le héros et la
+     * première section qui le suit.
+     */
+    @Test
+    fun thePageMarginsAndSectionRhythm() {
+        render(NzThemeKind.Encre)
+        rule.waitForIdle()
+        val hero = rule.onNodeWithTag(HOME_HERO_TAG).getUnclippedBoundsInRoot()
+        val resume = rule.onNodeWithTag(HOME_RESUME_TAG).getUnclippedBoundsInRoot()
+        println(
+            "MEASURE s2 accueil: width=${width}dp hero.top=${hero.top.value}dp " +
+                "hero.bottom=${hero.bottom.value}dp resume.top=${resume.top.value}dp",
+        )
+        assertEquals("la marge haute de la page est celle du SPA (20 dp)", 20f, hero.top.value, 1f)
+        assertEquals("deux sections sont à 32 dp", 32f, resume.top.value - hero.bottom.value, 1f)
+        if (width == 360) write(s2OutputDir, "s2-accueil-360dp.png", NzThemeKind.Encre)
+    }
+
+    /** S2's own render: `docs/agents/screenshots/mobile/S2/`. */
+    private val s2OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/S2",
+        )
 }
 
 /** 360 dp: the phone the app is designed for first. */

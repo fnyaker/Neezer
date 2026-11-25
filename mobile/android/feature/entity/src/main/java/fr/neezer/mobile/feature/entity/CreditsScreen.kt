@@ -20,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -36,8 +37,9 @@ import uniffi.nz_ffi.TrackRow
 /** The screen's marker, in every state (see [ARTIST_MARKER]). */
 const val CREDITS_MARKER = "Crédits"
 
-/** How many rows clear the shell's mini player and tab bar. */
-private val SHELL_CLEARANCE = 128.dp
+/** S2's geometry test: the band (it cancels the page's top margin) and the list. */
+const val CREDITS_BAND_TAG = "credits-band"
+const val CREDITS_LIST_TAG = "credits-list"
 
 /** Everything a person's credits page can do. */
 data class CreditsActions(
@@ -83,8 +85,8 @@ fun CreditsScreen(
 
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().background(colors.bg),
-            contentPadding = PaddingValues(bottom = SHELL_CLEARANCE),
+            modifier = Modifier.fillMaxSize().background(colors.bg).testTag(CREDITS_LIST_TAG),
+            contentPadding = PaddingValues(bottom = NzSpacing.pageBottom),
         ) {
             item(key = "band") {
                 CreditsBand(state, wide)
@@ -164,6 +166,7 @@ private fun CreditsBand(state: PersonModel.State, wide: Boolean) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .testTag(CREDITS_BAND_TAG)
             .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
         verticalAlignment = Alignment.CenterVertically,

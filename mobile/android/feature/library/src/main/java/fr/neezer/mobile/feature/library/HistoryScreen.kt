@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,6 +61,12 @@ import java.time.ZoneId
  * screen's own renders, so the scale is a layout decision, not a smaller box.
  */
 private const val LARGE_TEXT_SCALE = 1.3f
+
+/**
+ * The history's own scrolling list, for S2's tail assertion: the day headings and
+ * the event rows live in ONE `LazyColumn`, and a tag is invisible to TalkBack.
+ */
+const val HISTORY_LIST_TAG = "history-list"
 
 /** What the history screen may ask. */
 class HistoryActions(
@@ -114,14 +121,14 @@ fun HistoryScreen(
     ) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = SHELL_CLEARANCE),
+            modifier = Modifier.fillMaxSize().testTag(HISTORY_LIST_TAG),
+            contentPadding = PaddingValues(bottom = NzSpacing.pageBottom),
         ) {
             item(key = "head") {
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .padding(start = NzSpacing.pageX, end = NzSpacing.pageX, top = NzSpacing.l),
+                        .padding(start = NzSpacing.pageX, end = NzSpacing.pageX, top = NzSpacing.pageY),
                     verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
                 ) {
                     Text(

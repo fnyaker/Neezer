@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.unit.Density
 import fr.neezer.mobile.bridge.ScreenState
 import fr.neezer.mobile.designsystem.NzMotionLevel
@@ -22,6 +24,7 @@ import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -58,6 +61,15 @@ abstract class DiscoveryScreenshotBase(private val width: Int) {
         fontScale: Float = 1f,
         content: @Composable () -> Unit,
     ) {
+        render(theme, fontScale, content)
+        saveTo(outputDir, name, theme)
+    }
+
+    protected fun render(
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        content: @Composable () -> Unit,
+    ) {
         rule.setContent {
             NzTheme(kind = theme, motion = NzMotionLevel.Full) {
                 val density = LocalDensity.current
@@ -70,15 +82,18 @@ abstract class DiscoveryScreenshotBase(private val width: Int) {
                 }
             }
         }
+    }
+
+    protected fun saveTo(dir: File, name: String, theme: NzThemeKind) {
         shadowOf(Looper.getMainLooper()).idle()
         val view = rule.activity.window.decorView
         val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(full))
         val bitmap = cropToContent(full, theme)
-        val file = File(outputDir, name)
+        val file = File(dir, name)
         file.parentFile?.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.length()} bytes")
+        println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
     }
 
     /** The window is 2400 dp tall and the page is not: the tail is the ground. */
@@ -208,6 +223,37 @@ abstract class DiscoveryScreenshotBase(private val width: Int) {
 
     @Test
     fun explorerEncreAtTwoHundredPercent() = explorer(NzThemeKind.Encre, fontScale = 2f)
+
+    /** S2 : le bandeau de rayon commence à 20 dp sous l'inset de contenu. */
+    @Test
+    fun theShelfBannerStartsOnTheSpaMargin() {
+        render(NzThemeKind.Encre) {
+            ReleaseShelfScreen(
+                state = ReleaseShelfModel.State(
+                    screen = ScreenState.Ready(DiscoveryFixtures.shelfPage("discovery")),
+                    rows = DiscoveryFixtures.rows(),
+                    rowCount = 3,
+                ),
+                actions = ShelfActions(),
+            )
+        }
+        rule.waitForIdle()
+        val back = rule
+            .onNodeWithContentDescription("Retour aux nouveautés")
+            .getUnclippedBoundsInRoot()
+        println("MEASURE s2 nouveautes: width=${width}dp back.top=${back.top.value}dp")
+        assertEquals("le bandeau commence à 20 dp", 20f, back.top.value, 1f)
+        if (width == 360) saveTo(s2OutputDir, "s2-nouveautes-360dp.png", NzThemeKind.Encre)
+    }
+
+    private val s2OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/S2",
+        )
 }
 
 /** 360 dp: the phone the app is designed for first. */

@@ -12,11 +12,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.Density
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -58,6 +61,20 @@ abstract class SearchScreenshotBase(private val width: Int) {
             if (fontScale > 1f) "-font${(fontScale * 100).toInt()}" else "",
         ),
     ) {
+        render(theme, fontScale, state)
+        shadowOf(Looper.getMainLooper()).idle()
+        val view = rule.activity.window.decorView
+        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(full))
+        val bitmap = cropToContent(full, theme)
+        write(outputDir, name, bitmap)
+    }
+
+    protected fun render(
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        state: SearchModel.State = resultsState(),
+    ) {
         rule.setContent {
             NzTheme(kind = theme, motion = NzMotionLevel.Full) {
                 val density = LocalDensity.current
@@ -70,12 +87,10 @@ abstract class SearchScreenshotBase(private val width: Int) {
                 }
             }
         }
-        shadowOf(Looper.getMainLooper()).idle()
-        val view = rule.activity.window.decorView
-        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        view.draw(Canvas(full))
-        val bitmap = cropToContent(full, theme)
-        val file = File(outputDir, name)
+    }
+
+    protected fun write(dir: File, name: String, bitmap: Bitmap) {
+        val file = File(dir, name)
         file.parentFile?.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
@@ -130,6 +145,34 @@ abstract class SearchScreenshotBase(private val width: Int) {
         ),
         name = "mb6-encre-%ddp-podcasts.png".format(width),
     )
+
+    /**
+     * S2 : le premier bloc de texte (« Explorer ») est à 20 dp sous l'inset, et
+     * la liste garde 40 dp sous sa dernière ligne.
+     */
+    @Test
+    fun thePageStartsOnTheSpaMargin() {
+        render(NzThemeKind.Encre)
+        rule.waitForIdle()
+        val title = rule.onNodeWithText("Explorer").getUnclippedBoundsInRoot()
+        println("MEASURE s2 explorer: width=${width}dp title.top=${title.top.value}dp")
+        assertEquals("la page commence à 20 dp", 20f, title.top.value, 1f)
+        if (width != 360) return
+        shadowOf(Looper.getMainLooper()).idle()
+        val view = rule.activity.window.decorView
+        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(full))
+        write(s2OutputDir, "s2-rechercher-360dp.png", cropToContent(full, NzThemeKind.Encre))
+    }
+
+    private val s2OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/S2",
+        )
 
     companion object {
         /** A library answer with the fallback's row woven in, as a person sees it. */

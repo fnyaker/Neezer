@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
@@ -41,6 +42,7 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -80,6 +82,18 @@ abstract class PodcastsScreenshotBase(private val widthDp: Int) {
         fontScale: Float = 1f,
         content: @Composable () -> Unit,
     ) {
+        render(theme, fontScale, content)
+        // The screens are static once painted; advancing past the motion tokens
+        // makes the IMAGE the settled state (an event, not a sleep).
+        rule.mainClock.advanceTimeBy(1_000)
+        saveTo(outputDir, name, theme)
+    }
+
+    protected fun render(
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        content: @Composable () -> Unit,
+    ) {
         // MB15's button is ON the show page: its model is installed over a fake
         // port, exactly as MB15's own render does, so the header draws the real
         // control in its real state.
@@ -101,8 +115,9 @@ abstract class PodcastsScreenshotBase(private val widthDp: Int) {
                 }
             }
         }
-        // The screens are static once painted; advancing past the motion tokens
-        // makes the IMAGE the settled state (an event, not a sleep).
+    }
+
+    protected fun saveTo(dir: File, name: String, theme: NzThemeKind) {
         rule.mainClock.advanceTimeBy(1_000)
         shadowOf(Looper.getMainLooper()).idle()
         rule.waitForIdle()
@@ -110,7 +125,7 @@ abstract class PodcastsScreenshotBase(private val widthDp: Int) {
         val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(full))
         val bitmap = cropToContent(full, theme)
-        val file = File(outputDir, name)
+        val file = File(dir, name)
         file.parentFile?.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
@@ -192,6 +207,29 @@ abstract class PodcastsScreenshotBase(private val widthDp: Int) {
             isAdmin = true,
         )
     }
+
+    /** S2 : le premier bloc (le champ d'un administrateur) commence à 20 dp. */
+    @Test
+    fun thePageStartsOnTheSpaMargin() {
+        render(NzThemeKind.Encre) {
+            PodcastsScreen(gridState(), podcastsActions(), isAdmin = true)
+        }
+        rule.mainClock.advanceTimeBy(1_000)
+        rule.waitForIdle()
+        val field = rule.onNodeWithContentDescription("Chercher un podcast").getUnclippedBoundsInRoot()
+        println("MEASURE s2 podcasts: width=${widthDp}dp field.top=${field.top.value}dp")
+        assertEquals("le premier bloc commence à 20 dp", 20f, field.top.value, 1f)
+        if (widthDp == 360) saveTo(s2OutputDir, "s2-podcasts-360dp.png", NzThemeKind.Encre)
+    }
+
+    private val s2OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/S2",
+        )
 
     /** The show page: header, archive switch, transcription card, rows. */
     private fun showState(): ShowModel.State {

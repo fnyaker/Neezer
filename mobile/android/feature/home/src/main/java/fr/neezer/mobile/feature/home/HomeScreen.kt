@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -149,8 +150,13 @@ fun HomeScreen(
             // needle; this can (`Home.svelte`'s masthead, "Quelle énergie ce
             // matin ?", is fixed copy but reads like a time of day).
             .semantics { contentDescription = HOME_MARKER }
-            .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
-        verticalArrangement = Arrangement.spacedBy(NzSpacing.xl),
+            .padding(
+                start = NzSpacing.pageX,
+                end = NzSpacing.pageX,
+                top = NzSpacing.pageY,
+                bottom = NzSpacing.pageBottom,
+            ),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.xxl),
     ) {
         // The hero is drawn in EVERY state, like `Home.svelte` (HomeHero sits
         // above the sections, never inside them): the day's one decision is the
@@ -214,6 +220,7 @@ private fun HomeHero(state: HomeModel.State, actions: HomeActions) {
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
+            .testTag(HOME_HERO_TAG)
             .clip(RoundedCornerShape(NzRadius.card))
             .background(colors.ac),
     ) {
@@ -418,7 +425,7 @@ private fun TunePanel(state: HomeModel.State, actions: HomeActions) {
 @Composable
 private fun ResumePanel(data: HomeData, actions: HomeActions) {
     val colors = Sillon.colors
-    NzCard(Modifier.fillMaxWidth()) {
+    NzCard(Modifier.fillMaxWidth().testTag(HOME_RESUME_TAG)) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
             Text("REPRENDRE", style = Sillon.type.labelMono, color = colors.dim)
             val resume = data.resume
@@ -1196,6 +1203,14 @@ private fun EmptyHome(state: HomeModel.State, actions: HomeActions) {
  * on the root.
  */
 const val HOME_MARKER = "Accueil Neezer"
+
+/**
+ * The hero's box and the first section under it, for S2's page-geometry test:
+ * the page's top margin is measured on the hero, the 32 dp section rhythm
+ * between the two. A test tag is invisible to TalkBack.
+ */
+internal const val HOME_HERO_TAG = "home-hero"
+internal const val HOME_RESUME_TAG = "home-resume"
 
 /** `flow.js#PICK_AHEAD`, in the sentence `FlowUpNext` writes. */
 private const val PICK_AHEAD_S = 20

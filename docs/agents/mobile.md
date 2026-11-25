@@ -7194,6 +7194,63 @@ pastille d'accent sur l'item courant, 64 dp), et les quatre racines d'onglet dan
 des écrans (S2), le SPA, les panneaux en feuille (file/paroles/à propos gardent `NzSheet`), les
 colonnes de lecture du shell large.
 
+### S2 — Les écrans alignés : la marge de page, le rythme des sections, la place sous la barre (delivered 2026-11-25)
+
+**Le besoin.** Chaque écran avait sa propre géométrie : l'accueil à 16 dp en haut, la recherche à
+16, la Bibliothèque à 16 avec 8 dp à droite, les podcasts à 12 puis 8, et les fiches artiste/album/
+crédits terminaient sur **128 dp de vide** sous leur dernière ligne — le `SHELL_CLEARANCE` ajouté
+du temps où un `TopAppBar` et une barre Material occupaient le bas. La personne voyait des marges
+qui ne se répondaient pas d'un écran à l'autre.
+
+**Ce qui a changé.** Les écrans dépensent le contrat de L1 (`pageY = 20.dp`, `pageBottom = 40.dp`) :
+
+- `HomeScreen` — `top = pageY`, `bottom = pageBottom` sur la colonne, sections à `xxl` (32 dp).
+- `LibraryScreen`/`HistoryScreen` — tête à `pageY`, fin à droite `pageX`, liste à `pageBottom`.
+- `SearchScreen` — liste `top = pageY`, `bottom = pageBottom`.
+- `PodcastsEntry` — le champ (le premier bloc d'un administrateur) et la grille à `pageY`, la grille
+  à `pageBottom`.
+- `ArtistScreen`/`AlbumScreen`/`CreditsScreen` — `SHELL_CLEARANCE` supprimé, `pageBottom` ; la bande
+  garde ses **16 dp** (elle annule la marge de page du SPA, `Artist.svelte:410-417`) et les onglets
+  passent à **20 dp** sous elle (`vertical = pageY`, le `margin-bottom: 20px` du SPA).
+- `ReleaseShelfScreen` — le bandeau à `pageY`.
+- Tags de mesure (invisibles à TalkBack) : `HOME_HERO_TAG`/`HOME_RESUME_TAG`, `LIBRARY_HEAD_TAG`,
+  `HISTORY_LIST_TAG`, les `*_BAND_TAG`/`*_LIST_TAG` des fiches.
+
+**Ce que le lot a appris.** Deux phrases du plan étaient fausses à la lecture du code, et
+l'acceptation (« le premier bloc à 20 dp ») tranchait : les podcasts ne « utilisaient déjà pageY en
+haut » (champ à 12, grille à 8) et la recherche commençait à `l` (16), pas à 20. Les deux prennent
+donc `pageY`. Et le titre de la Bibliothèque est **centré dans une rangée d'icônes de 48 dp** : son
+texte est à 25 dp, pas 20 — la mesure porte sur la colonne de tête (`LIBRARY_HEAD_TAG`), pas sur le
+texte. `SHELL_CLEARANCE` reste déclaré dans `LibraryBits.kt` (fichier de G1, hors portée) et n'est
+plus lu : toute nouvelle liste prend `pageBottom`.
+
+**Mesuré** (arbres de sémantique, Robolectric, 360 et 600 dp ; `MEASURE s2 …` dans les XML de test) :
+
+| Écran | Mesure |
+|---|---|
+| Accueil | héros `top = 20,0 dp` ; héros → Reprendre `= 32,0 dp` |
+| Rechercher | « Explorer » `top = 20,0 dp` |
+| Bibliothèque | tête `top = 20,0 dp` ; dernière ligne `bottom = 2360` pour un bas à `2400` → **40 dp** |
+| Historique | « Historique » `top = 20,0 dp` |
+| Artiste | bande `top = 0` ; onglet « Aperçu » à **20 dp** sous la bande ; dernière ligne → **40 dp** |
+| Album | bande `top = 0` ; dernière ligne (60 titres) → **40 dp** |
+| Crédits | bande `top = 0` ; dernière ligne (60 titres) → **40 dp** |
+| Podcasts | champ `top = 20,0 dp` |
+| Nouveautés | bouton retour (bandeau) `top = 20,0 dp` |
+
+Les 128 dp de vide des fiches deviennent 40 : **88 dp rendus** sous chaque dernière ligne, et
+`pageY` 32 → 20 en avait déjà rendu 12 à chaque page (L1). 9 PNG dans
+`docs/agents/screenshots/mobile/S2/` (360 dp, dont les fiches déroulées jusqu'à leur dernière ligne).
+
+**Tests.** Une assertion de géométrie par écran touché, dans sa classe de captures existante (aucune
+classe nouvelle) : marge haute et/ou fin de liste lues par `getUnclippedBoundsInRoot`, ± 1 dp. Les
+suites des six modules (`home`, `search`, `library`, `entity`, `podcasts`, `discovery`) passent,
+0 échec.
+
+**Hors portée.** `EntityBits.kt`/`LibraryBits.kt` (G1), la coquille (L1), le lecteur (P1/P2), les
+sections de Réglages, la grille d'artistes et les puces de genres (leurs bornes sont le lot T3), le
+shell large.
+
 ### M13 — Notifications demandées en contexte, mode voiture dans Réglages (delivered 2026-11-24)
 
 **La règle.** `POST_NOTIFICATIONS` est déclarée depuis MB0 et n'était jamais DEMANDÉE : la

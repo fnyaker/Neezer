@@ -173,7 +173,7 @@ fun LibraryScreen(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().testTag(LIBRARY_LIST_TAG),
-                contentPadding = PaddingValues(bottom = SHELL_CLEARANCE),
+                contentPadding = PaddingValues(bottom = NzSpacing.pageBottom),
             ) {
                 item(key = "head") {
                     LibraryHead(
@@ -236,6 +236,10 @@ fun LibraryScreen(
  */
 const val LIBRARY_LIST_TAG = "library-list"
 
+/** The head's column, for S2's page-margin assertion (the title sits centred in
+ * a 48 dp icon row, so its own top is not the page's margin). */
+const val LIBRARY_HEAD_TAG = "library-head"
+
 /** The three lazily-composed items above a windowed list's first row. */
 private const val WINDOW_OFFSET = 3
 
@@ -251,7 +255,8 @@ private fun LibraryHead(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = NzSpacing.pageX, end = NzSpacing.s, top = NzSpacing.l),
+            .padding(start = NzSpacing.pageX, end = NzSpacing.pageX, top = NzSpacing.pageY)
+            .testTag(LIBRARY_HEAD_TAG),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.xxs),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
