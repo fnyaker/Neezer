@@ -147,13 +147,15 @@ fi
 check_app "the Accueil door"
 
 open_door "Rechercher" "Rechercher" "Recherche Neezer"
-open_door "Bibliothèque" "Bibliothèque" "Bibliothèque Neezer"
+open_door "Bibliothèque" "Biblio" "Bibliothèque Neezer"
 open_door "Podcasts" "Podcasts" "Podcasts Neezer"
 open_door "Accueil (retour)" "Accueil" "Accueil Neezer"
 
 # --- 2. Réglages → Lecture & son → Mode voiture ------------------------------
-# Réglages is the phone shell's top-bar action (the bottom bar has the four tabs
-# only); its menu is proved by its filter's own label.
+# Réglages is the bottom bar's FIFTH item (L1 removed the top bar; it used to be
+# the top-bar action); its menu is proved by its filter's own label. The
+# Bibliothèque tab's WORD is « Biblio » (the SPA's label: 72 dp on a 360 dp bar),
+# while the screen keeps its full name.
 open_door "Réglages" "Réglages" "Chercher un réglage"
 
 # « Qualité demandée au serveur » is a card title ONLY `PlaybackSection` draws:

@@ -140,6 +140,18 @@ data class NzTypography(
         lineHeight = 11.sp,
         letterSpacing = 0.08.em,
     ),
+    /**
+     * The tab bar's word: mono 11, 600, 0.01em — `MobileNav.svelte:96-99`
+     * (whatever the script, the label is NOT uppercased: « Rechercher » is read
+     * under its glyph, not shouted).
+     */
+    val tab: TextStyle = TextStyle(
+        fontFamily = JetBrainsMono,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 11.sp,
+        lineHeight = 11.sp,
+        letterSpacing = 0.01.em,
+    ),
 )
 
 /** The one instance: the scale holds no theme-dependent value. */

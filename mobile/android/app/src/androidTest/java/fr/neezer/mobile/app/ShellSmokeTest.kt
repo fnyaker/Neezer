@@ -67,7 +67,9 @@ class ShellSmokeTest {
      */
     @Test
     fun libraryTabOpensItsRoute() {
-        rule.onNode(hasText("Bibliothèque") and hasClickAction()).performClick()
+        // Le mot de la barre est « Biblio » depuis L1 (le label du SPA, 72 dp sur
+        // 360 dp) ; le marqueur de l'écran garde son nom complet.
+        rule.onNode(hasText("Biblio") and hasClickAction()).performClick()
         rule.onNodeWithContentDescription("Bibliothèque Neezer").assertIsDisplayed()
     }
 

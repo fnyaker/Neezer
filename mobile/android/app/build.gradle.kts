@@ -147,7 +147,10 @@ android {
     }
 
     testOptions {
-        unitTests.isIncludeAndroidResources = false
+        // L1: the shell's tab/gesture test (`ShellTabsTest`) is Robolectric and
+        // renders real Compose — it needs the merged manifest and the module's
+        // resources, exactly like `:designsystem`'s screenshot suite.
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -213,6 +216,19 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
 
     testImplementation(libs.junit)
+
+    // --- JVM tests ---------------------------------------------------------
+    // L1's `ShellTabsTest` drives the REAL pager with a real gesture and a real
+    // settle: that needs Robolectric's Android runtime plus the Compose test
+    // rule (the same recipe `:designsystem` uses, and the reason its versions
+    // are written here rather than in the catalog, which MB0 owns).
+    testImplementation("org.robolectric:robolectric:4.18")
+    testImplementation("androidx.test:core:1.7.0")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    // `createComposeRule()`/`createAndroidComposeRule()` host their content in an
+    // activity the test manifest declares; without it Robolectric finds no window.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     // Instrumented tests (MQ1): the shell's smoke on a real device, and the
     // rules every screen lot's Compose test uses. A module's own androidTest

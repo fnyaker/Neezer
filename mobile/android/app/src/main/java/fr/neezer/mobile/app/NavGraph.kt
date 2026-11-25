@@ -1,5 +1,7 @@
 package fr.neezer.mobile.app
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -7,20 +9,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -35,8 +36,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
-import fr.neezer.mobile.designsystem.NzGlyph
-import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzToastHost
 import fr.neezer.mobile.designsystem.NzToasts
@@ -47,11 +47,9 @@ import fr.neezer.mobile.feature.entity.AlbumEntry
 import fr.neezer.mobile.feature.entity.ArtistEntry
 import fr.neezer.mobile.feature.entity.CreditsEntry
 import fr.neezer.mobile.feature.genres.GenresEntry
-import fr.neezer.mobile.feature.home.HomeEntry
 import fr.neezer.mobile.feature.lan.LanEntry
 import fr.neezer.mobile.feature.lan.PeerSetsEntry
 import fr.neezer.mobile.feature.library.HistoryEntry
-import fr.neezer.mobile.feature.library.LibraryEntry
 import fr.neezer.mobile.feature.nowplaying.MiniPlayer
 import fr.neezer.mobile.feature.nowplaying.NowPlayingHost
 import fr.neezer.mobile.feature.onboarding.InviteEntry
@@ -60,11 +58,9 @@ import fr.neezer.mobile.feature.party.PartyEntry
 import fr.neezer.mobile.feature.playlist.ImportEntry
 import fr.neezer.mobile.feature.playlist.PlaylistEntry
 import fr.neezer.mobile.feature.playlist.SharedPlaylistEntry
-import fr.neezer.mobile.feature.podcasts.PodcastsEntry
 import fr.neezer.mobile.feature.podcasts.ShowEntry
 import fr.neezer.mobile.feature.remote.RemoteClaimEntry
 import fr.neezer.mobile.feature.remote.RemoteHostNotice
-import fr.neezer.mobile.feature.search.SearchEntry
 import fr.neezer.mobile.feature.settings.SettingsEntry
 import fr.neezer.mobile.feature.setup.LoginEntry
 import fr.neezer.mobile.feature.setup.SetupEntry
@@ -161,14 +157,6 @@ object Routes {
     data class RemoteClaim(val token: String)
 }
 
-/** The four destinations of the phone's bottom bar and the tablet's rail. */
-private enum class Tab(val label: String) {
-    Accueil("Accueil"),
-    Rechercher("Rechercher"),
-    Bibliotheque("Bibliothèque"),
-    Podcasts("Podcasts"),
-}
-
 /**
  * The app's shell: one `NavHost`, a phone shell (bottom bar, mini player above
  * it, the full-screen player as a sheet) and a wide shell (rail + reading
@@ -185,6 +173,14 @@ fun NzApp(graph: AppGraph) {
 
     val backStackEntry by nav.currentBackStackEntryAsState()
     val destination = backStackEntry?.destination
+
+    // L1 : les quatre racines d'onglet vivent dans UN pager, hissé ici pour que
+    // la barre et le routeur lisent le même état — une image, deux lecteurs.
+    // `TabPagerSync` est la seule couture entre « la page où le doigt s'est
+    // arrêté » et « la route où la personne est ».
+    val pager = rememberPagerState(initialPage = 0) { Tab.entries.size }
+    val scope = rememberCoroutineScope()
+    TabPagerSync(destination, pager) { tab -> nav.open(tab) }
 
     // A link that STARTED the app (a shared `neezer://` view, a post's link) is
     // kept by the graph until the `NavHost` has a graph — `attach` cannot open it,
@@ -233,26 +229,19 @@ fun NzApp(graph: AppGraph) {
                     // quel écran, en haut de la colonne de contenu sur large.
                     RemoteHostNotice(Modifier.fillMaxWidth())
                     Box(Modifier.fillMaxSize()) {
-                        NavGraph(graph, nav, startRoute)
+                        NavGraph(graph, nav, pager, startRoute)
                         Hosts(graph)
                     }
                 }
             }
         } else {
             Scaffold(
-                // The shell's one permanent door to Réglages: on a phone the
-                // SPA reaches it from the library's header, and the skeleton has
-                // no header yet. It is what makes Aide (and its `nz_version()`)
-                // reachable from the first screen.
-                topBar = {
-                    NzTopBar(
-                        destination = destination,
-                        // Un retour seulement s'il y a quelque part où revenir :
-                        // sur l'accueil, la flèche n'aurait rien à faire.
-                        onBack = if (nav.previousBackStackEntry != null) ({ graph.back() }) else null,
-                        onSettings = { nav.navigate(Routes.Settings()) },
-                    )
-                },
+                // L1 : plus de bandeau. The default insets hand the status bar to
+                // the content, so no screen needs `statusBarsPadding()` of its own
+                // and nothing is drawn over the page — the bar the top used to hold
+                // is gone, its two words live on: « Retour » is the detail row
+                // below, « Réglages » is the bar's fifth item.
+                contentWindowInsets = ScaffoldDefaults.contentWindowInsets,
                 bottomBar = {
                     Column {
                         // M6 : la barre « Contrôlé par X · Couper » se glisse
@@ -266,23 +255,28 @@ fun NzApp(graph: AppGraph) {
                         // 2026-11-24). `AppGraph.openPlayer()` is the shell's
                         // one navigator, shared with a deep link.
                         MiniPlayer(onClick = { graph.openPlayer() })
-                        NavigationBar {
-                            for (tab in Tab.entries) {
-                                NavigationBarItem(
-                                    selected = destination.isOn(tab),
-                                    onClick = { nav.open(tab) },
-                                    icon = {},
-                                    label = { Text(tab.label) },
-                                )
-                            }
-                        }
+                        TabBarHost(
+                            destination = destination,
+                            pager = pager,
+                            scope = scope,
+                            onOpenTab = { tab -> nav.open(tab) },
+                            onOpenSettings = { nav.openSettings() },
+                        )
                     }
                 },
                 containerColor = MaterialTheme.colorScheme.background,
             ) { padding ->
-                Box(Modifier.fillMaxSize().padding(padding)) {
-                    NavGraph(graph, nav, startRoute)
-                    Hosts(graph)
+                Column(Modifier.fillMaxSize().padding(padding)) {
+                    // La rangée du retour n'existe que si l'écran n'est pas une
+                    // racine d'onglet (ni Réglages) ET qu'il y a quelque part où
+                    // revenir : sur l'accueil, la flèche n'aurait rien à faire.
+                    if (selectedIndexOf(destination) < 0 && nav.previousBackStackEntry != null) {
+                        DetailBackRow { graph.back() }
+                    }
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        NavGraph(graph, nav, pager, startRoute)
+                        Hosts(graph)
+                    }
                 }
             }
         }
@@ -302,97 +296,61 @@ private fun Hosts(graph: AppGraph) {
     NzToastHost(modifier = Modifier.fillMaxSize(), bottomPadding = NzSpacing.m)
 }
 
+/**
+ * The wide shell's rail: the SAME five items and glyphs as the phone's bar (L1),
+ * so the two shells no longer disagree about what the app has. It navigates
+ * routes directly — on a wide window the reading column is not a pager.
+ */
 @Composable
 private fun WideShell(nav: NavHostController, destination: NavDestination?) {
+    val selected = selectedIndexOf(destination)
     NavigationRail {
-        for (tab in Tab.entries) {
+        TAB_ITEMS.forEachIndexed { index, item ->
             NavigationRailItem(
-                selected = destination.isOn(tab),
-                onClick = { nav.open(tab) },
-                icon = {},
-                label = { Text(tab.label) },
+                selected = selected == index,
+                onClick = {
+                    val tab = tabOfPage(index)
+                    if (tab != null) nav.open(tab) else nav.openSettings()
+                },
+                icon = { Icon(item.glyph, size = 24.dp, contentDescription = null) },
+                label = { Text(item.label) },
             )
         }
-        NavigationRailItem(
-            selected = false,
-            onClick = { nav.navigate(Routes.Settings()) },
-            icon = {},
-            label = { Text("Réglages") },
-        )
     }
 }
 
 /**
- * The shell's title bar: the screen the person is on, its way back, and the
- * Réglages action.
- *
- * The title comes from the destination — one `when` on the route type, so a new
- * route without a title is a compile error rather than an empty bar.
+ * The graph itself: every route opens its entry composable, and the four tab
+ * roots open the shell's pager (so a horizontal drag moves them).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NzTopBar(
-    destination: NavDestination?,
-    onBack: (() -> Unit)?,
-    onSettings: () -> Unit,
+private fun NavGraph(
+    graph: AppGraph,
+    nav: NavHostController,
+    pager: PagerState,
+    startDestination: Any,
 ) {
-    TopAppBar(
-        title = { Text(destination.title()) },
-        navigationIcon = {
-            if (onBack != null) {
-                NzIconButton(
-                    glyph = NzGlyph.ChevronLeft,
-                    contentDescription = "Retour",
-                    onClick = onBack,
-                )
-            }
-        },
-        actions = { TextButton(onClick = onSettings) { Text("Réglages") } },
-    )
-}
-
-/** The French title of the shown destination. */
-private fun NavDestination?.title(): String {
-    val route = this?.route ?: return "Neezer"
-    val name = route.substringBefore('?').substringBefore('/')
-    return when {
-        name == Routes.Home::class.qualifiedName -> "Accueil"
-        name == Routes.Search::class.qualifiedName -> "Rechercher"
-        name == Routes.Library::class.qualifiedName -> "Bibliothèque"
-        name == Routes.Podcasts::class.qualifiedName -> "Podcasts"
-        name == Routes.Settings::class.qualifiedName -> "Réglages"
-        name == Routes.Artist::class.qualifiedName -> "Artiste"
-        name == Routes.Album::class.qualifiedName -> "Album"
-        name == Routes.Playlist::class.qualifiedName -> "Playlist"
-        name == Routes.Show::class.qualifiedName -> "Podcast"
-        name == Routes.Releases::class.qualifiedName -> "Nouveautés"
-        name == Routes.Recap::class.qualifiedName -> "Récap"
-        name == Routes.Genres::class.qualifiedName -> "Genres"
-        name == Routes.Lan::class.qualifiedName -> "Appareils à proximité"
-        name == Routes.PeerSets::class.qualifiedName -> "Sur vos appareils"
-        name == Routes.Viz::class.qualifiedName -> "Visualiseur"
-        name == Routes.History::class.qualifiedName -> "Historique"
-        name == Routes.Setup::class.qualifiedName -> "Serveur"
-        name == Routes.Login::class.qualifiedName -> "Connexion"
-        else -> "Neezer"
-    }
-}
-
-/**
- * The graph itself: every route opens its entry composable, and MB0's entry
- * draws the screen's name (so "toutes les routes ouvrent leur stub" is
- * something a person can see).
- */
-@Composable
-private fun NavGraph(graph: AppGraph, nav: NavHostController, startDestination: Any) {
     val navigator: NzNavigator = graph
-    NavHost(navController = nav, startDestination = startDestination) {
+    NavHost(
+        navController = nav,
+        startDestination = startDestination,
+        // Chaque écran possède son mouvement (`transitions.md`) : un onglet qui
+        // se pose ne doit pas être ré-animé par le routeur — c'est exactement ce
+        // double mouvement que la personne sent comme « ça se réinitialise après
+        // le geste ».
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
+    ) {
         composable<Routes.Setup> { SetupEntry(nav = navigator) }
         composable<Routes.Login> { LoginEntry(nav = navigator) }
         composable<Routes.Invite> { entry -> InviteEntry(entry.toRoute<Routes.Invite>().code, navigator) }
         composable<Routes.Onboarding> { OnboardingEntry(nav = navigator) }
-        composable<Routes.Home> { HomeEntry(nav = navigator) }
-        composable<Routes.Search> { entry -> SearchEntry(entry.toRoute<Routes.Search>().q, navigator) }
+        composable<Routes.Home> { TabPager(navigator, pager) }
+        composable<Routes.Search> { entry ->
+            TabPager(navigator, pager, searchQuery = entry.toRoute<Routes.Search>().q)
+        }
         composable<Routes.Artist> { entry -> ArtistEntry(entry.toRoute<Routes.Artist>().id, navigator) }
         composable<Routes.Album> { entry -> AlbumEntry(entry.toRoute<Routes.Album>().id, navigator) }
         composable<Routes.Credits> { entry -> CreditsEntry(entry.toRoute<Routes.Credits>().name, navigator) }
@@ -401,9 +359,11 @@ private fun NavGraph(graph: AppGraph, nav: NavHostController, startDestination: 
             entry -> SharedPlaylistEntry(entry.toRoute<Routes.SharedPlaylist>().id, navigator)
         }
         composable<Routes.Import> { entry -> ImportEntry(entry.toRoute<Routes.Import>().url, navigator) }
-        composable<Routes.Library> { entry -> LibraryEntry(entry.toRoute<Routes.Library>().tab, navigator) }
+        composable<Routes.Library> { entry ->
+            TabPager(navigator, pager, libraryTab = entry.toRoute<Routes.Library>().tab)
+        }
         composable<Routes.History> { HistoryEntry(nav = navigator) }
-        composable<Routes.Podcasts> { PodcastsEntry(nav = navigator) }
+        composable<Routes.Podcasts> { TabPager(navigator, pager) }
         composable<Routes.Show> { entry -> ShowEntry(entry.toRoute<Routes.Show>().id, navigator) }
         composable<Routes.Releases> { ReleasesEntry(nav = navigator) }
         composable<Routes.ReleaseShelf> {
@@ -422,21 +382,10 @@ private fun NavGraph(graph: AppGraph, nav: NavHostController, startDestination: 
     }
 }
 
-/** Whether the shown destination IS [tab] (so the bar highlights it). */
-private fun NavDestination?.isOn(tab: Tab): Boolean {
-    val name = this?.route ?: return false
-    val route = when (tab) {
-        Tab.Accueil -> Routes.Home::class.qualifiedName
-        Tab.Rechercher -> Routes.Search::class.qualifiedName
-        Tab.Bibliotheque -> Routes.Library::class.qualifiedName
-        Tab.Podcasts -> Routes.Podcasts::class.qualifiedName
-    }
-    return name.startsWith(route ?: return false)
-}
-
 /**
  * A tab switch: one entry per tab on the back stack, its scroll position kept —
  * the SPA's rule, so tapping Bibliothèque twice does not stack two libraries.
+ * The pager's own page follows, in `TabPagerSync`.
  */
 private fun NavHostController.open(tab: Tab) {
     val route = when (tab) {
@@ -450,4 +399,9 @@ private fun NavHostController.open(tab: Tab) {
         launchSingleTop = true
         restoreState = true
     }
+}
+
+/** The bar's fifth item and the rail's: Réglages, one entry, never two. */
+private fun NavHostController.openSettings() {
+    navigate(Routes.Settings()) { launchSingleTop = true }
 }

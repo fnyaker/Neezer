@@ -433,11 +433,21 @@ object NzSpacing {
     val xl: Dp = 24.dp
     val xxl: Dp = 32.dp
 
-    /** `--page-y`: the top/bottom margin of a page. */
-    val pageY: Dp = 32.dp
+    /**
+     * `--page-y`: the top margin of a page — the SPA's phone page margin
+     * (`app.css:1185-1186`, 20 px). It was 32 dp, the wide value.
+     */
+    val pageY: Dp = 20.dp
 
     /** `--page-x`: the side margin, 20 dp on a phone (`≤ 640 px`). */
     val pageX: Dp = 20.dp
+
+    /**
+     * `--page-bottom`: the SPA's 40 px tail under a phone page (`app.css:1187`).
+     * A page ends 40 dp above the bar so its last row is not glued to it; S2 is
+     * the lot that spends it.
+     */
+    val pageBottom: Dp = 40.dp
 
     /** A phone's tab bar and mini player, in dp (the SPA's 64 px of content). */
     val tabBar: Dp = 64.dp
