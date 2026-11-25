@@ -1378,6 +1378,19 @@ impl Player {
         if collapses {
             tracing::debug!(id = %reference, position, "load collapsed into the pending one");
         } else if same && position > 0.0 {
+            // A seek inside the row that is already playing. The engine rebuilds
+            // the voice at `position` and announces it with a `Started` exactly
+            // like a load does, so this has to be recorded as the pending load:
+            // without it `on_started` reads that `Started` as a `repeat=one`
+            // restart and advances the queue. Measured: a seek to the middle of
+            // a title skipped to the next one, and a fault RETRY (which seeks at
+            // the position it stopped at) turned every transient error into a
+            // skip — the person's "it jumps by itself at half the song".
+            {
+                let mut machine = self.lock();
+                machine.pending_load = Some(reference.clone());
+                machine.pending_start = position;
+            }
             self.engine.seek(position);
         } else {
             let quality = self.effective_quality();
