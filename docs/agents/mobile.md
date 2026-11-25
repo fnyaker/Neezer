@@ -187,6 +187,16 @@ never committed; Rust 1.99.1):
   the sign-in alone, so the emulator job is the gate. The helpers live once, in `mobile/tools/ui.sh`,
   which also XML-unescapes the dumped tree (`&` is `&amp;`) so a needle is the screen's own words —
   « Lecture & son » included.
+- **A swipe starts ABOVE the tab bar, or it never reaches the page.** `ui_swipe_up` first glided
+  from 88 % to 18 % of the screen: on the `pixel_6` that is 2112 px, and `NzSpacing.tabBar`'s bar
+  (64 dp plus the gesture inset) begins at ≈2106 px. The bar and the page are SIBLINGS under the
+  `Scaffold`, so the bar keeps the gesture, the page never scrolls, and a control below the fold
+  stays "absent" — measured on T1's first emulator run, `release_journey=0 doors=0/8`, « Accepter ce
+  certificat » not in the tree after eight swipes. It now goes 70 %→30 % (1680→720 px); the left
+  margin (`width / 30` = 36 px, left of `pageX`'s 20 dp ≈ 53 px) is what keeps the equaliser's ten
+  faders out of the gesture. The same run proved the other half: only a crash entry that names
+  `fr.neezer.mobile` is ours (the emulator's buffer also collects SystemUI's and SwiftShader's),
+  and an ANR is in the MAIN buffer — ActivityManager never writes it to the crash one.
 - **A connection is never opened on the thread that polls an FFI future.** UniFFI's
   `async_runtime = "tokio"` only ENTERS a tokio context (`async_compat::Compat`): the Rust future is
   polled on the foreign caller's thread, which for a Compose screen's coroutine is Android's MAIN
