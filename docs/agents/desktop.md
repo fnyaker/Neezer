@@ -1237,6 +1237,13 @@ Waves that can run in parallel (disjoint files):
   (`Player.svelte#adoptIncoming`). The old voice is only *stopped* when its ramp reaches zero (or it
   ends), and a transport action during the ramp wins at once: the new track is current in the next
   buffer and the overlap is cut in the web player's 60 ms (`crossfade::SKIP_CUT_SECONDS`).
+- **The rule, a failure is not an end**: a voice that FAILED (`VoiceStatus::failed`, set by
+  `decode::fail` next to `ended`) is retired **without** handing the output to the preloaded next
+  voice and without an `Ended`: the mixer goes silent and the app's own fault policy decides
+  (retry, skip, stall). Handing the next voice over here made one transient read error a silent
+  skip — the queue had already moved on, so no cause was ever shown and no retry could run
+  (measured in `mixer::tests::a_failed_voice_is_not_handed_over_to_the_preloaded_next_one`: the
+  next voice's first frame used to come out of that very buffer, with its `Started`).
 - **The rule, the trim**: a voice carries `trim.end_s` and the mixer **stops pulling at it**, even
   though its file goes on — so the 3 s of digital silence a master carries after its last note is
   never played, and the preloaded next voice starts in the same buffer. The bounds are the page's,

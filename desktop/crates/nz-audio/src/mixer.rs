@@ -473,13 +473,28 @@ impl Mixer {
 
     /// The current voice is over (its ring ended, or a trim cut it): the next
     /// one takes over in the same buffer, or the queue goes silent and says so.
+    ///
+    /// **A voice that FAILED is not a voice that ended.** Handing the preloaded
+    /// next title the output here turned one transient read error into a silent
+    /// skip: the app never saw a cause it could retry, because the queue had
+    /// already moved on (measured: a stream cut mid-track played the next title
+    /// instead of offering "Réessayer"). A failure goes silent; the app's fault
+    /// policy (2/5/10 s, 4xx skips, three at most) decides, and its retry's
+    /// `Started` replaces this silence.
     fn retire_current(&mut self) {
+        let failed = self
+            .current
+            .as_ref()
+            .is_some_and(|current| current.voice.is_failed());
         let ended = self
             .current
             .as_ref()
             .map(|current| current.voice.generation);
         if let Some(old) = self.current.take() {
             old.voice.stop();
+        }
+        if failed {
+            return;
         }
         if let Some(next) = self.next.take() {
             self.install_current(next);
@@ -836,6 +851,50 @@ mod tests {
             "Ended is sent once, not on every silent buffer"
         );
         assert_eq!(shared.underruns(), 0, "the natural end is not an underrun");
+    }
+
+    /// **A failure is not an end.** The current voice died on an error while a
+    /// next title was preloaded: the mixer must go silent and say NOTHING (the
+    /// engine's `Error` is the news), never start the next voice and never emit
+    /// an `Ended` the queue would advance on. Measured before the fix: the next
+    /// voice's first frame came out of this very buffer, with a `Started` for it.
+    #[test]
+    fn a_failed_voice_is_not_handed_over_to_the_preloaded_next_one() {
+        let shared = Arc::new(MixerShared::new(48_000, 1.0));
+        shared.set_paused(false);
+        let (note_tx, mut note_rx) = RingBuffer::new(64);
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
+            Arc::clone(&shared),
+            note_tx,
+            Settings::new(),
+            crate::tap::Tap::pair(crate::tap::TAP_FRAMES).0,
+            48_000,
+        );
+        let (mut a, a_consumer, a_status) = voice_ring(48_000, 0.5, 1, 0.0);
+        let (mut b, b_consumer, _b_status) = voice_ring(48_000, 0.5, 2, 0.0);
+        a.push(&[0.1, 0.1, 0.2, 0.2, 0.3, 0.3, 0.4, 0.4]);
+        b.push(&[0.9, 0.9]);
+        cmds.push(MixerCmd::InstallCurrent(Some(a_consumer)))
+            .unwrap();
+        cmds.push(MixerCmd::InstallNext(Some(b_consumer))).unwrap();
+
+        let mut out = vec![0.0f32; 4 * 2];
+        mixer.render(&mut out);
+        // The track fails mid-way: its remaining audio is gone and the cause is
+        // on its way to the app as an `Error` event.
+        a_status.fail();
+        out.fill(0.0);
+        mixer.render(&mut out);
+        assert!(
+            !out.contains(&0.9),
+            "the preloaded next title was played after a failure: {out:?}"
+        );
+        let notes: Vec<_> = std::iter::from_fn(|| note_rx.pop().ok()).collect();
+        assert_eq!(
+            notes,
+            vec![MixerNote::Started { generation: 1 }],
+            "a failure must not emit Started for the next voice, nor an Ended to advance on"
+        );
     }
 
     #[test]

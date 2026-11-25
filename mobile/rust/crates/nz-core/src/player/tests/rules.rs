@@ -913,3 +913,59 @@ fn the_player_is_shareable_across_threads() {
     assert_shareable(&Arc::clone(&player));
     player.shutdown();
 }
+
+/// **A seek is not a track change.** The engine rebuilds the voice at the
+/// position asked and announces it with a `Started`; treating that as a
+/// `repeat=one` restart consumed the next row instead (measured: a seek to the
+/// middle of a title jumped to the next one, and a fault retry — which seeks at
+/// the position it stopped at — turned every transient error into a skip).
+#[test]
+fn a_seek_mid_track_keeps_the_same_row_and_plays_on() {
+    let dir = TempDir::new("seek-mid-advance");
+    let bench = Bench::start();
+    let cos = Fixture::Silence8.write(dir.path());
+    for id in ["a", "b", "c"] {
+        bench.track(id, &cos);
+    }
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+    let rows = vec![
+        track_ref_of("a", 8),
+        track_ref_of("b", 8),
+        track_ref_of("c", 8),
+    ];
+    player.command(
+        Command::PlayQueue {
+            tracks: rows,
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 20.0, 0.2);
+    pump(&mut sink, 0.3);
+
+    player.command(Command::Seek { s: 4.0 }, 2);
+    pump(&mut sink, 1.5);
+    let snap = player.snapshot();
+    println!(
+        "seek to the middle: index {:?}, state {:?}, position {:.2}",
+        snap.index,
+        snap.state,
+        player.position().position_s
+    );
+    assert_eq!(
+        snap.current.as_ref().map(|now| now.id.as_str()),
+        Some("a"),
+        "a seek advanced the queue: {:?}",
+        snap.current.as_ref().map(|now| now.id.as_str())
+    );
+    assert_eq!(snap.index, Some(0), "a seek advanced the queue");
+    assert_eq!(snap.state, PlayState::Playing, "a seek stopped the sound");
+    assert!(
+        player.position().position_s > 4.0,
+        "the seek did not land: {:.2}",
+        player.position().position_s
+    );
+    player.shutdown();
+}

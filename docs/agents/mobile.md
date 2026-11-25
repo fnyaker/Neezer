@@ -2126,6 +2126,20 @@ and `fmt --check` clean; `nz-audio`'s own suite plus its new `tests/readahead.rs
 - **`error.is_some()` is not "buffering".** A retry in flight says "reprise"; a stalled retry
   budget is PAUSED with its cause. `Machine::retrying` tells them apart (`Buffering` only while a
   retry is armed).
+- **A seek is not a track change.** The engine rebuilds the voice at the position asked and
+  announces it with a `Started` like any load; because the seek path did not record a
+  `pending_load`, that `Started` read as a `repeat=one` restart and the queue advanced — measured:
+  a seek to the middle of a 3-row queue landed on row 1 (`index Some(1)`) instead of row 0, and the
+  fault policy's RETRY (which seeks at the position it stopped at) turned one transient read error
+  into a silent skip. The seek records its pending load now; the regression is
+  `a_seek_mid_track_keeps_the_same_row_and_plays_on` (row 0, PLAYING, landed at 5.49 s of an 8 s
+  file).
+- **A failure is not an end, and the retry has to be reachable.** `nz-audio`'s mixer used to hand
+  a FAILED voice over to the preloaded next one, so the queue had already moved on when the error
+  arrived: `on_error` saw a row that was no longer current and the 2/5/10 s retry never ran. The
+  mixer now goes silent on a failure and leaves the decision to the fault policy (see
+  [desktop.md](desktop.md), D5 *a failure is not an end*), and the seek fix above is what lets that
+  retry resume the same title instead of consuming the next one.
 - **`?start=` is for a source the server must ENCODE**, not for a finished file: `/ready` answers
   `offset: true` only then. The test server that answered both made the engine slice a FLAC by
   byte offset — a stream with no header, which fails to decode. Faithful to `stream_ready`.

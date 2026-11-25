@@ -18,6 +18,9 @@ use rtrb::{Consumer, Producer, RingBuffer};
 pub(crate) struct VoiceStatus {
     /// The decoder read the last packet and every decoded frame is in the ring.
     ended: AtomicBool,
+    /// The voice ended because its source or decoder FAILED, not because the
+    /// track ran out: an end the mixer must not turn into a handover.
+    failed: AtomicBool,
     /// The engine no longer wants this voice: the decoder stops at its next
     /// packet boundary.
     stop: AtomicBool,
@@ -26,6 +29,12 @@ pub(crate) struct VoiceStatus {
 impl VoiceStatus {
     pub(crate) fn is_ended(&self) -> bool {
         self.ended.load(Ordering::Acquire)
+    }
+
+    /// A failure ends the voice too, but it is not the track's end: the app's
+    /// fault policy owns what happens next (retry, skip, stall).
+    pub(crate) fn is_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
     }
 
     pub(crate) fn is_stopped(&self) -> bool {
@@ -39,6 +48,7 @@ impl VoiceStatus {
     /// A decode failure ends the voice exactly like a natural end; the cause
     /// travels as its own `EngineEvent::Error` from the decode thread.
     pub(crate) fn fail(&self) {
+        self.failed.store(true, Ordering::Release);
         self.ended.store(true, Ordering::Release);
     }
 
@@ -114,6 +124,11 @@ impl VoiceConsumer {
 
     pub(crate) fn is_ended(&self) -> bool {
         self.status.is_ended()
+    }
+
+    /// The voice died on an error, not on the end of its track.
+    pub(crate) fn is_failed(&self) -> bool {
+        self.status.is_failed()
     }
 
     /// The status the engine keeps to stop this voice later.
