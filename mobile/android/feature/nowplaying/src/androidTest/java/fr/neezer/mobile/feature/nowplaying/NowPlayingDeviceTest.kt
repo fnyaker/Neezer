@@ -299,10 +299,9 @@ class NowPlayingDeviceTest {
      *
      * The sheet is the real [PlayerSheetFrame] over a real surface, with the
      * process's player behind it (three titles from the bench, the middle one
-     * playing) and the real [MiniPlayer] beside it. The finger drags 200 dp down
-     * (half of the 400 dp sheet at this density would be 28 %; this is well past),
-     * the release is a real one, and what the test waits for is the STATE
-     * (`NowPlayingState.open == false`) — an event, never a sleep.
+     * playing) and the real [MiniPlayer] beside it. The finger drags **40 % of the
+     * sheet's own height** down, the release is a real one, and what the test waits
+     * for is the STATE (`NowPlayingState.open == false`) — an event, never a sleep.
      *
      * Done when the sheet is gone and the mini player shows the SAME title: a
      * dismissal that advanced the queue would be a second defect wearing the
@@ -373,13 +372,15 @@ class NowPlayingDeviceTest {
         rule.waitUntil(timeoutMillis = 20_000) {
             rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().isNotEmpty()
         }
-        // 5 × 80 px, 300 ms apart: 400 px of travel, slow enough that the DISTANCE
-        // alone decides (a flick would leave the velocity as the cause).
+        // 5 × 8 % of the SHEET's height, 800 ms apart: 40 % of travel — a fraction,
+        // not a pixel count, because "400 px" is 17 % of this emulator's 2 400 px
+        // and would not reach the 28 % threshold — and slow enough (≈110 dp/s) that
+        // the DISTANCE alone decides, not the velocity.
         rule.onNodeWithTag(SHEET_TAG).performTouchInput {
             down(Offset(centerX, top + 40.dp.toPx()))
             repeat(5) {
-                advanceEventTime(300)
-                moveBy(Offset(0f, 80f))
+                advanceEventTime(800)
+                moveBy(Offset(0f, height * 0.08f))
             }
         }
         rule.onNodeWithTag(SHEET_TAG).performTouchInput { up() }
