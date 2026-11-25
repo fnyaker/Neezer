@@ -6602,11 +6602,11 @@ des réglages, MB16) — **+0 requête, +0 octet**, prouvé par le diff (aucun `
 `VizConsentTest` (Robolectric) ajoute 2 tests : la copie du visualiseur est affichée et « Activer »
 est inerte (0 acceptation), puis cocher la phrase et cliquer « Activer » accepte **une** fois.
 
-**Une réserve sur le critère 2 du plan.** Il demande `viz.flash.ack` « présent dans le rapport de
-Réglages → Assistance ». La clé est bien dans `KNOWN`, donc `SettingsApi::all()` (le vidage des
-réglages en force) la rend dès qu'elle est écrite ; mais la ligne `réglages : thème …, éco …, qualité …`
-du rapport (`settings/mod.rs::diagnostic_report`) nomme un ensemble fixe et ne l'inclut pas. L'ajouter
-serait une ligne hors de la liste `Fichiers` de ce lot : signalé, pas fait.
+**Le rapport d'Assistance dit l'état du consentement.** La ligne `réglages : …` du rapport
+(`settings/mod.rs::diagnostic_report`) nomme un ensemble fixe ; M12 ajoute après elle une ligne
+`viz.flash.ack : oui|non`, lue par `setting_json` — la même voie que `SettingsApi::get` —, et un test
+Rust (`the_report_names_the_photosensitivity_acceptance`) vérifie les deux états : `non` sur un
+appareil neuf, `oui` après acceptation.
 
 **Ce que la CI prouve, et ce qu'un appareil doit encore montrer.** `mobile.yaml` (Rust, APK,
 émulateur) et `security.yaml` ; les **deux captures** du plan (feuille au premier « Ouvrir le

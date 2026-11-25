@@ -40,6 +40,7 @@ import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzToasts
 import fr.neezer.mobile.designsystem.Sillon
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Visualiseur — the full-screen scene, `webapp/src/routes/Viz.svelte`'s phone

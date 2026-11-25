@@ -584,6 +584,17 @@ impl Core {
             if settings.prefetch { "oui" } else { "non" },
             settings.prefetch_count
         ));
+        // The photosensitivity warning's acceptance (M12's `viz.flash.ack`): the
+        // person wants to SEE whether this device ever accepted it, and the key
+        // is not typed in [`LocalSettings`], so it is read on its own.
+        let flash_ack = self
+            .setting_json("viz.flash.ack")
+            .and_then(|text| text.parse::<u64>().ok())
+            .is_some_and(|stamp| stamp > 0);
+        out.push_str(&format!(
+            "viz.flash.ack : {}\n",
+            if flash_ack { "oui" } else { "non" }
+        ));
         out
     }
 }
@@ -759,6 +770,23 @@ mod tests {
                 .main
                 .as_deref(),
             Some("deezer")
+        );
+    }
+
+    /// M12's key has to be visible in *Réglages → Assistance*: the report says
+    /// `non` until this device accepted the warning, then `oui`.
+    #[tokio::test]
+    async fn the_report_names_the_photosensitivity_acceptance() {
+        let (_server, _dir, core) = testing::configured().await;
+        assert!(
+            core.diagnostic_report().contains("viz.flash.ack : non"),
+            "never accepted, so the assistance dump says so"
+        );
+        core.set_local_setting("viz.flash.ack", Value::from(1_720_000_000_000_u64))
+            .expect("un horodatage");
+        assert!(
+            core.diagnostic_report().contains("viz.flash.ack : oui"),
+            "the acceptance is in the dump"
         );
     }
 
