@@ -620,6 +620,19 @@ observer's ROOT must be the scrolling `<main>`: against the viewport the margin 
 grid never grows. An observer only reports changes, so after each step it is re-observed (a tall screen
 that still shows the sentinel asks for the next step).
 
+**Every finger-dragged surface settles from its release** (`lib/gesture.js`, shared): the phone
+player's dismissal and its « À propos » panel, the track row's pull, the cover carousel and the
+recap cards all measure velocity over the trailing **80 ms**, decide with `position + v × 160 ms`
+(and a speed floor), and finish with a closed-form damped spring seeded by the release velocity
+instead of assigning the origin in one frame. **No release path writes `0`** — the spring starts
+where the finger let go; under `$ecoMode`/`prefers-reduced-motion` it lands in the same tick. The
+rule, the thresholds (22 % / 0.5 px/ms for the sheet, 64 px / 0.6 px/ms for a row…) and the
+measured numbers are in [transitions.md](transitions.md)'s inventory (P1, P5, L8) and
+`webapp/test/swipe/run.mjs`. The player's carousel keys its three covers by the track's
+**occurrence ordinal** in the queue (unique even for a duplicate, stable across an advance) and,
+after a committed swipe, moves `scrollLeft` by exactly the distance the SAME cover node moved —
+so the strip no longer jumps by a whole cover when the queue advances.
+
 **Swipe a track row right to queue it next** (`components/TrackRow.svelte`, touch only). Same
 gesture language as the now-playing sheet: arm on touchstart, commit to an axis after ~10px, and
 leave a gesture that locks to "y" entirely to the scroller. The row slides and the strip it vacates

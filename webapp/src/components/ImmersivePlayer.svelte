@@ -35,6 +35,9 @@
 
   let dragY = 0;
   let dragging = false;
+  // True while `lib/gesture.js#settle` owns `dragY` frame by frame: the host's
+  // CSS snap-back must stand down for the duration (transitions.md P1).
+  let settling = false;
   // A fresh open starts from the top: the previous dismissal left `dragY` at
   // the finger's position, and the outro needs it until the host is gone.
   let wasOpen = false;
@@ -65,13 +68,14 @@
   <div
     class="player-host"
     class:dragging
+    class:settling
     style={`transform:translateY(${dragY}px)`}
     transition:screen={{ fromY: dragY }}
     on:introend={() => immersiveShown.set(true)}
     on:outrostart={() => immersiveShown.set(false)}
   >
     {#if mobile}
-      <MobileNowPlaying bind:dragY bind:dragging />
+      <MobileNowPlaying bind:dragY bind:dragging bind:settling />
     {:else}
       <DesktopNowPlaying />
     {/if}
@@ -91,6 +95,10 @@
   }
   .player-host.dragging {
     transition: none; /* follow the finger 1:1 while dragging */
+  }
+  /* A JS settle owns the transform: no CSS transition may fight its frames. */
+  .player-host.settling {
+    transition: none;
   }
   @media (prefers-reduced-motion: reduce) {
     /* M14: no displacement — the snap-back lands at once. */
