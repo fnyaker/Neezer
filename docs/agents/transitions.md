@@ -313,6 +313,24 @@ Helpers:
 
 ## Inventory — every element, its transition, and its trap
 
+**Finger-driven movement settles from the release, it does not snap.** Every SPA surface a finger
+drags (the phone player's dismissal and its « À propos » panel, the track row's pull, the cover
+carousel's re-centre, the recap cards) goes through `lib/gesture.js` (W1):
+`tracker()` reads only the trailing **80 ms** of the gesture (an average seeded with the finger
+planting under-reads a short flick); `projected(v)` = `v × 160 ms` is where the release was heading
+(Apple's WWDC 2018 "project momentum"); and `settle()` plays a **closed-form damped spring** from
+the finger's offset, seeded with its velocity, so a 60 Hz and a 120 Hz display follow the same
+curve and a dropped frame never changes it. Release rules: sheet dismissal past **22 %** of the
+sheet **or 0.5 px/ms**; the « À propos » panel past **22 % of the screen or 0.45 px/ms** (the same
+fraction as the dismissal, mirrored); a row commit
+at **64 px or 0.6 px/ms**; a recap card past **35 % of its width or 0.7 px/ms**. Settle springs:
+dismissal `response 0.28 / damping 1.0`, panel `0.30 / 0.9`, row `0.30 / 0.85`, recap `0.32 / 0.82`
+(off) and `0.28 / 1.0` (back). Under `$ecoMode` or `prefers-reduced-motion` a settle lands at once
+(`settle({reduce: true})` writes the target in the same tick). **No release path may assign the
+origin** (`dragY = 0`, `dx = 0`, `reveal = panelH()`): a settle starts where the finger let go.
+The element is marked `.settling` for the duration, and its CSS transition is `none` then, because
+a JS settle writes the transform (or width) frame by frame.
+
 **Defaults that apply to every row unless the row overrides them:** eco = instant (duration 0, CSS guard);
 reduced = opacity only, ≤ 140 ms; interruption = the bidirectional transition reverses from where it is, a
 WAAPI one is cancelled by the next; focus = unchanged by the motion (a dialog focuses its first control on
@@ -382,11 +400,11 @@ menu, where the second click goes somewhere else, do not need it.
 
 | # | Element (file) | Trigger | Transition | Enter | Exit | Trap / note |
 |---|---|---|---|---|---|---|
-| P1 | Phone full-screen player (`MobileNowPlaying.svelte` `.m`) | tap the mini card / swipe up; close button, swipe down, Escape | `screen` with `fromY: dragY` on exit (replaces `transition:fade 140`) | 320 | 240 from the dragged position | `.m` carries `style="transform:translateY(dragY)"` and a CSS `transition: transform 0.28s` for the snap-back: the Svelte animation overrides the inline transform while it runs, so the exit MUST start at `dragY` (param read at outro start) or it jumps to 0 first. Defer the visualizer canvas/GL start to `introend` (no shader compile inside the slide). No opacity on `.m` (its inner `.sheet.on-photo` panes are glass, M8). |
+| P1 | Phone full-screen player (`MobileNowPlaying.svelte` `.m`) | tap the mini card / swipe up; close button, swipe down, Escape | `screen` with `fromY: dragY` on exit (replaces `transition:fade 140`) | 320 | 240 from the dragged position | `.m` carries `style="transform:translateY(dragY)"`: the Svelte animation overrides the inline transform while it runs, so the exit MUST start at `dragY` (param read at outro start) or it jumps to 0 first. **Release (W1):** dismiss past 22 % of the sheet or 0.5 px/ms (`dragY + projected(v)`); otherwise `settle()` springs back `response 0.28 / damping 1.0` from the finger's offset and speed, with `.player-host.settling` holding `transition: none` so no CSS transition fights the frames. Defer the visualizer canvas/GL start to `introend` (no shader compile inside the slide). No opacity on `.m` (its inner `.sheet.on-photo` panes are glass, M8). |
 | P2 | Desktop full-screen player (`DesktopNowPlaying.svelte` `.d`) | the player bar's cover/expand; Escape | `screen` (desktop: opacity + scale 0.98) | 200 | 140 | Its children hold no open glass at open time; a QualityMenu open while closing is closed first (existing Escape order). |
 | P3 | Ground hand-off (`GlobalBackdrop.svelte` `.gb.hidden`, `stores.js#immersiveShown`) | P1/P2 intro end / outro start | none; `class:hidden={$immersiveShown}` instead of `$immersiveOpen` (M12) | — | — | Hiding on `immersiveOpen` blanks the page's ground under the still-sliding player. Keeps "exactly ONE blurred image on screen" (webapp.md) at rest. |
 | P4 | Phone player queue / lyrics views (`showQueue`, `showLyrics`, `.sheet.on-photo`) | « File · N », « Paroles » | `sheet` (phone path) replacing `fade 120` | 280 | 200 | The queue inside is windowed (M4); `scrollToIndex` on open uses `smooth: false` (already). |
-| P5 | Phone player « À propos » panel reveal (`panelShown`, `reveal`) | swipe up the door | follows the finger (no transition while held), glide `var(--dur-base) var(--ease-standard)` on release | 200 | 200 | Existing gesture; only tokenise the literal. |
+| P5 | Phone player « À propos » panel reveal (`panelShown`, `reveal`) | swipe up the door, or down on the panel | follows the finger (no transition while held); **release (W1):** opens past 22 % of the screen or 0.45 px/ms (`reveal + projected(v)`), otherwise `settle()` `response 0.30 / damping 0.9` back to where the finger found it; a drag down past 90 px or 0.45 px/ms slides it away with the same spring | 200 | 200 | `.under.settling` holds `transition: none` while the spring writes `reveal`. The 40 px swipe of `test/panel/run.mjs` still snaps back; a 240 px drag still opens. |
 | P6 | Phone player cover carousel (`slots`) | swipe / skip | existing scroll-snap (native momentum) | — | — | Do not add a transform animation: the browser owns it. |
 | P7 | Track change in both players: title/artist block | `trackKey($current)` changes | `{#key trackKey($current)}` + `swap` on the text block | 140 | — | Key on the STRING (`currentId`), never `$current` (it re-emits on every progress tick — webapp.md). |
 | P8 | Desktop player cover crossfade (`.cover-fade`, `{#key trackKey}`) | track change | keep in/out fade, durations → `DUR.base`/`DUR.fast` through `fade` | 200 | 140 | Absolutely positioned layers: an outro is fine here (no flow). Already eco-gated by `{#if !$ecoMode}` — keep. |
@@ -417,7 +435,7 @@ menu, where the second click goes somewhere else, do not need it.
 | L5 | Queue: drag to reorder | grip drag | rows between `from` and `to` translate ±rowH with `transition: transform var(--dur-base) var(--ease-standard)` (CSS, classes on mounted rows) so the list MAKES ROOM instead of today's before/after line; the floating copy follows the finger with no transition; on drop the transforms clear in the same frame as `player.move` | 200 | — | `indexAt` geometry unchanged; `autoScroll` unchanged; `test/queue/run.mjs` (4 000 rows, touch) must stay green. The dragged row's placeholder keeps its slot (opacity .35). |
 | L6 | Queue « Vider la file » | button | the store clears at once (M2), the rows go in the same frame (no row outro, M4/M7), and the empty state / the remaining "now playing" row block gets `fadeIn` | 140 | — | Never delay `player.clearUpcoming()` behind a fade. |
 | L7 | Track row (`TrackRow.svelte`): hover, `.active` (playing), selection | pointer / playback | colour `--dur-instant`; the playing `eq` bars = decorative (eco stops); `rowspin` (loading this row) = status | 90 | 90 | No transform on the row root (the swipe owns transform). |
-| L8 | Track row swipe (`.swipe .track/.action`) | touch drag | finger 1:1, release glide `var(--dur-base) var(--ease-enter)` (replaces the literal 0.22 s) | 200 | — | Already reduced-gated; keep. |
+| L8 | Track row swipe (`.swipe .track/.action`) | touch drag | finger 1:1, **release (W1):** a commit at 64 px or 0.6 px/ms (`lib/gesture.js#tracker`, trailing 80 ms), then `settle()` `response 0.30 / damping 0.85` from the pulled offset and release speed; `.swipe.settling` holds `transition: none` | 200 | — | Eco/reduced: the settle lands at once (rule 6). Keep the 24 px edge guard, the rubber band past 64 px and the click swallow. `webapp/test/swipe/run.mjs`: a 30 px flick at ~1.5 px/ms queues one track, a slow 50 px drag queues none. |
 | L9 | Track row download / source state badges | download progress / done | badge `swap` on state change; progress ring = status | 140 | — | — |
 | L10 | Editable playlist (`PlaylistTracks.svelte`, `animate:flip`) | drag reorder | `flipSmall` only when the list is NOT windowed and ≤ 50 rows; otherwise L5's make-room pattern | 200 | — | Today `flipMs` on a possibly long list: check `tracks.length` and switch. |
 | L11 | `TrackBrowser.svelte` | filter / sort | content swap = M7 `fadeIn` on the list container once per committed change (not per keystroke) | 140 | — | — |
