@@ -6,7 +6,9 @@ import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -18,6 +20,7 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -31,6 +34,7 @@ import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState.Pane
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -65,6 +69,21 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
                 ?: error("nz.screenshots is not set: the screenshot test writes the lot's images"),
         )
 
+    /**
+     * P1's own images. The base's `nz.screenshots` property is MB11's directory
+     * (its build.gradle.kts owns it); this lot writes next to it from the
+     * repository root the same build script already hands the test, so no shared
+     * build file is edited (`docs/agents/mobile.md`, worker rule 3).
+     */
+    private val p1OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/P1",
+        )
+
     protected val navigator = object : NzNavigator {
         override fun go(link: uniffi.nz_ffi.AppLink) = Unit
         override fun back() = Unit
@@ -73,6 +92,22 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
     }
 
     protected fun capture(
+        name: String,
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        content: @Composable () -> Unit,
+    ) = captureTo(outputDir, name, theme, fontScale, content)
+
+    /** One of P1's blurred-backdrop images. */
+    protected fun captureP1(
+        name: String,
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        content: @Composable () -> Unit,
+    ) = captureTo(p1OutputDir, name, theme, fontScale, content)
+
+    private fun captureTo(
+        dir: File,
         name: String,
         theme: NzThemeKind,
         fontScale: Float = 1f,
@@ -96,7 +131,7 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
         val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(full))
         val bitmap = cropToContent(full, theme)
-        val file = File(outputDir, name)
+        val file = File(dir, name)
         file.parentFile?.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
@@ -411,19 +446,151 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
             kotlin.math.abs(aboutCentre - rowCentre) <= 1f,
         )
     }
+    /**
+     * P1's geometry: the sleeve draws at its slot's size, the slot is square, and
+     * the header sits inside the status bar (M5, M12).
+     *
+     * The centring test is what holds M12: the old stage forced a `420.dp` sleeve
+     * inside a ≈288 dp slot and the `Box` cropped it at the top-start, so the drawn
+     * rect was the slot's rect plus 132 dp and its optical centre was off. Asserting
+     * the drawn rect against the slot's (within 1 dp) is the number; a screenshot
+     * shows the symptom but cannot say by how much.
+     *
+     * The inset half is the platform's own value: on Robolectric it is 0, so this
+     * assertion holds trivially on the JVM and bites on the emulator journey, which
+     * is where the real inset exists.
+     */
+    @Test
+    fun p1TheSleeveFillsItsSlot() {
+        val model = model()
+        val state = model.state.value
+        var insetTopDp = 0f
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
+                val density = LocalDensity.current
+                insetTopDp = WindowInsets.statusBars.getTop(density) / density.density
+                PlayerSurface(
+                    state = state,
+                    model = model,
+                    nav = navigator,
+                    lyrics = null,
+                    about = null,
+                    onClose = {},
+                    liveReads = false,
+                )
+            }
+        }
+        rule.mainClock.advanceTimeBy(1_200)
+        shadowOf(Looper.getMainLooper()).idle()
+        rule.waitForIdle()
+
+        val slots = rule.onAllNodesWithTag("player-cover-slot", useUnmergedTree = true)
+        val covers = rule.onAllNodesWithTag("player-cover", useUnmergedTree = true)
+        val slotCount = slots.fetchSemanticsNodes().size
+        val coverCount = covers.fetchSemanticsNodes().size
+        println(
+            "MEASURE p1 sleeve: width=${width}dp slots=$slotCount sleeves=$coverCount " +
+                "insetTop=${insetTopDp}dp",
+        )
+        assertTrue("the stage composed its pages ($slotCount slots)", slotCount >= 3)
+        val slot = slots[1].getUnclippedBoundsInRoot()
+        val slotW = slot.right - slot.left
+        val slotH = slot.bottom - slot.top
+        assertEquals("the slot is square", slotW.value, slotH.value, 1f)
+        for (index in 0 until coverCount) {
+            val cover = covers[index].getUnclippedBoundsInRoot()
+            assertEquals(
+                "sleeve $index draws the slot's width",
+                slotW.value,
+                (cover.right - cover.left).value,
+                1f,
+            )
+            assertEquals(
+                "sleeve $index draws the slot's height",
+                slotH.value,
+                (cover.bottom - cover.top).value,
+                1f,
+            )
+        }
+
+        val header = rule.onNodeWithContentDescription("Réduire le lecteur").getUnclippedBoundsInRoot()
+        assertTrue(
+            "the header starts below the status bar inset " +
+                "(top=${header.top.value}dp, inset=${insetTopDp}dp)",
+            header.top.value >= insetTopDp + 3.9f,
+        )
+    }
 }
 
 /** 360 dp: the phone the plan's worst case names. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-xhdpi")
-class NowPlayingPhoneScreenshotTest : NowPlayingScreenshotBase(360)
+class NowPlayingPhoneScreenshotTest : NowPlayingScreenshotBase(360) {
+    /** P1: the blurred backdrop under the player (phone, Encre). */
+    @Test
+    fun p1BlurredBackdropEncre() {
+        val model = model()
+        // The state is read OUTSIDE the composition (lint's `StateFlow.value`
+        // rule): a screenshot is a still, not a live flow.
+        val state = model.state.value
+        captureP1("p1-flou-360dp.png", NzThemeKind.Encre) {
+            PlayerSurface(
+                state = state,
+                model = model,
+                nav = navigator,
+                lyrics = lyrics(),
+                about = null,
+                onClose = {},
+                liveReads = false,
+            )
+        }
+    }
+
+    /** P1: the same ground on Papier. */
+    @Test
+    fun p1BlurredBackdropPapier() {
+        val model = model(playing = false)
+        // Outside the composition: see `p1BlurredBackdropEncre`.
+        val state = model.state.value
+        captureP1("p1-flou-papier-360dp.png", NzThemeKind.Papier) {
+            PlayerSurface(
+                state = state,
+                model = model,
+                nav = navigator,
+                lyrics = null,
+                about = null,
+                onClose = {},
+                liveReads = false,
+            )
+        }
+    }
+}
 
 /** 600 dp: the phone column, one step from the wide shell. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w600dp-h900dp-xhdpi")
-class NowPlayingWideScreenshotTest : NowPlayingScreenshotBase(600)
+class NowPlayingWideScreenshotTest : NowPlayingScreenshotBase(600) {
+    /** P1: the blurred backdrop at 600 dp. */
+    @Test
+    fun p1BlurredBackdropWide() {
+        val model = model()
+        // Outside the composition: see `p1BlurredBackdropEncre`.
+        val state = model.state.value
+        captureP1("p1-flou-600dp.png", NzThemeKind.Encre) {
+            PlayerSurface(
+                state = state,
+                model = model,
+                nav = navigator,
+                lyrics = lyrics(),
+                about = null,
+                onClose = {},
+                liveReads = false,
+            )
+        }
+    }
+}
 
 /**
  * 1280 dp: the tablet shell the plan names ("rail + reading columns, as
