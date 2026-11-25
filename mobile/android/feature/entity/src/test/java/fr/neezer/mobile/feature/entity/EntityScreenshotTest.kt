@@ -13,6 +13,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import fr.neezer.mobile.bridge.ScreenState
 import fr.neezer.mobile.designsystem.NzMotionLevel
@@ -20,6 +27,7 @@ import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,6 +65,15 @@ abstract class EntityScreenshotBase(private val width: Int) {
         fontScale: Float = 1f,
         content: @Composable () -> Unit,
     ) {
+        render(theme, fontScale, content)
+        saveTo(outputDir, name, theme)
+    }
+
+    protected fun render(
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        content: @Composable () -> Unit,
+    ) {
         rule.setContent {
             NzTheme(kind = theme, motion = NzMotionLevel.Full) {
                 val density = LocalDensity.current
@@ -65,12 +82,15 @@ abstract class EntityScreenshotBase(private val width: Int) {
                 }
             }
         }
+    }
+
+    protected fun saveTo(dir: File, name: String, theme: NzThemeKind) {
         shadowOf(Looper.getMainLooper()).idle()
         val view = rule.activity.window.decorView
         val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(full))
         val bitmap = cropToContent(full, theme)
-        val file = File(outputDir, name)
+        val file = File(dir, name)
         file.parentFile?.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
@@ -117,16 +137,22 @@ abstract class EntityScreenshotBase(private val width: Int) {
         creditsTracks = EntityFixtures.person().tracks,
     )
 
-    private fun albumState() = AlbumModel.State(
+    private fun albumState(tracks: Int = 12, deezer: Boolean = true) = AlbumModel.State(
         id = EntityFixtures.ALBUM_DEEZER,
-        screen = ScreenState.Ready(EntityFixtures.albumView(tracks = 12)),
-        onDeezer = listOf(EntityFixtures.row("Bonus", 12)),
+        screen = ScreenState.Ready(EntityFixtures.albumView(tracks = tracks)),
+        onDeezer = if (deezer) listOf(EntityFixtures.row("Bonus", 12)) else emptyList(),
         onDeezerFetched = true,
     )
 
-    private fun personState() = PersonModel.State(
+    private fun personState(rows: Int = 0) = PersonModel.State(
         name = "Nina Simone",
-        screen = ScreenState.Ready(EntityFixtures.person()),
+        screen = ScreenState.Ready(
+            if (rows == 0) {
+                EntityFixtures.person()
+            } else {
+                EntityFixtures.person(rows = (0 until rows).map { EntityFixtures.row("Œuvre $it", it) })
+            },
+        ),
     )
 
     private fun sheetState() = TrackCreditsModel.State(
@@ -215,6 +241,80 @@ abstract class EntityScreenshotBase(private val width: Int) {
             actions = ArtistActions(),
         )
     }
+
+    /**
+     * S2 : la bande annule la marge haute de la page (elle commence à 0), les
+     * onglets sont à 20 dp sous elle, et la liste s'arrête 40 dp avant le bas.
+     */
+    @Test
+    fun theArtistBandAndTheListFollowThePage() {
+        render(NzThemeKind.Encre) {
+            ArtistScreen(state = artistTracksState(), actions = ArtistActions())
+        }
+        rule.waitForIdle()
+        val band = rule.onNodeWithTag(ARTIST_BAND_TAG).getUnclippedBoundsInRoot()
+        val tab = rule.onNodeWithText("Aperçu").getUnclippedBoundsInRoot()
+        println("MEASURE s2 artiste: width=${width}dp band.top=${band.top.value}dp tab.top=${tab.top.value}dp band.bottom=${band.bottom.value}dp")
+        assertEquals("la bande commence au bord haut", 0f, band.top.value, 1f)
+        assertEquals("les onglets sont à 20 dp sous la bande", 20f, tab.top.value - band.bottom.value, 1f)
+
+        rule.onNodeWithTag(ARTIST_LIST_TAG).performScrollToNode(hasText("Titre 39"))
+        rule.waitForIdle()
+        val last = rule.onNode(hasText("Titre 39") and hasClickAction()).getUnclippedBoundsInRoot()
+        val root = rule.onRoot().getUnclippedBoundsInRoot()
+        println("MEASURE s2 artiste tail: width=${width}dp last.bottom=${last.bottom.value}dp root.bottom=${root.bottom.value}dp")
+        assertEquals("la liste s'arrête 40 dp avant le bas", 40f, root.bottom.value - last.bottom.value, 1f)
+        if (width == 360) saveTo(s2OutputDir, "s2-artiste-360dp.png", NzThemeKind.Encre)
+    }
+
+    /** S2 : la bande de l'album commence à 0 et ses 60 titres s'arrêtent à 40 dp. */
+    @Test
+    fun theAlbumBandAndTheListFollowThePage() {
+        render(NzThemeKind.Encre) {
+            AlbumScreen(state = albumState(tracks = 60, deezer = false), actions = AlbumActions())
+        }
+        rule.waitForIdle()
+        val band = rule.onNodeWithTag(ALBUM_BAND_TAG).getUnclippedBoundsInRoot()
+        println("MEASURE s2 album: width=${width}dp band.top=${band.top.value}dp")
+        assertEquals("la bande commence au bord haut", 0f, band.top.value, 1f)
+
+        rule.onNodeWithTag(ALBUM_LIST_TAG).performScrollToNode(hasText("Titre 60"))
+        rule.waitForIdle()
+        val last = rule.onNode(hasText("Titre 60") and hasClickAction()).getUnclippedBoundsInRoot()
+        val root = rule.onRoot().getUnclippedBoundsInRoot()
+        println("MEASURE s2 album tail: width=${width}dp last.bottom=${last.bottom.value}dp root.bottom=${root.bottom.value}dp")
+        assertEquals("la liste s'arrête 40 dp avant le bas", 40f, root.bottom.value - last.bottom.value, 1f)
+        if (width == 360) saveTo(s2OutputDir, "s2-album-360dp.png", NzThemeKind.Encre)
+    }
+
+    /** S2 : les crédits aussi commencent au bord haut, et 60 titres s'arrêtent à 40 dp. */
+    @Test
+    fun theCreditsBandAndTheListFollowThePage() {
+        render(NzThemeKind.Encre) {
+            CreditsScreen(state = personState(rows = 60), actions = CreditsActions())
+        }
+        rule.waitForIdle()
+        val band = rule.onNodeWithTag(CREDITS_BAND_TAG).getUnclippedBoundsInRoot()
+        println("MEASURE s2 credits: width=${width}dp band.top=${band.top.value}dp")
+        assertEquals("la bande commence au bord haut", 0f, band.top.value, 1f)
+
+        rule.onNodeWithTag(CREDITS_LIST_TAG).performScrollToNode(hasText("Œuvre 59"))
+        rule.waitForIdle()
+        val last = rule.onNode(hasText("Œuvre 59") and hasClickAction()).getUnclippedBoundsInRoot()
+        val root = rule.onRoot().getUnclippedBoundsInRoot()
+        println("MEASURE s2 credits tail: width=${width}dp last.bottom=${last.bottom.value}dp root.bottom=${root.bottom.value}dp")
+        assertEquals("la liste s'arrête 40 dp avant le bas", 40f, root.bottom.value - last.bottom.value, 1f)
+        if (width == 360) saveTo(s2OutputDir, "s2-credits-360dp.png", NzThemeKind.Encre)
+    }
+
+    private val s2OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/S2",
+        )
 }
 
 /** 360 dp: the phone the app is designed for first. */

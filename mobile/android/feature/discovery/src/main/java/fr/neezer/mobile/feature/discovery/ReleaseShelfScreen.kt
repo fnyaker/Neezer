@@ -177,7 +177,7 @@ private fun Banner(page: ShelfPage, back: () -> Unit, stale: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.s2)
-            .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
+            .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.pageY),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {

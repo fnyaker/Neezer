@@ -15,6 +15,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import fr.neezer.mobile.bridge.ScreenState
@@ -25,6 +32,7 @@ import fr.neezer.mobile.designsystem.Sillon
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -67,6 +75,29 @@ abstract class LibraryScreenshotBase(private val width: Int) {
         frameHeight: androidx.compose.ui.unit.Dp? = null,
         content: @Composable () -> Unit,
     ) {
+        render(theme, fontScale, frameHeight, content)
+        shadowOf(Looper.getMainLooper()).idle()
+        val view = rule.activity.window.decorView
+        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(full))
+        // A framed capture (a sheet) is cut at its own frame: the test window is
+        // 2 400 dp tall and the ground below the frame is not the page's.
+        val bitmap = if (frameHeight != null) {
+            val density = view.resources.displayMetrics.density
+            val pixels = (frameHeight.value * density).toInt().coerceIn(1, full.height)
+            Bitmap.createBitmap(full, 0, 0, full.width, pixels)
+        } else {
+            cropToContent(full, theme)
+        }
+        write(outputDir, name, bitmap)
+    }
+
+    protected fun render(
+        theme: NzThemeKind,
+        fontScale: Float = 1f,
+        frameHeight: androidx.compose.ui.unit.Dp? = null,
+        content: @Composable () -> Unit,
+    ) {
         rule.setContent {
             NzTheme(kind = theme, motion = NzMotionLevel.Full) {
                 val density = LocalDensity.current
@@ -86,20 +117,10 @@ abstract class LibraryScreenshotBase(private val width: Int) {
                 }
             }
         }
-        shadowOf(Looper.getMainLooper()).idle()
-        val view = rule.activity.window.decorView
-        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        view.draw(Canvas(full))
-        // A framed capture (a sheet) is cut at its own frame: the test window is
-        // 2 400 dp tall and the ground below the frame is not the page's.
-        val bitmap = if (frameHeight != null) {
-            val density = view.resources.displayMetrics.density
-            val pixels = (frameHeight.value * density).toInt().coerceIn(1, full.height)
-            Bitmap.createBitmap(full, 0, 0, full.width, pixels)
-        } else {
-            cropToContent(full, theme)
-        }
-        val file = File(outputDir, name)
+    }
+
+    protected fun write(dir: File, name: String, bitmap: Bitmap) {
+        val file = File(dir, name)
         file.parentFile?.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
@@ -292,6 +313,72 @@ abstract class LibraryScreenshotBase(private val width: Int) {
             zone = zone,
         )
     }
+
+    /**
+     * S2 : la Bibliothèque commence à 20 dp et sa liste s'arrête 40 dp avant le
+     * bas (la coquille fournit l'inset ; la liste n'ajoute plus 128 dp de vide).
+     */
+    @Test
+    fun thePageMarginAndTheListTail() {
+        render(NzThemeKind.Encre) {
+            LibraryScreen(state = favoritesState(count = 60), actions = LibraryActions())
+        }
+        rule.waitForIdle()
+        val head = rule.onNodeWithTag(LIBRARY_HEAD_TAG).getUnclippedBoundsInRoot()
+        println("MEASURE s2 bibliotheque: width=${width}dp head.top=${head.top.value}dp")
+        assertEquals("la page commence à 20 dp", 20f, head.top.value, 1f)
+
+        rule.onNodeWithTag(LIBRARY_LIST_TAG).performScrollToNode(hasText("Sinnerman 59"))
+        rule.waitForIdle()
+        val last = rule.onNode(hasText("Sinnerman 59") and hasClickAction()).getUnclippedBoundsInRoot()
+        val root = rule.onRoot().getUnclippedBoundsInRoot()
+        println(
+            "MEASURE s2 bibliotheque tail: width=${width}dp last.bottom=${last.bottom.value}dp " +
+                "root.bottom=${root.bottom.value}dp",
+        )
+        assertEquals(
+            "la liste s'arrête 40 dp au-dessus du bas",
+            40f,
+            root.bottom.value - last.bottom.value,
+            1f,
+        )
+
+        if (width == 360) {
+            shadowOf(Looper.getMainLooper()).idle()
+            val view = rule.activity.window.decorView
+            val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(full))
+            write(s2OutputDir, "s2-bibliotheque-360dp.png", cropToContent(full, NzThemeKind.Encre))
+        }
+    }
+
+    /** S2 : l'historique commence lui aussi à 20 dp. */
+    @Test
+    fun historyStartsOnTheSpaMargin() {
+        render(NzThemeKind.Encre) {
+            HistoryScreen(state = historyState(), actions = HistoryActions(), today = today, zone = zone)
+        }
+        rule.waitForIdle()
+        val title = rule.onNodeWithText("Historique").getUnclippedBoundsInRoot()
+        println("MEASURE s2 historique: width=${width}dp title.top=${title.top.value}dp")
+        assertEquals("la page commence à 20 dp", 20f, title.top.value, 1f)
+        if (width == 360) {
+            shadowOf(Looper.getMainLooper()).idle()
+            val view = rule.activity.window.decorView
+            val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(full))
+            write(s2OutputDir, "s2-historique-360dp.png", cropToContent(full, NzThemeKind.Encre))
+        }
+    }
+
+    private val s2OutputDir: File
+        get() = File(
+            File(
+                System.getProperty("nz.repoRoot")
+                    ?: error("nz.repoRoot is not set: the screenshot test needs the repository root"),
+            ),
+            "docs/agents/screenshots/mobile/S2",
+        )
 }
 
 /** 360 dp: the phone the app is designed for first. */

@@ -388,8 +388,8 @@ fun SearchScreen(
         contentPadding = PaddingValues(
             start = NzSpacing.pageX,
             end = NzSpacing.pageX,
-            top = NzSpacing.l,
-            bottom = NzSpacing.xl,
+            top = NzSpacing.pageY,
+            bottom = NzSpacing.pageBottom,
         ),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {

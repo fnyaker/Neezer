@@ -151,7 +151,7 @@ fun PodcastsScreen(
                     modifier = Modifier.padding(
                         start = NzSpacing.pageX,
                         end = NzSpacing.pageX,
-                        top = NzSpacing.m,
+                        top = NzSpacing.pageY,
                     ),
                 )
             }
@@ -279,8 +279,8 @@ private fun ShowGrid(
         contentPadding = PaddingValues(
             start = NzSpacing.pageX,
             end = NzSpacing.pageX,
-            top = NzSpacing.s,
-            bottom = NzSpacing.pageY,
+            top = NzSpacing.pageY,
+            bottom = NzSpacing.pageBottom,
         ),
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),

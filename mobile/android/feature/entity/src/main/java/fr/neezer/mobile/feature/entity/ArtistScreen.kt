@@ -22,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -48,8 +49,9 @@ import uniffi.nz_ffi.TrackRow
  */
 const val ARTIST_MARKER = "Fiche artiste"
 
-/** How many rows of a list clear the shell's mini player and tab bar. */
-private val SHELL_CLEARANCE = 128.dp
+/** S2's geometry test: the band (it cancels the page's top margin) and the list. */
+const val ARTIST_BAND_TAG = "artist-band"
+const val ARTIST_LIST_TAG = "artist-list"
 
 /** Everything the artist page can do, so the screen stays a pure function. */
 data class ArtistActions(
@@ -149,8 +151,8 @@ fun ArtistScreen(
 
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().background(colors.bg),
-            contentPadding = PaddingValues(bottom = SHELL_CLEARANCE),
+            modifier = Modifier.fillMaxSize().background(colors.bg).testTag(ARTIST_LIST_TAG),
+            contentPadding = PaddingValues(bottom = NzSpacing.pageBottom),
         ) {
             item(key = "band") {
                 val data = state.data
@@ -198,6 +200,7 @@ private fun ArtistBand(
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.s2)
+            .testTag(ARTIST_BAND_TAG)
             .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
@@ -292,7 +295,7 @@ private fun ArtistTabs(state: ArtistModel.State, actions: ArtistActions) {
     androidx.compose.foundation.layout.FlowRow(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
+            .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.pageY),
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {

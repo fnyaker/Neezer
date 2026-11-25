@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -41,8 +42,9 @@ import uniffi.nz_ffi.TrackRow
 /** The screen's marker, in every state (see [ARTIST_MARKER]). */
 const val ALBUM_MARKER = "Fiche album"
 
-/** How many rows clear the shell's mini player and tab bar. */
-private val SHELL_CLEARANCE = 128.dp
+/** S2's geometry test: the band (it cancels the page's top margin) and the list. */
+const val ALBUM_BAND_TAG = "album-band"
+const val ALBUM_LIST_TAG = "album-list"
 
 /** Everything the album page can do. */
 data class AlbumActions(
@@ -106,8 +108,8 @@ fun AlbumScreen(
 
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().background(colors.bg),
-            contentPadding = PaddingValues(bottom = SHELL_CLEARANCE),
+            modifier = Modifier.fillMaxSize().background(colors.bg).testTag(ALBUM_LIST_TAG),
+            contentPadding = PaddingValues(bottom = NzSpacing.pageBottom),
         ) {
             item(key = "band") {
                 if (page != null) {
@@ -198,6 +200,7 @@ private fun AlbumBand(page: AlbumView, state: AlbumModel.State, actions: AlbumAc
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.s2)
+            .testTag(ALBUM_BAND_TAG)
             .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
