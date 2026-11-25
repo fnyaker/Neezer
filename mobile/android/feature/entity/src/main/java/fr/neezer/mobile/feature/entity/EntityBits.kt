@@ -2,7 +2,6 @@ package fr.neezer.mobile.feature.entity
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,16 +19,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -49,6 +43,7 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.designsystem.SwipeRow
 import fr.neezer.mobile.designsystem.nzDuration
 import uniffi.nz_ffi.AlbumCardData
 import uniffi.nz_ffi.TrackRow
@@ -109,7 +104,7 @@ internal fun SectionTitle(text: String, modifier: Modifier = Modifier) {
         text = text,
         style = Sillon.type.title,
         color = Sillon.colors.tx,
-        modifier = modifier.padding(top = NzSpacing.l, bottom = NzSpacing.s),
+        modifier = modifier.padding(top = NzSpacing.pageY, bottom = NzSpacing.s),
     )
 }
 
@@ -297,8 +292,11 @@ internal fun Marker(description: String) {
  * height) — at 200 % the design system's fixed 56 dp clipped the artist's sub-line
  * in half, which this lot's first 200 % screenshot shows.
  *
- * The gesture is MB1's, kept identical: swipe right = « Lire ensuite », the row
- * follows the finger, a release past 72 dp asks [onSwipeQueue] and springs back.
+ * The gesture is the design system's [`SwipeRow`] (lot G1), the app's ONE
+ * implementation: swipe right = « Lire ensuite », the row follows the finger,
+ * a release past 60 dp **or** 600 dp/s asks [onSwipeQueue], and the row returns
+ * on a spring seeded with the release velocity. A leftward drag is left to the
+ * tab pager.
  */
 @Composable
 internal fun EntityTrackRow(
@@ -313,35 +311,10 @@ internal fun EntityTrackRow(
     playing: Boolean = false,
 ) {
     val colors = Sillon.colors
-    var drag by remember { mutableFloatStateOf(0f) }
-    val threshold = 72.dp
-    Box(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = "Lire ensuite",
-            style = Sillon.type.label,
-            color = colors.acText,
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = NzSpacing.l),
-        )
+    SwipeRow(onQueue = onSwipeQueue, modifier = modifier) { rowModifier ->
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
+            modifier = rowModifier
                 .heightIn(min = 56.dp)
-                .graphicsLayer { translationX = drag }
-                .background(colors.bg)
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            val passed = drag > threshold.toPx()
-                            drag = 0f
-                            if (passed) onSwipeQueue()
-                        },
-                        onDragCancel = { drag = 0f },
-                    ) { change, amount ->
-                        // Right only: a left swipe belongs to the page's back gesture.
-                        drag = (drag + amount).coerceIn(0f, size.width.toFloat() * 0.75f)
-                        change.consume()
-                    }
-                }
                 .clickable(role = Role.Button, onClick = onClick)
                 .padding(horizontal = NzSpacing.s, vertical = NzSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,

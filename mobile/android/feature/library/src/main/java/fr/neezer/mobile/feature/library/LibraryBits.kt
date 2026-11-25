@@ -1,7 +1,6 @@
 package fr.neezer.mobile.feature.library
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,16 +23,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -52,6 +46,7 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.designsystem.SwipeRow
 import fr.neezer.mobile.designsystem.asRowSource
 import uniffi.nz_ffi.LibraryArtist
 import uniffi.nz_ffi.TrackRow
@@ -531,9 +526,10 @@ internal fun LazyListScope.trackRows(
  * line was cut in half (MB7 met the same row and drew `EntityTrackRow` the same
  * way). `heightIn(min = 56.dp)` and two one-line texts never clip.
  *
- * **Swipe right = « Lire ensuite »** (`webapp.md`): the row follows the finger, a
- * hint appears behind it, and a release past 72 dp asks [onSwipeQueue] and
- * springs back — the queue itself is the caller's.
+ * **Swipe right = « Lire ensuite »** (`webapp.md`): the design system's
+ * [`SwipeRow`] (lot G1) tracks the finger, commits at 60 dp **or** 600 dp/s, and
+ * returns on a spring seeded with the release velocity; a leftward drag goes to
+ * the tab pager. The queue itself is the caller's.
  */
 @Composable
 internal fun LibraryTrackRow(
@@ -545,37 +541,10 @@ internal fun LibraryTrackRow(
     modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
-    var drag by remember { mutableFloatStateOf(0f) }
-    val threshold = 72.dp
-    Box(modifier.fillMaxWidth()) {
-        Text(
-            text = "Lire ensuite",
-            style = Sillon.type.label,
-            color = colors.acText,
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = NzSpacing.l),
-        )
+    SwipeRow(onQueue = onSwipeQueue, modifier = modifier) { rowModifier ->
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
+            modifier = rowModifier
                 .heightIn(min = 56.dp)
-                .graphicsLayer { translationX = drag }
-                .background(colors.bg)
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            val passed = drag > threshold.toPx()
-                            drag = 0f
-                            if (passed) onSwipeQueue()
-                        },
-                        onDragCancel = { drag = 0f },
-                    ) { change, amount ->
-                        // Right only: a left swipe belongs to the page's back gesture.
-                        drag = (drag + amount).coerceIn(0f, size.width.toFloat() * 0.75f)
-                        change.consume()
-                    }
-                }
                 .clickable(role = Role.Button, onClick = onClick)
                 .padding(horizontal = NzSpacing.s, vertical = NzSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,

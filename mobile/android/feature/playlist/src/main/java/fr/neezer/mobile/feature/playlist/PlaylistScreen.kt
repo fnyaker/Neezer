@@ -3,7 +3,6 @@ package fr.neezer.mobile.feature.playlist
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +36,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -61,6 +59,7 @@ import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.designsystem.SwipeRow
 import fr.neezer.mobile.designsystem.nzDuration
 import fr.neezer.mobile.designsystem.rememberListWindow
 import fr.neezer.mobile.feature.offline.DownloadButton
@@ -508,7 +507,10 @@ private fun rememberPlaylistWindow(rows: PlaylistRows, wake: Long): ListWindow {
 
 /**
  * One row of the list: a 44 dp sleeve, the title and its artists, the duration in
- * mono figures, one ⋯ control, and swipe right = « Lire ensuite ».
+ * mono figures, one ⋯ control, and swipe right = « Lire ensuite » through the
+ * design system's [`SwipeRow`] (lot G1): 60 dp or 600 dp/s commits, the return is
+ * a spring seeded with the release velocity, and a leftward drag goes to the tab
+ * pager.
  *
  * It is this module's own row and not `TrackRowView` for ONE measured reason: the
  * design system's row is a fixed 56 dp, and at the 200 % font scale its artist
@@ -524,37 +526,10 @@ private fun PlaylistRow(
     onSwipeQueue: () -> Unit,
 ) {
     val colors = Sillon.colors
-    var drag by remember(row.key) { mutableFloatStateOf(0f) }
-    val threshold = 72.dp
-    Box(Modifier.fillMaxWidth()) {
-        Text(
-            text = "Lire ensuite",
-            style = Sillon.type.label,
-            color = colors.acText,
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = NzSpacing.l),
-        )
+    SwipeRow(onQueue = onSwipeQueue) { rowModifier ->
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
+            modifier = rowModifier
                 .heightIn(min = 56.dp)
-                .graphicsLayer { translationX = drag }
-                .background(colors.bg)
-                .pointerInput(row.key) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            val passed = drag > threshold.toPx()
-                            drag = 0f
-                            if (passed) onSwipeQueue()
-                        },
-                        onDragCancel = { drag = 0f },
-                    ) { change, amount ->
-                        // Right only: a left swipe belongs to the page's back gesture.
-                        drag = (drag + amount).coerceIn(0f, size.width.toFloat() * 0.75f)
-                        change.consume()
-                    }
-                }
                 .clickable(role = Role.Button, onClick = onClick)
                 .padding(horizontal = NzSpacing.s, vertical = NzSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
