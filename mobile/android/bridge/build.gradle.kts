@@ -9,6 +9,11 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    // `CoilCovers.Image` is a `@Composable` that `:app` calls: without the Compose
+    // compiler its JVM signature lacks the `Composer` parameter every compose-compiled
+    // caller passes, and v1.6.6 died with `NoSuchMethodError` on the home screen's
+    // first cover (the root build script's `checkComposeCompiler` now refuses that).
+    alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -45,6 +50,7 @@ android {
         // The generated bindings are Kotlin AND the JNI exports are looked up
         // through JNA, so this module keeps no BuildConfig.
         buildConfig = false
+        compose = true
     }
 
     sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
@@ -54,6 +60,11 @@ kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
+}
+
+composeCompiler {
+    // The same stability file as every compose module: UniFFI records are stable.
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose-stability.conf"))
 }
 
 // --- the native side -------------------------------------------------------

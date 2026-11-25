@@ -18,10 +18,13 @@
 //! - **One writer per area**: `session.rs`, `server.rs`, `covers.rs`,
 //!   `meter.rs` and `url.rs` are MB2's own files, and a later lot adds its own
 //!   module here rather than editing this one.
-//! - **No thread of its own.** UniFFI's `async_runtime = "tokio"` owns the
-//!   runtime every `async fn` runs on, so there is no thread for `shutdown` to
-//!   join (worker rule 5): a listener callback runs on the runtime's worker that
-//!   issued the request, and the Kotlin side hands it to a Flow at once.
+//! - **No thread of its own.** UniFFI's `async_runtime = "tokio"` provides the
+//!   runtime context every `async fn` runs in, so there is no thread for
+//!   `shutdown` to join (worker rule 5). That context is ENTERED, not moved to:
+//!   the future is polled on the caller's thread (Kotlin's main thread for a
+//!   screen), so a listener callback may run there too and the Kotlin side hands
+//!   it to a Flow at once — and `nz-api` opens its connections on a runtime task
+//!   (`send_off_caller`), never on that thread (docs/agents/mobile.md, *Pitfalls*).
 
 mod covers;
 mod error;
@@ -123,8 +126,8 @@ pub enum SessionEvent {
 
 /// Who hears about a [`SessionEvent`]. `:bridge` implements this over its
 /// `SessionListener` and hands the event to a Flow at once — it runs on the
-/// runtime's worker, never on Kotlin's main thread, and the core holds no lock
-/// while calling it.
+/// thread that fired the event (possibly the one polling an FFI future), and the
+/// core holds no lock while calling it.
 pub trait SessionSink: Send + Sync {
     fn publish(&self, event: SessionEvent);
 }

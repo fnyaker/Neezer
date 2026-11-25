@@ -1158,6 +1158,13 @@ def main():
     ap.add_argument("--serve", action="store_true", help="keep serving on a port afterwards")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument(
+        "--tls-cert",
+        metavar="PEM",
+        help="serve HTTPS with this certificate (with --tls-key): the phone's release smoke "
+        "signs in over TLS, the way a person's server answers (mobile/tools/release-signin.sh)",
+    )
+    ap.add_argument("--tls-key", metavar="PEM", help="the private key of --tls-cert")
+    ap.add_argument(
         "--covers",
         metavar="JPEG",
         help="give every album this real JPEG as its cover.jpg, so the client's "
@@ -1245,6 +1252,8 @@ def main():
         "releases; the shipped server still answers its own 120",
     )
     args = ap.parse_args()
+    if bool(args.tls_cert) != bool(args.tls_key):
+        ap.error("--tls-cert and --tls-key go together")
 
     work = tempfile.mkdtemp(prefix="nsperf-")
     # Every exit this process can see removes the library (SIGTERM included);
@@ -1649,7 +1658,8 @@ def main():
     if args.serve:
         from werkzeug.serving import make_server
 
-        server = make_server("127.0.0.1", args.port, app, threaded=True)
+        ssl_context = (args.tls_cert, args.tls_key) if args.tls_cert else None
+        server = make_server("127.0.0.1", args.port, app, threaded=True, ssl_context=ssl_context)
         print("READY", server.server_port, json.dumps(ids), flush=True)
         try:
             server.serve_forever()

@@ -422,6 +422,17 @@ if (( doors_failed > 0 )); then
     exit 1
 fi
 
+# THE RELEASE, SIGNED IN. The doors above prove a shell with no server; v1.6.5
+# (no platform TLS verifier after R8) and v1.6.6 (a crash on the home's first
+# cover) both passed them. `release-signin.sh` drives the SAME release APK as a
+# person does first: « Vérifier le certificat » on against a Let's Encrypt chain,
+# then a sign-in over HTTPS to `tools/perf_api.py --serve` and the home with real
+# covers. It needs the server's Python packages (the workflow installs them);
+# measured on v1.6.5 and v1.6.6 it fails, on this tree it passes (the PR says
+# with which line).
+"$here/release-signin.sh" --serial "$serial"
+check_alive "the release sign-in"
+
 # The instrumented step builds the DEBUG app, which links the Rust library: it
 # needs the NDK, cargo-ndk and the three Rust targets — UNLESS the workflow's
 # `apk` job handed the library and the bindings over (`native_artifacts_present`),
