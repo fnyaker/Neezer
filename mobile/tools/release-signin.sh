@@ -54,11 +54,13 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$serial" ]] || { printf 'release-signin.sh: --serial is required\n' >&2; exit 2; }
 
-# Not `package`: env.sh's functions declare a `local package`, which a readonly
-# global of that name turns into an error.
-readonly app_package=fr.neezer.mobile
+# The accessibility tree, the app's pid and its crash cause live once, in ui.sh:
+# `release-journey.sh` walks the same screens after this script and must tap them
+# the same way.
+# shellcheck source=mobile/tools/ui.sh
+. "$here/ui.sh"
+
 readonly tls_host=valid-isrgrootx1.letsencrypt.org
-adb_dev() { "$(nz_adb)" -s "$serial" "$@"; }
 note() { printf 'release-signin.sh: %s\n' "$*" >&2; }
 step() { printf '\n=== %s\n' "$*"; }
 
@@ -72,106 +74,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- the accessibility tree (the same nodes TalkBack reads) ------------------
-
-dump_ui() {
-    local attempt
-    for attempt in 1 2 3 4 5; do
-        if adb_dev shell uiautomator dump /sdcard/nz-signin.xml >/dev/null 2>&1; then
-            adb_dev shell cat /sdcard/nz-signin.xml 2>/dev/null
-            return 0
-        fi
-    done
-    return 1
-}
-
-# Waits until the tree contains <needle> (a text or a content description).
-await_text() {
-    local needle="$1" budget="${2:-20}" started=$SECONDS
-    while (( SECONDS - started < budget )); do
-        if dump_ui | grep -qF -- "$needle"; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-# The keyboard a field opened covers the lower half of the form, and a node under
-# it is not in the tree at all (measured on the first run of this script: « Vérifier
-# le serveur » was "absent" behind the IME). BACK hides it — and only when it is
-# shown, since a BACK with no keyboard leaves the screen.
-hide_keyboard() {
-    if adb_dev shell dumpsys input_method 2>/dev/null | grep -qE "mInputShown=true|isInputViewShown=true"; then
-        adb_dev shell input keyevent KEYCODE_BACK >/dev/null
-    fi
-}
-
-# The centre of the LAST node whose text is exactly <label> (a button's text sits
-# inside the clickable node, so its centre is on the control). A control below the
-# fold is brought up by at most five swipes — gestures the device performed, never
-# a sleep.
-tap_text() {
-    local label="$1" bounds x1 y1 x2 y2 attempt width height
-    hide_keyboard
-    for attempt in 1 2 3 4 5 6; do
-        bounds="$(dump_ui | tr '>' '\n' | grep -F -- "text=\"$label\"" |
-            sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' | tail -1)"
-        [[ -n "$bounds" ]] && break
-        read -r width height < <(adb_dev shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)
-        adb_dev shell input swipe $((width / 2)) $((height * 7 / 10)) $((width / 2)) $((height * 3 / 10)) 240 >/dev/null
-    done
-    [[ -n "$bounds" ]] || return 1
-    read -r x1 y1 x2 y2 <<<"$bounds"
-    adb_dev shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2)) >/dev/null
-}
-
-# Types <text> into the <n>-th text field of the screen (1-based, tree order):
-# a Compose field is an EditText node. The field's own text is the proof — a
-# field that has not taken the focus yet drops injected keys while `input text`
-# reports success (MQ2's journey measured exactly that).
-type_into() {
-    local index="$1" text="$2" attempt bounds x1 y1 x2 y2
-    for attempt in 1 2 3; do
-        hide_keyboard
-        bounds="$(dump_ui | tr '>' '\n' | grep -F 'class="android.widget.EditText"' |
-            sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' |
-            sed -n "${index}p")"
-        [[ -n "$bounds" ]] || { note "no text field #$index on screen"; return 1; }
-        read -r x1 y1 x2 y2 <<<"$bounds"
-        adb_dev shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2)) >/dev/null
-        adb_dev shell input text "$text" >/dev/null
-        # The password field shows dots, never the text: its proof is the login.
-        if [[ "${3:-}" == secret ]] || dump_ui | grep -qF -- "text=\"$text\""; then
-            return 0
-        fi
-    done
-    note "the field #$index never held « $text »"
-    return 1
-}
-
-app_pid() { adb_dev shell pidof "$app_package" 2>/dev/null | tr -d '\r'; }
-
-crash_cause() {
-    adb_dev logcat -d -b crash 2>/dev/null | grep -E "FATAL EXCEPTION|Error:|Exception:" | head -4 || true
-}
-
 fresh_launch() {
     # A FRESH install's state (no server, no session, no pin): what a person who
     # just installed the release meets. The smoke before this one left a shell
     # that already walked its tabs.
-    adb_dev shell pm clear "$app_package" >/dev/null
+    adb_dev shell pm clear "$ui_package" >/dev/null
     adb_dev logcat -c -b crash >/dev/null 2>&1 || true
     adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
     await_text "Adresse du serveur" 30 || {
         note "the setup screen never painted « Adresse du serveur »"
-        crash_cause >&2
+        app_crash_cause >&2
         exit 1
     }
-}
-
-# Every visible text of the screen, for a failure message that says what was there.
-screen_texts() {
-    dump_ui | tr '>' '\n' | sed -n 's/.* text="\([^"]\+\)".*/\1/p' | head -30 | paste -sd '|' -
 }
 
 # --- phase 1: the platform verifier answers on the minified build -------------
@@ -193,7 +107,7 @@ else
     note "screen: $(screen_texts)"
     # The core's own words for the refusal (tag `neezer`), and the verifier's.
     adb_dev logcat -d 2>/dev/null | grep -iE "rustls|platformverifier|NeezerPlatform|certificate|nz_api" | tail -n 25 >&2 || true
-    crash_cause >&2
+    app_crash_cause >&2
 fi
 
 # --- phase 2: sign in over HTTPS and paint the home with covers ---------------
@@ -238,7 +152,7 @@ signed_in=0
 while (( SECONDS - budget_started < 60 )); do
     if [[ -z "$(app_pid)" ]]; then
         note "the app died after signing in"
-        crash_cause >&2
+        app_crash_cause >&2
         exit 1
     fi
     if (( signed_in == 0 )) && dump_ui | grep -qF "Accueil Neezer"; then
@@ -260,10 +174,10 @@ if (( covers == 0 )); then
 fi
 # One more frame on the home after the covers arrived, and the same process.
 dump_ui >/dev/null
-[[ -n "$(app_pid)" ]] || { note "the app died while drawing its covers"; crash_cause >&2; exit 1; }
-if [[ -n "$(adb_dev logcat -d -b crash 2>/dev/null | grep -F "Process: $app_package" || true)" ]]; then
-    note "the crash buffer names $app_package:"
-    crash_cause >&2
+[[ -n "$(app_pid)" ]] || { note "the app died while drawing its covers"; app_crash_cause >&2; exit 1; }
+if [[ -n "$(adb_dev logcat -d -b crash 2>/dev/null | grep -F "Process: $ui_package" || true)" ]]; then
+    note "the crash buffer names $ui_package:"
+    app_crash_cause >&2
     exit 1
 fi
 printf 'release_signin=1 covers_served=%s seconds=%s\n' "$covers" "$((SECONDS - started))"
