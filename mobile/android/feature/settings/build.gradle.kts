@@ -56,6 +56,11 @@ composeCompiler {
 dependencies {
     implementation(project(":bridge"))
     implementation(project(":designsystem"))
+    // La carte « Mode voiture » (M13) ouvre `CarModeService.openSettings`, la
+    // SEULE porte vers cet écran : le module qui l'implémente est donc une
+    // dépendance de celui qui l'héberge. Aucun cycle : `:car` dépend de
+    // `:bridge`, `:playback`, `:designsystem`.
+    implementation(project(":car"))
     // MB12's own effects cards and MB17's own pages: hosted, never copied.
     implementation(project(":feature:audiofx"))
     implementation(project(":feature:admin"))
@@ -72,6 +77,9 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.kotlinx.coroutines.android)
+    // La demande de `POST_NOTIFICATIONS` depuis la carte « Mode voiture » (M13) :
+    // `rememberLauncherForActivityResult` vit dans activity-compose.
+    implementation(libs.androidx.activity.compose)
 
     // --- JVM tests -----------------------------------------------------------
     // `SettingsModelTest` is plain Kotlin over the screen's port: no JNA, no

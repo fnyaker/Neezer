@@ -802,7 +802,14 @@ fn the_flow_asks_one_title_at_a_time_and_refills_once() {
     );
 
     // Play both rows out; the second one's end asks for exactly one more title.
-    let extended = pump_until(&mut sink, &player, 25.0, |snapshot| snapshot.len == 3);
+    //
+    // The wait is on the EVENT the assertion below is about — the third
+    // `/flow/next` has landed — not on the instant the third row appears: the
+    // two are a request apart, and on a loaded runner (`mobile.yaml` run
+    // 45534618988) the counter was read in between and said 2.
+    let extended = pump_until(&mut sink, &player, 25.0, |snapshot| {
+        snapshot.len == 3 && bench.flow_calls() >= 3
+    });
     println!(
         "after the top-up: {} rows, {} flow calls",
         extended.len,

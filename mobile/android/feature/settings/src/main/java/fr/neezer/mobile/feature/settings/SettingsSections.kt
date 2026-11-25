@@ -46,6 +46,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import fr.neezer.mobile.bridge.DevicePrompts
 import fr.neezer.mobile.designsystem.EmptyState
 import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.LoadFailed
@@ -59,6 +60,7 @@ import fr.neezer.mobile.designsystem.NzSegmented
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.NzThemeKind
+import fr.neezer.mobile.designsystem.NzToasts
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.TrackRowView
 import fr.neezer.mobile.designsystem.nzAccent
@@ -93,6 +95,35 @@ internal fun PlaybackSection(model: SettingsModel, state: SettingsModel.State) {
     }
     // MB12's own module, its own ten faders and its meter: hosted, never copied.
     AudioFxSections()
+
+    // Le mode voiture n'avait AUCUNE porte depuis Réglages sur le téléphone : il
+    // fallait la tuile des réglages rapides ou le panneau lui-même (audit §9).
+    // `CarModeService.openSettings` est la seule porte — elle masque le panneau
+    // avant d'ouvrir l'écran — et c'est le moment de demander les notifications,
+    // puisque c'est là que le mode se règle (M13).
+    val ctx = LocalContext.current
+    val notifLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        DevicePrompts.noteNotificationsAnswered(ctx)
+        if (!granted) NzToasts.show(DevicePrompts.NOTIFICATIONS_LOST)
+    }
+    SettingsCard(
+        title = "Mode voiture",
+        subtitle = "Le panneau par-dessus la navigation, les déclencheurs, le placement et les playlists épinglées.",
+    ) {
+        NzButton(
+            text = "Ouvrir les réglages du mode voiture",
+            onClick = {
+                if (DevicePrompts.shouldAskNotifications(ctx)) {
+                    notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+                fr.neezer.mobile.car.CarModeService.openSettings(ctx)
+            },
+            glyph = NzGlyph.Monitor,
+            kind = NzButtonKind.Secondary,
+        )
+    }
 }
 
 /** « Apparence » : the three themes, the person's accent, Pochette's sleeve. */
