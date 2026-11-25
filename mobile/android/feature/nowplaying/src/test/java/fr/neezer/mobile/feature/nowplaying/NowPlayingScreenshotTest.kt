@@ -529,34 +529,41 @@ abstract class NowPlayingScreenshotBase(protected val width: Int) {
 class NowPlayingPhoneScreenshotTest : NowPlayingScreenshotBase(360) {
     /** P1: the blurred backdrop under the player (phone, Encre). */
     @Test
-    fun p1BlurredBackdropEncre() = captureP1("p1-flou-360dp.png", NzThemeKind.Encre) {
+    fun p1BlurredBackdropEncre() {
         val model = model()
+        // The state is read OUTSIDE the composition (lint's `StateFlow.value`
+        // rule): a screenshot is a still, not a live flow.
         val state = model.state.value
-        PlayerSurface(
-            state = state,
-            model = model,
-            nav = navigator,
-            lyrics = lyrics(),
-            about = null,
-            onClose = {},
-            liveReads = false,
-        )
+        captureP1("p1-flou-360dp.png", NzThemeKind.Encre) {
+            PlayerSurface(
+                state = state,
+                model = model,
+                nav = navigator,
+                lyrics = lyrics(),
+                about = null,
+                onClose = {},
+                liveReads = false,
+            )
+        }
     }
 
     /** P1: the same ground on Papier. */
     @Test
-    fun p1BlurredBackdropPapier() = captureP1("p1-flou-papier-360dp.png", NzThemeKind.Papier) {
+    fun p1BlurredBackdropPapier() {
         val model = model(playing = false)
+        // Outside the composition: see `p1BlurredBackdropEncre`.
         val state = model.state.value
-        PlayerSurface(
-            state = state,
-            model = model,
-            nav = navigator,
-            lyrics = null,
-            about = null,
-            onClose = {},
-            liveReads = false,
-        )
+        captureP1("p1-flou-papier-360dp.png", NzThemeKind.Papier) {
+            PlayerSurface(
+                state = state,
+                model = model,
+                nav = navigator,
+                lyrics = null,
+                about = null,
+                onClose = {},
+                liveReads = false,
+            )
+        }
     }
 }
 
@@ -567,18 +574,21 @@ class NowPlayingPhoneScreenshotTest : NowPlayingScreenshotBase(360) {
 class NowPlayingWideScreenshotTest : NowPlayingScreenshotBase(600) {
     /** P1: the blurred backdrop at 600 dp. */
     @Test
-    fun p1BlurredBackdropWide() = captureP1("p1-flou-600dp.png", NzThemeKind.Encre) {
+    fun p1BlurredBackdropWide() {
         val model = model()
+        // Outside the composition: see `p1BlurredBackdropEncre`.
         val state = model.state.value
-        PlayerSurface(
-            state = state,
-            model = model,
-            nav = navigator,
-            lyrics = lyrics(),
-            about = null,
-            onClose = {},
-            liveReads = false,
-        )
+        captureP1("p1-flou-600dp.png", NzThemeKind.Encre) {
+            PlayerSurface(
+                state = state,
+                model = model,
+                nav = navigator,
+                lyrics = lyrics(),
+                about = null,
+                onClose = {},
+                liveReads = false,
+            )
+        }
     }
 }
 

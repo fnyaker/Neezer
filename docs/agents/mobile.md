@@ -7132,6 +7132,9 @@ au prochain passage sur une machine à KVM.
 (`p1-flou-360dp.png`, `p1-flou-600dp.png`, `p1-flou-papier-360dp.png`, Robolectric sans chargeur :
 la rainure, comme les captures MB11) plus l'assertion de centrage dans `NowPlayingScreenshotTest`.
 Les PNG MB11 réécrits par la suite sont restaurés, jamais commités (même règle que G1).
+`lintDebug` refuse `model.state.value` DANS la lambda composable d'une capture
+(`StateFlowValueCalledInComposition`, 3 erreurs mesurées) : l'état d'une capture est un instantané,
+il se lit avant `captureP1`, comme le fait `player()` dans le même fichier.
 
 **Hors portée.** Le geste de fermeture (P2), la rail de position, le transport, les panneaux, les
 colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fond du SPA (`lib/backdrop.js`).
