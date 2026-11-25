@@ -14,7 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * La confiance TLS du build MINIFIÉ (v1.6.5, correctif v1.6.6).
+ * La confiance TLS par le vérificateur du système, sur un appareil (v1.6.6).
  *
  * `rustls-platform-verifier`'s Android half is a Rust crate that reaches the JVM
  * class `org.rustls.platformverifier.CertificateVerifier` through JNI, by name:
@@ -24,15 +24,22 @@ import org.junit.runner.RunWith
  * owner's server offline and the login refused a plain Let's Encrypt
  * certificate, while debug builds and the unminified smoke stayed green.
  *
- * This test runs against the **`benchmark`** build type (`ci-emulator.sh`'s
- * release-shaped step: minified, not debuggable, debug-signed), which is the
- * only shape that can reproduce it, and it does two things on a real device:
+ * This test runs in the ordinary instrumented suite (`connectedDebugAndroidTest`)
+ * and does two things on a real device:
  *
- * 1. it loads the JNI-reached class by its ORIGINAL name — a stripped or renamed
- *    one fails here with the name R8 dropped;
+ * 1. it loads the JNI-reached class by its ORIGINAL name — a build that lost it
+ *    fails here with the name R8 dropped;
  * 2. it asks the Rust core for the leaf `https://letsencrypt.org` presents and
  *    requires `system_trusted == true`, which is the platform verifier answering
  *    over JNI. No certificate body, cookie or credential is logged.
+ *
+ * The MINIFIED artifact is guarded where it can be read reliably instead of
+ * here: AGP minifies the androidTest APK too (it follows the tested build type),
+ * and measuring that (run 45589469291) showed instrumentation dying before the
+ * first test — `NoSuchMethodError: … Lkotlin/jvm/internal/k;`, the test APK's
+ * R8 run renaming its own Kotlin runtime copy differently from the app's.
+ * `mobile.yaml` therefore checks `mapping/release/mapping.txt` AND the universal
+ * APK's dex for the class.
  *
  * No network means no answer at all, so the harness skips (and says why) instead
  * of failing a device that cannot reach the internet: the CI emulator has

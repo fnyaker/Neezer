@@ -509,30 +509,6 @@ else
     # Only OUR device: a connected task otherwise installs and runs on every
     # emulator adb sees, including another lot's.
     ANDROID_SERIAL="$serial" nz_gradle_android --no-parallel "${tasks[@]}" "${gradle_args[@]}"
-
-    # --- the RELEASE-SHAPED half -------------------------------------------
-    #
-    # R8 only rewrites what a MINIFIED build contains, so the one defect it can
-    # cause is invisible to every suite above: v1.6.5 shipped a release whose
-    # `rustls-platform-verifier` JNI class had been stripped (`org.rustls.
-    # platformverifier.CertificateVerifier`, reached by name from Rust), and the
-    # debug app, the smoke and this whole job were green while the owner's phone
-    # said the server was offline.
-    #
-    # `ReleaseTlsTrustTest` therefore runs against the `benchmark` build type —
-    # the release-shaped APK the Macrobenchmarks already use (minified, not
-    # debuggable, signed with the debug key so it installs here). One class, one
-    # probe of a Let's Encrypt host through the Rust core, `system_trusted` must
-    # be true. A network-less emulator skips it (assumeTrue in the test); CI has
-    # egress and a skip is visible in the log.
-    step "release-shaped TLS trust (R8 keep rule)"
-    adb_dev uninstall fr.neezer.mobile >/dev/null 2>&1 || true
-    ANDROID_SERIAL="$serial" nz_gradle_android --no-parallel \
-        :app:connectedBenchmarkAndroidTest \
-        -PnzTestBuildType=benchmark \
-        -Pandroid.testInstrumentationRunnerArguments.class=fr.neezer.mobile.app.ReleaseTlsTrustTest \
-        "${gradle_args[@]}"
-    printf 'release_tls_trust=1\n'
 fi
 
 step "done"

@@ -476,6 +476,26 @@ jobs:
           [[ "$(printf '%s\n' "$codes" | wc -l)" -eq 1 ]] \
             || { echo "::error::the APKs disagree on versionCode: $codes"; exit 1; }
 
+      # THE CLASS R8 IS TOLD TO KEEP IS IN THE APK A PERSON INSTALLS.
+      #
+      # The mapping guard above proves R8's CONFIG kept it; this proves the dex
+      # that ships actually carries it, which is the fact the JNI call needs (a
+      # rule that names a class the dependency no longer has would pass the
+      # mapping check and still fail on a phone). Read from the UNIVERSAL APK —
+      # the one `ci-emulator.sh` installs and the release page serves — through
+      # the dex string table, one `grep -F` on the descriptor the JVM resolves.
+      # Run once against a build without :bridge's rule and there is no such
+      # string at all (measured on this PR, `v1.6.5`).
+      - name: The shipped APK carries the platform TLS verifier
+        run: |
+          set -euo pipefail
+          descriptor='Lorg/rustls/platformverifier/CertificateVerifier;'
+          if ! unzip -p "$APK" 'classes*.dex' | strings | grep -qF -- "$descriptor"; then
+            echo "::error::$APK carries no $descriptor: the platform TLS verifier is not in the app"
+            exit 1
+          fi
+          echo "   found $descriptor in $(basename "$APK") ($(stat -c %s "$APK") bytes)"
+
       # THE RELEASE ASSETS' OWN NAMES. `neezer.apk` belongs to the WebView app
       # (android.yaml): a native asset must never be called that, and a person
       # downloading from the release page must see which app each file is.

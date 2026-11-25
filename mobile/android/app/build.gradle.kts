@@ -149,36 +149,11 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = false
     }
-
-    // WHICH BUILD TYPE THE INSTRUMENTED TESTS RUN AGAINST, `debug` by default.
-    //
-    // `ci-emulator.sh` runs the normal suites with `connectedDebugAndroidTest`
-    // (unminified), then asks for `:app:connectedBenchmarkAndroidTest
-    // -PnzTestBuildType=benchmark` to run `ReleaseTlsTrustTest` against the
-    // RELEASE-SHAPED build (minified by R8, not debuggable, signed with the debug
-    // key). A defect that only R8 can cause — v1.6.5's stripped
-    // `org.rustls.platformverifier.**` — is invisible in every other shape,
-    // which is exactly why it shipped: measured on the owner's phone, the debug
-    // app and the smoke were green while the release refused Let's Encrypt.
-    testBuildType = providers.gradleProperty("nzTestBuildType").getOrElse("debug")
 }
 
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
-}
-
-// THE INSTRUMENTED APK'S OWN RULES. Its build type follows the tested one
-// (`benchmark` is release-shaped, so the androidTest APK is minified too), and
-// `androidx.test` names Error Prone's compile-only annotations in signatures —
-// R8 refuses the APK for classes nothing loads. `androidTest-proguard-rules.pro`
-// holds that one `-dontwarn`; the release APK is untouched by it.
-androidComponents {
-    onVariants { variant ->
-        variant.androidTest?.proguardFiles?.add(
-            layout.projectDirectory.file("androidTest-proguard-rules.pro"),
-        )
     }
 }
 

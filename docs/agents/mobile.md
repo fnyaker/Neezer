@@ -150,10 +150,15 @@ never committed; Rust 1.99.1):
   EVERY system-trust handshake fails. Measured on v1.6.5's release APK: "Vérifier le certificat"
   answered the server offline and the login refused a plain Let's Encrypt certificate, while the
   debug app, the unminified smoke and every CI job were green — the defect exists only in the
-  minified shape. Two guards, both cheap: `mobile.yaml` fails the `apk` job unless
-  `app/build/outputs/mapping/release/mapping.txt` shows `X -> X:` for the three classes, and
-  `ci-emulator.sh` runs `ReleaseTlsTrustTest` against the `benchmark` build type (minified,
-  debug-signed) on a real device.
+  minified shape. Two guards, both on the shipped artifact: `mobile.yaml` fails the `apk` job unless
+  `app/build/outputs/mapping/release/mapping.txt` shows `X -> X:` for the three classes, and it
+  greps the universal APK's own dex for `Lorg/rustls/platformverifier/CertificateVerifier;`. A
+  device run against the MINIFIED app is not available: AGP minifies the androidTest APK too (it
+  follows the tested build type), and the two R8 runs rename their own Kotlin runtime copies
+  differently — measured on run 45589469291, instrumentation died before the first test with
+  `NoSuchMethodError: No static method e(...) in class Lkotlin/jvm/internal/k;`. `ReleaseTlsTrustTest`
+  therefore lives in the ordinary instrumented suite (debug) and proves the probe and the platform
+  verifier answer on a device; the minified artifact is covered by the two guards above.
 - **Autofill is declared, never guessed.** A Compose field a password manager should fill carries
   `androidx.compose.ui.autofill.ContentType` through `Modifier.semantics { contentType = … }`
   (`ContentType.Username` / `ContentType.Password` in the account form); the password field's IME
