@@ -60,7 +60,19 @@ interface VizService {
 
     /** The counters the acceptance reads (ticks, subscriptions, bytes). */
     fun stats(): VizStats
+
+    /**
+     * La date (ms) d'acceptation de l'avertissement, `null` si jamais accepté.
+     * Défaut : `null` — une doublure de test n'a pas de consentement à porter.
+     */
+    suspend fun flashAck(): Long? = null
+
+    /** Enregistre l'acceptation (`viz.flash.ack`), une fois. Défaut : rien. */
+    suspend fun ackFlash() {}
 }
+
+/** La clé du SPA (`lib/stores.js:253`), telle quelle : un appareil migré la garde. */
+const val FLASH_ACK_KEY = "viz.flash.ack"
 
 /** The real service: `NzCore::viz()`, or the "not loaded" state. */
 class NzVizService(private val api: VizApi) : VizService {
@@ -82,6 +94,18 @@ class NzVizService(private val api: VizApi) : VizService {
 
     override fun clearArtwork() = api.clearArtwork()
     override fun stats(): VizStats = api.stats()
+
+    // The local key, through the core's own SettingsApi: `get` is the disk-only
+    // read Réglages already makes (one indexed SELECT), `set` writes it. A test
+    // double inherits the interface's `null`/no-op defaults.
+    override suspend fun flashAck(): Long? = runCatching {
+        fr.neezer.mobile.bridge.NzBridge.core?.settings()?.get(FLASH_ACK_KEY)?.toLongOrNull()
+    }.getOrNull()
+
+    override suspend fun ackFlash() {
+        val settings = fr.neezer.mobile.bridge.NzBridge.core?.settings() ?: return
+        runCatching { settings.set(FLASH_ACK_KEY, System.currentTimeMillis().toString()) }
+    }
 }
 
 /**
