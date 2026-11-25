@@ -7081,3 +7081,57 @@ API 34 + permission déjà accordée → aucune demande. `CarModeDoorTest` (Robo
 `CarModeService.kt:183`. Les captures d'émulateur (demande système API 35, refus avec sa phrase) ne
 sont PAS produites : l'image du worker n'a ni JDK ni SDK Android ni émulateur — le dialogue système
 n'est pilotable ni en JVM ni dans `mobile.yaml`.
+
+### P1 — Le lecteur : pochettes stables, fond flou, colonne alignée (delivered 2026-11-25)
+
+**La règle.** Une pochette n'est demandée qu'une fois par piste et par taille, le fond du lecteur
+est une copie floue de la pochette courante, et la colonne vit dans les barres système.
+
+- **Une requête égale n'est plus une nouvelle requête.** `NzCoverRequest` est une `data class`
+  (`:bridge/Covers.kt`) : Coil compare les modèles par `==` et redémarre la requête sinon. Une
+  `class` simple rendait deux demandes de la même pochette inégales, donc chaque recomposition du
+  lecteur — à chaque snapshot — redécodait la pochette. Le fichier est déjà sur disque
+  (`Core::cover_path` est indexé par URL), donc ce n'était pas du réseau : un décodage et une frame
+  sans bitmap, ce que l'œil lit comme un flash.
+- **La bande EST la file.** `CoverStage` (sorti dans son fichier) a `state.len` pages,
+  `initialPage = state.index`, et chaque page est clefée par la piste (`clef@position`, la position
+  pour deux occurrences de la même piste). Deux effets, un par sens : l'index du lecteur déplace le
+  pager (`animateScrollToPage` pour un pas, `scrollToPage` pour un saut), et une page posée qui
+  n'est pas la tête de lecture fait `model.jump(index, clef)`. **Aucun `scrollToPage` après un
+  glissement** : le doigt garde la frame qu'il a prise.
+- **`beyondViewportPageCount` reste 0**, contre le `1` du plan. Les voisines sont déjà composées par
+  le peek (`pageSpacing = 14.dp` et le `contentPadding` qui centre la case) ; `1` compose une
+  quatrième pochette jamais vue. Mesuré : **+2 décodages par changement avec `1`, +1 avec `0`**.
+- **Le fond est une copie 120 dp, floue, mise à l'échelle.** `PlayerBackdrop` (son fichier) dessine
+  `blur(12.dp)` (API 31+) et couvre l'écran par un `graphicsLayer` **extérieur** au blur : la couche
+  du blur est bornée à 120 dp et rogne ce qu'on mettrait à l'échelle dedans (mesuré : un petit
+  rectangle sombre derrière le titre au lieu du champ plein écran). Sous API 31, repli à l'ancienne
+  image 900 dp. La pochette de fond est dessinée en `RectangleShape` : ses coins arrondis, mis à
+  l'échelle 3 à 8 fois, feraient quatre encoches visibles.
+- **La colonne dans les barres.** `statusBarsPadding()` puis `navigationBarsPadding()` avant les
+  4 dp du lot (M5). Et `CoverImage(url, sizeDp = size)` (M12) : la pochette se dessine à la taille
+  de sa case, plus dans une boîte 420 dp rognée en haut à gauche.
+
+**Pourquoi.** R1 (les voisines flashent), R2 (M5, M12) et R3 (le fond flou) sont trois symptômes du
+même défaut de contrat : le lecteur redemandait ce qu'il avait déjà. La correction ne coûte ni
+requête ni travail de fond ; elle retire même une page décodée par ouverture.
+
+**Mesuré.** `PlayerCoverReuseTest` (Robolectric, 360 dp, un chargeur factice qui enregistre chaque
+`Image(url, sizePx)`, file de 6 titres) : ouverture = **3 pochettes distinctes** à la taille de la
+scène (512 px) plus **1** copie de fond à 240 px (le décodage 120 dp, zéro réseau) ; chaque `next()`
+= **+1** (la nouvelle voisine, `/api/cover/3` puis `/api/cover/4`) ; un snapshot réémis sans
+changement de piste = **0**. `p1TheSleeveFillsItsSlot` tourne aux trois largeurs (360/600/1280) :
+**3 cases, 3 pochettes**, chaque rect dessiné égal à sa case à **1 dp près**, et l'en-tête à **≥ 4 dp
+sous l'inset de barre d'état**. Le budget de frame du premier écran (p50/p95) reste **dû sur un
+appareil** : ce worker a un JDK et le SDK (les suites JVM/Robolectric et `lintDebug assembleDebug`
+passent localement), mais **pas de `/dev/kvm`**, donc pas d'émulateur ; `JourneyBenchmark` se mesure
+au prochain passage sur une machine à KVM.
+
+**Tests.** `CoversTest` (bridge, 3 cas : égalité, URL différente, taille différente),
+`PlayerCoverReuseTest` (le compte ci-dessus), et les captures `docs/agents/screenshots/mobile/P1/`
+(`p1-flou-360dp.png`, `p1-flou-600dp.png`, `p1-flou-papier-360dp.png`, Robolectric sans chargeur :
+la rainure, comme les captures MB11) plus l'assertion de centrage dans `NowPlayingScreenshotTest`.
+Les PNG MB11 réécrits par la suite sont restaurés, jamais commités (même règle que G1).
+
+**Hors portée.** Le geste de fermeture (P2), la rail de position, le transport, les panneaux, les
+colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fond du SPA (`lib/backdrop.js`).
