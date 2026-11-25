@@ -516,6 +516,7 @@ private fun SkeletonRow() {
 }
 
 /** « Assistance » : the two versions, the report, the share. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun HelpSection(model: SettingsModel, state: SettingsModel.State) {
     val colors = Sillon.colors
@@ -541,6 +542,54 @@ internal fun HelpSection(model: SettingsModel, state: SettingsModel.State) {
     // a server that predates it answers "mise à jour indisponible", never the
     // WebView APK (`docs/agents/mobile.md`, "Deux apps Android").
     fr.neezer.mobile.feature.setup.UpdateCard()
+    // Le dernier plantage (M14). Rien à afficher = rien à dessiner : une carte
+    // vide serait un mensonge sur l'état de l'app.
+    var crash by remember { mutableStateOf(fr.neezer.mobile.bridge.CrashRecord.read(context)) }
+    crash?.let { trace ->
+        SettingsCard(
+            title = "Dernier incident",
+            subtitle = "L'application s'est arrêtée sur une erreur. Rien n'est envoyé : cette " +
+                "trace reste sur cet appareil, et « Partager le rapport » ne la contient pas.",
+        ) {
+            Text(
+                text = trace,
+                style = Sillon.type.labelMono,
+                color = colors.dim,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .background(colors.s2, RoundedCornerShape(NzRadius.field))
+                    .padding(NzSpacing.s)
+                    .verticalScroll(rememberScrollState()),
+            )
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+                verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+            ) {
+                NzButton(
+                    text = "Partager l'incident",
+                    onClick = {
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, trace)
+                            putExtra(Intent.EXTRA_SUBJECT, "Neezer — incident")
+                        }
+                        context.startActivity(Intent.createChooser(send, "Partager l'incident"))
+                    },
+                    glyph = NzGlyph.Share,
+                    kind = NzButtonKind.Secondary,
+                )
+                NzButton(
+                    text = "Effacer",
+                    onClick = {
+                        fr.neezer.mobile.bridge.CrashRecord.clear(context)
+                        crash = null
+                    },
+                    kind = NzButtonKind.Ghost,
+                )
+            }
+        }
+    }
     SettingsCard(
         title = "Diagnostic",
         subtitle = "Un rapport à joindre à un signalement : les versions, le serveur, l'appareil, ce que l'app a demandé au réseau et les réglages en force. Ni mot de passe, ni jeton, ni cookie.",

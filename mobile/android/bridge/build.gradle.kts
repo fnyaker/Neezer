@@ -25,6 +25,22 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // `CrashRecordTest` (M14) lit et écrit un vrai fichier dans `context.filesDir` :
+    // Robolectric lui donne le manifeste fusionné et les ressources du module,
+    // comme les autres modules qui rendent ou touchent un `Context` sur la JVM.
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+
+    // The JVM-test pin below is a literal, as in every feature module: the catalog
+    // belongs to MB0 (worker rule 3), and a test-only coordinate is not worth a
+    // shared edit.
+    lint {
+        disable += "UseTomlInstead"
+    }
+
     buildFeatures {
         // The generated bindings are Kotlin AND the JNI exports are looked up
         // through JNA, so this module keeps no BuildConfig.
@@ -141,4 +157,8 @@ dependencies {
 
     // The JVM tests (`screenFlow`, the error register): pure policy, no device.
     testImplementation(libs.junit)
+    // `CrashRecordTest` (M14): the storage writes a real file through a real
+    // `Context.filesDir`, which android.jar's stubs cannot give. Literal pin, like
+    // every module's JVM tests (the catalog belongs to MB0).
+    testImplementation("org.robolectric:robolectric:4.18")
 }
