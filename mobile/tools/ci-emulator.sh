@@ -74,10 +74,25 @@ native_artifacts_present() {
     return 0
 }
 
+# Bench servers this script started, so a failure still stops them. `perf-server.sh`
+# owns its own pid file and is stopped through itself; `tone-server.py` is a bare
+# Python process and is killed here.
+bench_pids=()
+stop_bench_servers() {
+    local pid
+    for pid in "${bench_pids[@]}"; do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    if [[ -n "${bench_perf_state:-}" ]]; then
+        NEEZER_PERF_STATE="$bench_perf_state" "$here/perf-server.sh" stop >/dev/null 2>&1 || true
+    fi
+}
+
 # Everything is stopped through emu.sh, even when a check fails: a runner that
 # keeps a 3 GB qemu alive for its next job is a slow runner.
 cleanup() {
     local code=$?
+    stop_bench_servers
     "$here/emu.sh" stop --port "$port" >/dev/null 2>&1 || true
     exit "$code"
 }
@@ -463,6 +478,62 @@ prepare_android_build() {
     fi
 }
 
+# THE BENCH SERVERS THE INSTRUMENTED TESTS ASK FOR, so they measure instead of
+# skipping. Two classes gate themselves behind `assumeTrue` when their fixture is
+# absent, which is the honest thing to do on a developer machine but a silent hole
+# in CI: run 45688339009 reported `(8 skipped)` in `:playback` and the job was
+# green. Each fixture is a script the repo already ships and documents:
+#
+#  - `tone-server.py` on 4711 — the default `nzServer` of every
+#    `NzMediaServiceTest` test: a real FLAC per title with Range, a 1×1 cover and
+#    `/api/version`, so "the clock advanced" means "the engine rendered THAT"
+#    (docs/agents/mobile.md, MB3c). 7 tests.
+#  - `perf-server.sh` on 5610 — the default `SERVER` of `LanNodeLifecycleTest`:
+#    it only needs `set_server` + `login(bench, Bench1)` to succeed, so the seed
+#    is the smallest that logs in (200 titles), not the 8 000-track measure. 1 test.
+#
+# AutoBrowseTest (5595, an exact 200-favourite / 6-playlist / 120-title seed) and
+# PartyDeviceTest (a party server + ffmpeg on the host) are NOT started here: their
+# fixtures are the lots' own and stay skipped with their cause, never green by
+# mistake. A server that fails to answer is a red job: a fixture CI owns must not
+# degrade into a skip.
+start_bench_servers() {
+    local tone_server="$here/tone-server.py" attempt
+    if [[ ! -f "$tone_server" ]]; then
+        note "tone-server.py is missing: NzMediaServiceTest cannot measure"
+        exit 1
+    fi
+    python3 "$tone_server" --port 4711 >"${NEEZER_EMU_STATE:-$HOME/.cache/neezer-emu}/tone-server.log" 2>&1 &
+    bench_pids+=($!)
+    for attempt in $(seq 1 100); do
+        if curl -fsS "http://127.0.0.1:4711/api/version" >/dev/null 2>&1; then
+            break
+        fi
+        if ! kill -0 "${bench_pids[-1]}" 2>/dev/null; then
+            note "tone-server.py exited while starting; last lines:"
+            tail -n 20 "${NEEZER_EMU_STATE:-$HOME/.cache/neezer-emu}/tone-server.log" >&2 || true
+            exit 1
+        fi
+        sleep 0.2
+    done
+    curl -fsS "http://127.0.0.1:4711/api/version" >/dev/null 2>&1 || {
+        note "tone-server.py never answered on 127.0.0.1:4711 (NzMediaServiceTest needs it)"
+        exit 1
+    }
+
+    bench_perf_state="${NEEZER_EMU_STATE:-$HOME/.cache/neezer-emu}/perf-$$"
+    mkdir -p "$bench_perf_state"
+    # The smallest seed that logs in: `perf-server.sh` passes `--tracks 8000` before
+    # its arguments and argparse takes the last value, so these override it.
+    local out
+    out="$(NEEZER_PERF_STATE="$bench_perf_state" "$here/perf-server.sh" start \
+        --port 5610 --tracks 200 --favorites 20 --playlists 2 --big-playlist 20)" || {
+        note "perf-server.sh did not start on 5610 (LanNodeLifecycleTest needs it)"
+        exit 1
+    }
+    note "$out"
+}
+
 # --- 4. every module's instrumented tests --------------------------------
 
 # Later lots put their instrumented tests in THEIR module (`src/androidTest`),
@@ -505,6 +576,12 @@ else
     # release APK, so the app is removed here and the instrumented step installs
     # its own.
     adb_dev uninstall fr.neezer.mobile >/dev/null 2>&1 || true
+
+    # The fixture the `assumeTrue` gates would otherwise quietly skip (see
+    # `start_bench_servers` above): on the host, reached from the guest at
+    # `10.0.2.2`, stopped in `cleanup` whatever happens.
+    step "bench servers (instrumented tests)"
+    start_bench_servers
 
     tasks=()
     for module in "${test_modules[@]}"; do
