@@ -6772,29 +6772,42 @@ Gradle ajoutée.
 
 **Ce que le test prouve, et ce qu'il ne prouve pas.** `NowPlayingScreenshotTest`
 `thePlayerRowHasRoomForTheTwoDoors` compose `PlayerSurface` avec deux `NzIconButton` aux libellés
-« Soirée d'écoute » et « Contrôle à distance » et asserte les deux `contentDescription` : il prouve
-que `Doors` peint les slots, **pas** que l'app les alimente. Cette seconde moitié se lit dans
-`NowPlayingHost` (deux lignes) et se voit à l'écran. Le cas tourne aux trois largeurs de la classe
-(360, 600 et 1280 dp), donc +3 cas ; `mobile.yaml` (`testDebugUnitTest`, `lintDebug`,
-`assembleRelease`) est la mesure.
+« Soirée d'écoute » et « Contrôle à distance », puis lit la géométrie dans l'arbre de sémantique :
+à **chaque** largeur de la classe (360, 600 et 1280 dp) et aux **deux** échelles de police (100 %
+et 200 %), il asserte que chacune des cinq portes garde une cible de 48 × 48 dp, que la rangée tient
+sur UNE ligne dans la largeur utile de la page, sans chevauchement, et que « À propos » est SOUS la
+rangée, centré. Il prouve que `Doors` peint les slots et que la rangée tient ; **pas** que l'app les
+alimente. Cette seconde moitié se lit dans `NowPlayingHost` (deux lignes) et se voit à l'écran.
+`mobile.yaml` (`testDebugUnitTest`, `lintDebug`, `assembleRelease`) est la mesure.
+
+**La rangée du pouce tient cinq portes à 48 dp — les mots cèdent avant une cible.** Mesuré par le
+test (`MEASURE m5 row`), à 360 dp : 296 dp des 320 utiles (360 − 2 × 20 dp de `pageX`) à 100 %, et
+256 dp à 200 %. À 600 dp : 296 des 560 dp à 100 %, 388,5 à 200 %. À 1280 dp : 295 des 1232 dp,
+390 à 200 %. Au-delà de 100 %, les deux portes à mot ne tiennent plus à côté des trois icônes :
+`Doors` mesure « Paroles » et « File · n » avec `rememberTextMeasurer` dans l'échelle en force et
+les remplace par `NzGlyph.Music` / `NzGlyph.Queue` quand la ligne déborderait — le
+`contentDescription` reste, donc TalkBack dit toujours « Paroles » et « File d'attente ».
+
+**Six cibles de 48 dp ne tiennent pas sur 320 dp : une action secondaire passe SOUS la rangée.** Six
+cibles et leurs intervalles demandent 348 dp pour 320, et un `Row` qui déborde ne coupe pas : Compose
+rétrécit son DERNIER enfant, le chevron « À propos » tombait à ~20 dp (mesuré sur
+`mb11-encre-360dp-lecteur.png`, 720 px = 360 dp). Le SPA met d'ailleurs « À propos » sous sa rangée
+(`.peek`). `PlayerSheet.kt` fait pareil avec `AboutPeek` : une pastille de verre centrée sous la
+rangée, cible de 48 dp, petites capitales mono et chevron haut, même `onClick` et même
+`contentDescription` que l'ancien chevron. La règle, pour les prochaines actions : **la rangée du
+pouce porte au plus cinq cibles de 48 dp à 320 dp utiles ; tout le reste va dessous ou dans le menu
+⋯.**
+
+**Un slot n'est pas une porte à mot.** Les deux slots étaient enveloppés dans `Door`, dont les 8 dp
+de marge laissaient 32 dp à la porte de soirée (mesuré par le test sur `dcb78607`) : la rangée les
+enveloppe maintenant dans une boîte de 48 dp **sans** marge intérieure.
+
+**La capture MB11 est refaite.** `docs/agents/screenshots/mobile/MB11/mb11-*-lecteur*.png` (360, 600
+et 1280 dp, Encre et Papier, plus `…-font200.png`) : la pastille « À propos » sous la rangée à
+100 %, la rangée en glyphes à 200 %. Dans ce banc les deux portes peignent leur corps de test
+(`NzIconButton`) — `PartyButton` sort avant de dessiner quand `PartyCore.service()` est nul — donc la
+preuve des vraies portes reste `Emulator smoke` (`doors_opened=6 doors_failed=0`).
 
 **+0 requête.** Le diff n'ajoute aucun appel FFI : les deux boutons sondent le serveur une fois à
 leur première composition, comme quand MB19/MB20 les ont écrits, puis vivent de leur état. Un
 lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les deux se cachent.
-
-**La capture de banc n'a pas été produite.** Le plan demandait un PNG du lecteur à 360 dp sous
-`docs/agents/screenshots/mobile/M5/` ; l'image du worker n'a ni JDK, ni SDK Android, ni émulateur
-(même limite que M1), et les deux portes ne se peignent pas sous Robolectric : `PartyButton` sort
-avant de dessiner quand `PartyCore.service()` est nul. La preuve d'écran reste à faire sur le banc
-(`mobile/tools/tone-server.py`) ; le test Robolectric et `Emulator smoke` sont ce que la CI a
-vérifié.
-
-**La rangée ne tient pas à six portes sur 360 dp.** Mesure sur la capture MB11 committée
-(`mb11-encre-360dp-lecteur.png`, 720 px = 360 dp) : la rangée occupe 244 dp des 320 dp utiles
-(360 − 2 × 20 dp de `pageX`). Deux cibles de 48 dp et leurs deux intervalles de 4 dp demandent
-104 dp de plus, soit 348 dp pour 320 : Compose rétrécit le dernier contrôle et le chevron
-« À propos » tombe à ~20 dp de cible, sous les 48 dp de MB1 ; à 200 % (`…-font200.png`, déjà à
-~22 dp de marge) les deux portes à mot ne tiennent plus du tout. Le correctif vit dans
-`PlayerSheet.kt` — le SPA met « À propos » SOUS la rangée (`.peek`), et cinq portes tiennent alors
-en 296 dp pour 320 — un fichier hors du périmètre de ce lot : la question est posée au demandeur,
-pas devinée ici.
