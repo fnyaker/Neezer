@@ -4,7 +4,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,10 +16,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,8 +25,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -194,9 +187,10 @@ fun QualityBadge(label: String, modifier: Modifier = Modifier) {
  *
  * * the playing row is `--ac-text` — an accent FOREGROUND, which on Papier is
  *   the ink, never the lemon (1.16:1);
- * * **swipe right = play next** (`webapp.md`): the row follows the finger, a
- *   "Lire ensuite" hint appears behind it, and a release past 72 dp asks
- *   [onSwipeQueue] and springs back — the queue itself is the caller's;
+ * * **swipe right = play next** (`webapp.md`): the gesture is the ONE
+ *   [SwipeRow] of the design system, so the row follows the finger, springs
+ *   back from the release velocity, and never consumes a leftward drag (a parent
+ *   pager keeps its swipe). The queue itself is the caller's;
  * * a row never animates on mount (M4): recycled rows must not replay an
  *   entrance, and a 4 000-row queue would replay it forever.
  */
@@ -210,38 +204,10 @@ fun TrackRowView(
     modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
-    var drag by remember { mutableFloatStateOf(0f) }
-    val threshold = 72.dp
-    Box(modifier = modifier.fillMaxWidth()) {
-        // Behind the row: what a swipe will do, said in words, not in colour.
-        Text(
-            text = "Lire ensuite",
-            style = Sillon.type.label,
-            color = colors.acText,
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = NzSpacing.l),
-        )
+    SwipeRow(onQueue = onSwipeQueue, modifier = modifier) { rowModifier ->
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
+            modifier = rowModifier
                 .height(56.dp)
-                .graphicsLayer { translationX = drag }
-                .background(colors.bg)
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            val passed = drag > threshold.toPx()
-                            drag = 0f
-                            if (passed) onSwipeQueue()
-                        },
-                        onDragCancel = { drag = 0f },
-                    ) { change, amount ->
-                        // Right only: a left swipe belongs to the page's back gesture.
-                        drag = (drag + amount).coerceIn(0f, size.width.toFloat() * 0.75f)
-                        change.consume()
-                    }
-                }
                 .clickable(role = Role.Button, onClick = onClick)
                 .padding(horizontal = NzSpacing.s, vertical = NzSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,

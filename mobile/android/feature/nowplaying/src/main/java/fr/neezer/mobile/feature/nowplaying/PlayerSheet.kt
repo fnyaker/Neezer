@@ -9,22 +9,20 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -39,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalDensity
@@ -53,7 +50,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.currentStateAsState
 import fr.neezer.mobile.bridge.NzNavigator
-import fr.neezer.mobile.designsystem.CoverImage
 import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
@@ -154,37 +150,13 @@ fun PlayerSurface(
 }
 
 /**
- * The sleeve under the player, dimmed by the gradient below it.
+ * The one column a thumb reaches: header, sleeve, names, rail, transport, doors.
  *
- * **No `Modifier.blur`**: a full-screen blurred layer made SwiftShader compile a
- * NEW pipeline for every primitive drawn under it (`CircleOp`, `FillRectOp`,
- * `EllipseOp`, `TextureOp`: 5 programs, 511 ms of `flush commands`) and the
- * player's first frame cost p95 **775 ms** (MQ2's journey, 2026-11-24). The
- * sleeve is an image drawn at 900 dp behind a 72–94 % gradient; the blur bought
- * a softness the gradient already gives, at the price of the frame budget. A
- * real sleeve is a texture, and the phone's GPU compiles that pipeline once.
+ * **It sits inside the system bars** (M5). The surface is `enableEdgeToEdge`, so
+ * without the two insets the header row was drawn under the status bar and the
+ * « À propos » pill under the gesture bar; the insets come BEFORE this lot's own
+ * 4 dp paddings, never instead of them.
  */
-@Composable
-private fun PlayerBackdrop(cover: String?, seed: String?) {
-    if (cover == null) return
-    Box(Modifier.fillMaxSize()) {
-        CoverImage(url = cover, sizeDp = 900.dp, seed = seed)
-    }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Sillon.colors.bg.copy(alpha = 0.72f),
-                        Sillon.colors.bg.copy(alpha = 0.94f),
-                    ),
-                ),
-            ),
-    )
-}
-
-/** The one column a thumb reaches: header, sleeve, names, rail, transport, doors. */
 @Composable
 private fun PlayerColumn(
     state: NowPlayingModel.State,
@@ -213,6 +185,8 @@ private fun PlayerColumn(
     Column(
         Modifier
             .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(horizontal = if (wide) NzSpacing.xl else NzSpacing.pageX)
             .padding(top = if (wide) NzSpacing.xl else NzSpacing.xs, bottom = NzSpacing.xs),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -320,95 +294,6 @@ private fun PlayerHeader(
             },
         )
     }
-}
-
-/**
- * The sleeve, its neighbours peeking: a swipe changes track, as in the SPA.
- *
- * The square is the SMALLER of 80 % of the width and 48 % of the room the block
- * has (the SPA's `min(78vw, 42vh)`), so a 360 × 640 phone shrinks the cover
- * instead of pushing the transport off the screen, and a 600 dp window does not
- * grow a sleeve taller than the column it sits in.
- */
-@Composable
-private fun CoverStage(state: NowPlayingModel.State, model: NowPlayingModel, wide: Boolean) {
-    val colors = Sillon.colors
-    val pager = rememberPagerState(initialPage = 1) { 3 }
-    val neighbours = remember(state.index, state.queueVersion, state.len) { neighboursOf(state) }
-
-    // A settled page that is not the middle one is a swipe: change track, then put
-    // the strip back on the centre without animating (the SPA's `centerCurrent`).
-    LaunchedEffect(pager.settledPage, state.index) {
-        when (pager.settledPage) {
-            0 -> {
-                if (state.index > 0) model.jump(state.index - 1, neighbours.prevKey.orEmpty())
-                pager.scrollToPage(1)
-            }
-            2 -> {
-                if (state.index in 0 until state.len - 1) {
-                    model.jump(state.index + 1, neighbours.nextKey.orEmpty())
-                }
-                pager.scrollToPage(1)
-            }
-            else -> Unit
-        }
-    }
-    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        val fraction = if (wide) 0.62f else 0.80f
-        val size = minOf(maxWidth * fraction, maxHeight * 0.48f)
-        HorizontalPager(
-            state = pager,
-            modifier = Modifier.fillMaxWidth().height(size),
-            pageSpacing = 14.dp,
-            contentPadding = PaddingValues(horizontal = ((maxWidth - size) / 2).coerceAtLeast(0.dp)),
-        ) { page ->
-            val cover = when (page) {
-                0 -> neighbours.prevCover
-                2 -> neighbours.nextCover
-                else -> state.current?.cover
-            }
-            val seed = when (page) {
-                0 -> neighbours.prevId
-                2 -> neighbours.nextId
-                else -> state.current?.id
-            }
-            Box(
-                Modifier
-                    .fillMaxHeight()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(NzRadius.cover))
-                    .background(colors.s1),
-            ) {
-                CoverImage(url = cover, sizeDp = 420.dp, seed = seed)
-            }
-        }
-    }
-}
-
-/** The two neighbours of the playhead, read from the queue's own handle. */
-private data class Neighbours(
-    val prevCover: String? = null,
-    val prevId: String? = null,
-    val prevKey: String? = null,
-    val nextCover: String? = null,
-    val nextId: String? = null,
-    val nextKey: String? = null,
-)
-
-private fun neighboursOf(state: NowPlayingModel.State): Neighbours {
-    val rows = state.queue ?: return Neighbours()
-    val index = state.index
-    if (index < 0 || rows.len() == 0) return Neighbours()
-    val prev = if (index > 0) rows.window(index - 1, 1).firstOrNull() else null
-    val next = if (index in 0 until state.len - 1) rows.window(index + 1, 1).firstOrNull() else null
-    return Neighbours(
-        prevCover = prev?.cover,
-        prevId = prev?.id,
-        prevKey = prev?.key,
-        nextCover = next?.cover,
-        nextId = next?.id,
-        nextKey = next?.key,
-    )
 }
 
 /** The title, the names, and the heart (MB10's own optimistic `like`/`unlike`). */
