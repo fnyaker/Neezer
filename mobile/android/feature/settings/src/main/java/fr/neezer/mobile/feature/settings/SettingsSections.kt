@@ -343,7 +343,13 @@ private fun colourHex(color: Color): String {
  * without a control that could do nothing.
  */
 @Composable
-internal fun VizSection(model: SettingsModel, state: SettingsModel.State, onOpen: (() -> Unit)? = null) {
+internal fun VizSection(
+    model: SettingsModel,
+    state: SettingsModel.State,
+    onOpen: (() -> Unit)? = null,
+    isAdmin: Boolean = false,
+    onGenres: (() -> Unit)? = null,
+) {
     val settings = state.settings ?: return
     if (onOpen != null) {
         SettingsCard(
@@ -419,6 +425,25 @@ internal fun VizSection(model: SettingsModel, state: SettingsModel.State, onOpen
                     onSelect = { model.setScopeColour(if (it == 1) "mono" else "duo") },
                 )
             }
+        }
+    }
+    // La porte du studio de genres (`VisualizerSettings.svelte:558-566`'s
+    // `{#if $isAdmin && CAN_ADMIN}`): l'échappatoire d'un vocabulaire figé, et
+    // RIEN pour un membre. La carte n'appelle rien : `GenresEntry` fait ses
+    // propres lectures (MB18).
+    if (isAdmin && onGenres != null) {
+        SettingsCard(
+            title = "Studio de genres",
+            subtitle = "Le classifieur connaît les styles avec lesquels il a été écrit. " +
+                "Si le vôtre lui échappe — un sous-genre, une scène, votre propre découpage — " +
+                "créez-le, étiquetez quelques titres et entraînez le modèle ici même.",
+        ) {
+            NzButton(
+                text = "Ouvrir",
+                onClick = onGenres,
+                glyph = NzGlyph.Sliders,
+                kind = NzButtonKind.Secondary,
+            )
         }
     }
 }

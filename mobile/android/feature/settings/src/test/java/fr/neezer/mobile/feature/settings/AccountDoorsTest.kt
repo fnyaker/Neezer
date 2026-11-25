@@ -10,7 +10,6 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
-import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
@@ -24,7 +23,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import uniffi.nz_ffi.AppLink
 
 /**
  * M2's two doors, on the real screen and a recording navigator
@@ -49,24 +47,6 @@ class AccountDoorsTest {
 
     @get:Rule
     val rule = createAndroidComposeRule<ComponentActivity>()
-
-    /** The shell, recorded: a door that opens is a counter that moves. */
-    private class RecordingNavigator : NzNavigator {
-        var logins = 0
-        var setups = 0
-
-        override fun go(link: AppLink) {}
-        override fun back() {}
-        override fun openPlayer() {}
-        override fun openQueue() {}
-        override fun openLogin() {
-            logins++
-        }
-
-        override fun openSetup() {
-            setups++
-        }
-    }
 
     /** Drains what a click queued — an EVENT, never a duration (testing.md). */
     private fun settle() {

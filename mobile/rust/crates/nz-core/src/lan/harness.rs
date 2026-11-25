@@ -425,6 +425,15 @@ fn serve(mut stream: TcpStream, state: &Arc<ServerState>, hits: &Mutex<Vec<Hit>>
         String::from_utf8_lossy(&buffer[header_end..(header_end + length).min(buffer.len())])
             .into_owned();
     let (status, response) = route(&method, &path, &body, state);
+    // Recorded BEFORE the answer leaves: a test reads `count()` as soon as the
+    // client saw the response, and the client's own thread can run before this
+    // one reaches the push. Measured 2026-11-25 (mobile CI run 45511279190,
+    // `a_server_without_the_feature_starts_nothing`): the probe was answered 404
+    // and counted 0 — a fake that answers before it books the hit makes a count
+    // racy by construction.
+    hits.lock()
+        .expect("les requêtes")
+        .push(Hit { method, path });
     let answer = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         if status == 200 { "OK" } else { "No Content" },
@@ -433,9 +442,6 @@ fn serve(mut stream: TcpStream, state: &Arc<ServerState>, hits: &Mutex<Vec<Hit>>
     let _ = stream.write_all(answer.as_bytes());
     let _ = stream.write_all(&response);
     let _ = stream.flush();
-    hits.lock()
-        .expect("les requêtes")
-        .push(Hit { method, path });
 }
 
 fn route(method: &str, path: &str, body: &str, state: &Arc<ServerState>) -> (u16, Vec<u8>) {

@@ -6766,6 +6766,55 @@ ce fichier. Le test instrumenté `AppLinkColdStartTest.aTrackLinkSaysItCannotOpe
 le nœud « ne s'ouvre pas encore » dans l'arbre d'accessibilité (le toast vit 2,4 s :
 `NzToasts.LingerMs`). L'image du worker n'a ni JDK ni émulateur : la capture du toast et la passe du
 test sont prouvées par le job `Emulator smoke` de `mobile.yaml`, pas par une capture jointe au PR.
+### M7 — Genres : la porte de Réglages → Animations (delivered 2026-11-24)
+
+**La règle.** La carte « Studio de genres » vit à la FIN de « Animations », comme le bloc
+`{#if $isAdmin && CAN_ADMIN}` du SPA (`VisualizerSettings.svelte:558-566`), avec la phrase et
+« Ouvrir » qui appelle `NzNavigator.openGenres()` → `Routes.Genres` en `launchSingleTop`. Un membre
+ne la voit pas. La carte n'appelle RIEN : `GenresEntry` fait ses propres lectures (MB18).
+
+**Le drapeau qui n'était branché nulle part.** Le plan supposait que la coquille passait déjà
+`isAdmin` à `SettingsEntry`. Faux, mesuré : `SettingsEntry` n'a qu'UN appelant
+(`NavGraph.kt:405`, `SettingsEntry(section, navigator)`), et son paramètre `isAdmin` — présent depuis
+MB0 — retombait donc toujours sur `false`. La carte aurait été morte et les deux tests du lot verts
+quand même, exactement le défaut des podcasts (M4). Le paramètre devient `Boolean? = null` : la
+coquille ne transmet rien, l'écran lit la vérité qu'il calcule DÉJÀ (`state.admin`, le drapeau
+`/api/me` de la session, **+0 requête**), et un test force `true`/`false`. Aucune ligne hors des
+fichiers du lot : `NavGraph.kt` appartient à M6, ouvert en parallèle.
+
+**Pourquoi `openGenres` est une méthode PAR DÉFAUT.** Une douzaine de doublures de test implémentent
+`NzNavigator` dans d'autres modules ; une méthode abstraite les casserait toutes. `AppGraph` la
+surcharge, comme `openViz`.
+
+**La doublure partagée.** `RecordingNavigator` vivait dans `AccountDoorsTest` (M2). M7 la déplace
+telle quelle dans `RecordingNavigator.kt` (même module, `genres` en plus) : deux fichiers de test la
+partagent maintenant.
+
+**Mesuré.** **+0 requête, +0 octet** : la carte et `openGenres` ne font que naviguer, et
+`state.admin` est une lecture mémoire (`Me`). Preuve de forme : `grep -rn "openGenres" mobile/android`
+ne rend que l'interface, `AppGraph`, l'appel de `SettingsEntry.kt` et le test — aucun service.
+`VizGenresDoorTest` (Robolectric, `w360dp-h800dp-xhdpi`) ajoute 2 tests : un administrateur voit
+« Studio de genres » et « Ouvrir » appelle `openGenres()` **une** fois ; un membre ne voit rien. La
+carte étant sous la ligne de flottaison à 360×800 dp (l'ordre du SPA), les assertions font
+`performScrollTo()` d'abord — un doigt le fait avant le tap. La route elle-même reste prouvée par
+`ci-emulator.sh` (`link=#/genres`).
+
+**Une doublure qui répond AVANT de compter rend tout comptage bancal.** Le premier passage CI du lot
+(PR #402, run 45511279190) a vu `lan::tests::a_server_without_the_feature_starts_nothing` échouer
+sur `fake.count("OPTIONS", "/api/lan/status") == 1` : **0** compté. La sonde avait bien été envoyée
+et le faux serveur avait bien répondu 404 — mais `harness.rs` poussait le `Hit` APRÈS
+`write_all`/`flush`, donc le thread client pouvait observer la réponse, rendre `Unsupported` et
+laisser le test lire `count()` avant l'enregistrement. Le `Hit` est maintenant poussé avant que la
+réponse parte : la règle pour toute doublure est **répondre ⟹ déjà compté**, sinon un test qui lit un
+compte juste après le retour du client est une course, pas une mesure.
+
+**Capture non produite, et pourquoi.** L'acceptation demande deux images 360 dp (Encre, Papier) sous
+`docs/agents/screenshots/mobile/M7/`. L'image du worker n'a ni JDK, ni SDK Android, ni émulateur
+(même constat que M2 et M3), et le chemin de capture de `:feature:settings` écrit dans
+`docs/agents/screenshots/mobile/MB16/` (son `build.gradle.kts`, hors des fichiers du lot) : aucune
+image n'a été fabriquée. La preuve automatique du lot est les deux tests ci-dessus, plus la sonde
+`#/genres` de l'émulateur en CI.
+
 ### M5 — Soirée : la porte de l'hôte (delivered 2026-11-24)
 
 **La règle.** Le lecteur plein écran porte les deux portes du SPA, dans la rangée du pouce entre

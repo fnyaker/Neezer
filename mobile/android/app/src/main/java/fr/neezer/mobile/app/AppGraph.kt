@@ -202,6 +202,16 @@ class AppGraph(private val application: Application) : NzNavigator {
     }
 
     /**
+     * Le studio de genres, la porte de « Réglages → Animations »
+     * (`VisualizerSettings.svelte:565`'s `push("/genres")`). `launchSingleTop`
+     * pour que deux taps n'empilent pas deux studios, chacun avec ses lectures.
+     */
+    override fun openGenres() {
+        val nav = controller ?: return
+        nav.navigate(Routes.Genres) { launchSingleTop = true }
+    }
+
+    /**
      * An incoming URL (`neezer://…`, a `/app/#/…` link, a shared Deezer or
      * Spotify URL) opened through [resolveLink] (MB2 owns the rule).
      */
