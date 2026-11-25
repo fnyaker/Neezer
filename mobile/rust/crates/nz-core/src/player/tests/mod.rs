@@ -125,6 +125,9 @@ pub struct BenchState {
     pub radio: Mutex<Vec<String>>,
     /// What `/album/<id>`, `/playlist/<id>` and `/me/favorites` answer.
     pub lists: Mutex<HashMap<String, Vec<String>>>,
+    /// What `/api/gains` answers per id: the server's loudness measurement
+    /// (`None` = measured as absent, which normalisation must leave alone).
+    pub gains: Mutex<HashMap<String, Option<f32>>>,
     pub flow_calls: AtomicUsize,
 }
 
@@ -244,6 +247,18 @@ impl Bench {
 
     pub fn radio(&self, ids: &[&str]) {
         *self.state.radio.lock().unwrap() = ids.iter().map(|id| (*id).to_owned()).collect();
+    }
+
+    /// What the server's ReplayGain measurement says for `id`: `None` is the
+    /// honest "measured nothing", not zero (the bench answers `null`, as
+    /// `/api/gains` does for a track it has no loudness for).
+    pub fn gains(&self, id: &str, loudness: Option<f32>) -> &Self {
+        self.state
+            .gains
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), loudness);
+        self
     }
 
     pub fn list(&self, path: &str, ids: &[&str]) {
@@ -425,7 +440,16 @@ fn route(
                 })
                 .map(str::to_owned)
                 .collect();
-            let rows: Vec<String> = ids.iter().map(|id| format!(r#""{id}":null"#)).collect();
+            // The stored measurement, or `null`: a bench that answered nothing
+            // but `null` could not tell a working gain from a missing one.
+            let stored = state.gains.lock().unwrap();
+            let rows: Vec<String> = ids
+                .iter()
+                .map(|id| match stored.get(id).copied().flatten() {
+                    Some(loudness) => format!(r#""{id}":{loudness}"#),
+                    None => format!(r#""{id}":null"#),
+                })
+                .collect();
             json(200, format!(r#"{{"gains":{{{}}}}}"#, rows.join(",")))
         }
         ("POST", "/api/flow/next") => {

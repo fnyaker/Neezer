@@ -228,6 +228,162 @@ fn an_episode_at_double_speed_keeps_its_pitch() {
     player.shutdown();
 }
 
+/// **Normalisation High changes the samples.** The server measured this track at
+/// 0 LUFS, so `dsp::gain_db(Some(0.0), High)` is −10.4 dB (ReplayGain reference
+/// 18.4 dB, the High level's +8 dB target): the second window must be that much
+/// quieter than the same tone at Off, through the phone's own queue and engine.
+///
+/// The switch is flipped MID-TRACK on purpose: that is what the owner does in
+/// Réglages, and the level was not asked for before (Off asks nothing at all —
+/// rule 1), so this is the case where a missing link shows as a 0 dB delta.
+#[test]
+fn the_normalisation_gain_lowers_the_samples_by_the_expected_db() {
+    let dir = TempDir::new("normalize");
+    let bench = Bench::start();
+    let tone = Fixture::Tone440.write(dir.path());
+    bench.track("tone", &tone);
+    bench.gains("tone", Some(0.0));
+
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+    player.command(
+        Command::PlayQueue {
+            tracks: vec![track_ref_of("tone", 3)],
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
+    // Off (the default): one second of the file as it was mastered.
+    let off = pump(&mut sink, 1.0);
+
+    let mut audio = player.audio();
+    audio.normalization = crate::player::Normalization::High;
+    let before = gains_asked(&bench);
+    player.set_audio(audio);
+    // The flip is a REAL request now (the level was never asked for at Off), and
+    // its round trip is part of the second window: wait for the answer to have
+    // landed, THEN measure, so the number is the gain's and not the network's.
+    let asked = pump_until_gains(&mut sink, &bench, before + 1, 5.0);
+    let _ = pump(&mut sink, 0.05);
+    let high = pump(&mut sink, 1.0);
+
+    let off_rms = rms(&off);
+    let high_rms = rms(&high);
+    let delta_db = 20.0 * (high_rms / off_rms).log10();
+    println!(
+        "normalisation high: off_rms={off_rms:.5} high_rms={high_rms:.5} delta_db={delta_db:.2}"
+    );
+    assert!(
+        asked,
+        "the level change never asked the server for the row's loudness ({} gain requests)",
+        gains_asked(&bench)
+    );
+    assert!(
+        (-11.5..=-9.5).contains(&delta_db),
+        "High moved the level by {delta_db:.2} dB (off {off_rms:.5}, high {high_rms:.5}); \
+         the engine's own gain for a 0 LUFS track is -10.4 dB"
+    );
+    player.shutdown();
+}
+
+/// **And it never invents a gain.** The same switch on a track the server
+/// answered `null` for (measured as absent, or never measured) must leave the
+/// level alone: normalisation is a measurement, not a guess (`gaincache.js`).
+#[test]
+fn the_normalisation_does_nothing_without_loudness() {
+    let dir = TempDir::new("normalize-absent");
+    let bench = Bench::start();
+    let tone = Fixture::Tone440.write(dir.path());
+    bench.track("tone", &tone);
+    bench.gains("tone", None);
+
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+    player.command(
+        Command::PlayQueue {
+            tracks: vec![track_ref_of("tone", 3)],
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
+    let off = pump(&mut sink, 1.0);
+
+    let mut audio = player.audio();
+    audio.normalization = crate::player::Normalization::High;
+    let before = gains_asked(&bench);
+    player.set_audio(audio);
+    let asked = pump_until_gains(&mut sink, &bench, before + 1, 5.0);
+    let _ = pump(&mut sink, 0.05);
+    let high = pump(&mut sink, 1.0);
+
+    let off_rms = rms(&off);
+    let high_rms = rms(&high);
+    let delta_db = 20.0 * (high_rms / off_rms).log10();
+    println!(
+        "normalisation high without loudness: off_rms={off_rms:.5} high_rms={high_rms:.5} delta_db={delta_db:.2}"
+    );
+    assert!(
+        asked,
+        "the setting never asked about a row the server has no loudness for ({} gain requests)",
+        gains_asked(&bench)
+    );
+    assert!(
+        delta_db.abs() < 0.1,
+        "the setting invented {delta_db:.2} dB for a track the server has no loudness for"
+    );
+    player.shutdown();
+}
+
+/// How many `/api/gains` requests the bench has answered: the event the level
+/// change is waited on, so the window never measures the request's own round
+/// trip.
+fn gains_asked(bench: &Bench) -> usize {
+    bench
+        .recorded()
+        .iter()
+        .filter(|request| request.method == "POST" && request.target() == "/api/gains")
+        .count()
+}
+
+/// Pumps the sink (so the engine keeps rendering) until the bench has answered
+/// `count` gain requests — never on a clock: the answer IS the event. Answers
+/// whether it landed, so a pre-fix run still prints its delta instead of dying
+/// on a timeout.
+fn pump_until_gains(
+    sink: &mut nz_audio::ExternalSink,
+    bench: &Bench,
+    count: usize,
+    seconds: f64,
+) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(seconds);
+    while std::time::Instant::now() < deadline {
+        let mut buffer = vec![0.0f32; 480 * 2];
+        sink.render(&mut buffer);
+        if gains_asked(bench) >= count {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
+}
+
+/// The power of a window as an amplitude ratio: the two normalisation windows
+/// are compared in dB, which is what the engine's gain is expressed in.
+fn rms(frames: &[f32]) -> f64 {
+    if frames.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = frames
+        .iter()
+        .map(|sample| f64::from(*sample) * f64::from(*sample))
+        .sum();
+    (sum / frames.len() as f64).sqrt()
+}
+
 /// Waits until the queue holds `len` rows, and answers the snapshot: a helper the
 /// seam's own assertion reads.
 fn wait_state_count(player: &crate::player::Player, len: u32) -> crate::player::Snapshot {

@@ -176,6 +176,14 @@ pub(crate) enum MixerCmd {
     /// The trim end the server measured, arriving after the voice was built (the
     /// app asks for the bounds of the track it is playing as well as the next).
     SetCurrentEnd(Option<f64>),
+    /// The loudness of the voice PLAYING, learned after the voice was built.
+    ///
+    /// Only a DELIBERATE level change may move the level of a track already
+    /// playing (`Player.svelte#onNormalizationChange`: "the one mid-track change
+    /// the [static-gain] rule doesn't apply to: the user asked for it"). A gain
+    /// that merely happens to ARRIVE late is not this: it is primed before the
+    /// swap, and a late one lands with the next voice, never as a jump.
+    SetCurrentLoudness(Option<f32>),
     /// The equalizer card's meter, on while that card is on screen (MB12).
     Meter(bool),
     /// One analysis subscription's producer (MB12): the visualiser and the
@@ -374,6 +382,14 @@ impl Mixer {
                         if end.is_some() {
                             current.fade_end_s = end;
                         }
+                    }
+                }
+                MixerCmd::SetCurrentLoudness(loudness) => {
+                    // Only the field moves: the next buffer's `sync_gain` derives
+                    // the gain from it and ramps over 10 ms, exactly like a level
+                    // change (a step here would be a click).
+                    if let Some(current) = self.current.as_mut() {
+                        current.loudness = loudness;
                     }
                 }
                 MixerCmd::Meter(on) => {
@@ -738,6 +754,14 @@ mod tests {
     use crate::dsp::{Normalization, Settings};
     use crate::voice::{VoiceMeta, voice_ring};
 
+    /// Fills a voice's ring with `frames` constant frames, so a render reads real
+    /// audio instead of an underrun.
+    fn feed(voice: &mut crate::voice::VoiceProducer, frames: usize) {
+        for _ in 0..frames {
+            voice.push(&[0.5, 0.5]);
+        }
+    }
+
     #[test]
     fn silence_when_paused_and_no_underrun_before_the_first_sample() {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));
@@ -984,6 +1008,63 @@ mod tests {
         assert!(
             (out[0] - expected).abs() < 1e-5,
             "expected {expected}, got {}",
+            out[0]
+        );
+    }
+
+    /// **A level change made while a track plays reaches the samples**, which is
+    /// what "normalisation does nothing" meant: the voice is built when
+    /// normalisation is off (so it carries no loudness), the person then picks
+    /// High, and the gain must apply to the voice ALREADY playing — measured,
+    /// not deferred to the next track.
+    ///
+    /// Measured: **−10.40 dB** (`dsp::gain_db(Some(0.0), High)`), on the same
+    /// buffer stream, with no new voice and no gap.
+    #[test]
+    fn a_loudness_learned_after_the_voice_was_built_moves_its_gain() {
+        let shared = Arc::new(MixerShared::new(48_000, 1.0));
+        shared.set_paused(false);
+        let settings = Settings::new();
+        // The person's own order: playing first, the level after.
+        let (note_tx, _note_rx) = RingBuffer::new(64);
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
+            Arc::clone(&shared),
+            note_tx,
+            Arc::clone(&settings),
+            crate::tap::Tap::pair(crate::tap::TAP_FRAMES).0,
+            48_000,
+        );
+        let (mut a, mut consumer, _) = voice_ring(48_000, 0.5, 1, 0.0);
+        // No loudness: normalisation was off when this row was opened.
+        consumer.set_meta(VoiceMeta::default());
+        feed(&mut a, 4_800);
+        cmds.push(MixerCmd::InstallCurrent(Some(consumer))).unwrap();
+        let mut flat = vec![0.0f32; 2];
+        mixer.render(&mut flat);
+        assert!(
+            (flat[0] - 0.5).abs() < 1e-6,
+            "off must not touch the samples, got {}",
+            flat[0]
+        );
+        // Réglages → Lecture: High. The engine then delivers the loudness the
+        // server answered for the row already playing.
+        settings.set_normalization(Normalization::High);
+        cmds.push(MixerCmd::SetCurrentLoudness(Some(0.0))).unwrap();
+        // The ramp is 10 ms: collect it, then measure the steady level.
+        let mut ramp = vec![0.0f32; 480 * 2 * 2];
+        feed(&mut a, 4_800);
+        mixer.render(&mut ramp);
+        let mut out = vec![0.0f32; 2];
+        feed(&mut a, 480);
+        mixer.render(&mut out);
+        let expected = 0.5 * 10f64.powf(dsp::gain_db(Some(0.0), Normalization::High) / 20.0) as f32;
+        println!(
+            "normalisation learned late: off {:.4}, high {:.4} (expected {expected:.4})",
+            flat[0], out[0]
+        );
+        assert!(
+            (out[0] - expected).abs() < 1e-4,
+            "the voice already playing did not take the gain: expected {expected}, got {}",
             out[0]
         );
     }
