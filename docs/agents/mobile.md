@@ -6791,6 +6791,15 @@ carte étant sous la ligne de flottaison à 360×800 dp (l'ordre du SPA), les as
 `performScrollTo()` d'abord — un doigt le fait avant le tap. La route elle-même reste prouvée par
 `ci-emulator.sh` (`link=#/genres`).
 
+**Une doublure qui répond AVANT de compter rend tout comptage bancal.** Le premier passage CI du lot
+(PR #402, run 45511279190) a vu `lan::tests::a_server_without_the_feature_starts_nothing` échouer
+sur `fake.count("OPTIONS", "/api/lan/status") == 1` : **0** compté. La sonde avait bien été envoyée
+et le faux serveur avait bien répondu 404 — mais `harness.rs` poussait le `Hit` APRÈS
+`write_all`/`flush`, donc le thread client pouvait observer la réponse, rendre `Unsupported` et
+laisser le test lire `count()` avant l'enregistrement. Le `Hit` est maintenant poussé avant que la
+réponse parte : la règle pour toute doublure est **répondre ⟹ déjà compté**, sinon un test qui lit un
+compte juste après le retour du client est une course, pas une mesure.
+
 **Capture non produite, et pourquoi.** L'acceptation demande deux images 360 dp (Encre, Papier) sous
 `docs/agents/screenshots/mobile/M7/`. L'image du worker n'a ni JDK, ni SDK Android, ni émulateur
 (même constat que M2 et M3), et le chemin de capture de `:feature:settings` écrit dans
