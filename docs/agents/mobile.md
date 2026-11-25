@@ -152,13 +152,67 @@ never committed; Rust 1.99.1):
   debug app, the unminified smoke and every CI job were green — the defect exists only in the
   minified shape. Two guards, both on the shipped artifact: `mobile.yaml` fails the `apk` job unless
   `app/build/outputs/mapping/release/mapping.txt` shows `X -> X:` for the three classes, and it
-  greps the universal APK's own dex for `Lorg/rustls/platformverifier/CertificateVerifier;`. A
-  device run against the MINIFIED app is not available: AGP minifies the androidTest APK too (it
+  greps the universal APK's own dex for `Lorg/rustls/platformverifier/CertificateVerifier;`. An
+  INSTRUMENTED test cannot run against the minified app: AGP minifies the androidTest APK too (it
   follows the tested build type), and the two R8 runs rename their own Kotlin runtime copies
   differently — measured on run 45589469291, instrumentation died before the first test with
   `NoSuchMethodError: No static method e(...) in class Lkotlin/jvm/internal/k;`. `ReleaseTlsTrustTest`
-  therefore lives in the ordinary instrumented suite (debug) and proves the probe and the platform
-  verifier answer on a device; the minified artifact is covered by the two guards above.
+  therefore lives in the ordinary instrumented suite (debug); the minified APK itself is driven from
+  OUTSIDE by `mobile/tools/release-signin.sh` (next rule).
+- **A release is proved signed in, not only opened.** v1.6.5 (verifier stripped by R8) and v1.6.6
+  (a crash on the home's first cover) both passed every CI job, because the emulator smoke walked a
+  shell with no server. `ci-emulator.sh` now runs `mobile/tools/release-signin.sh` on the universal
+  RELEASE APK the job publishes, through the accessibility tree, as a person does first: (1) the setup
+  screen with « Vérifier le certificat » ON against `valid-isrgrootx1.letsencrypt.org` (Let's
+  Encrypt's own test host, chain leaf ← YR1 ← Root YR ← ISRG Root X1, the shape a 2026 certificate
+  has) must read « Le serveur a répondu 404 » — the handshake was accepted by Android's store, the
+  404 is that host not being a Neezer server; (2) a sign-in over HTTPS to `tools/perf_api.py --serve
+  --tls-cert/--tls-key` (self-signed, accepted on screen), `bench`/`Bench1`, then the home's marker
+  and at least one `GET /api/cover/…` answered 200 in the server's access log while the app process
+  is alive. Measured against the shipped APKs (API 35, `pixel_6`): v1.6.5 fails phase 1 (« Hors
+  ligne », logcat `ClassNotFoundException: org.rustls.platformverifier.CertificateVerifier`), v1.6.6
+  fails phase 1 (« Hors ligne », `StrictMode…onNetwork` under `URICertStore.engineGetCRLs`, next
+  rule) AND phase 2 (`NoSuchMethodError … CoilCovers.Image`, the owner's crash). A failed phase 1
+  still runs phase 2, so one run names both defects.
+- **A connection is never opened on the thread that polls an FFI future.** UniFFI's
+  `async_runtime = "tokio"` only ENTERS a tokio context (`async_compat::Compat`): the Rust future is
+  polled on the foreign caller's thread, which for a Compose screen's coroutine is Android's MAIN
+  thread — the claim that an async export "runs on the runtime's worker" was wrong. reqwest opens
+  the connection inside `send()`, so DNS, TCP and the TLS handshake ran there, and with the handshake
+  `rustls-platform-verifier`'s JNI call, whose revocation check downloads the CA's CRL: StrictMode
+  refuses network I/O on the main thread, the verifier answers "not trusted", and every
+  system-trusted server failed (« Hors ligne » on the probe, « certificat non accepté » on the
+  login) while a PINNED one passed, because the pin overrides the platform's verdict. Measured on
+  v1.6.6's release APK AND a debug build of the same tree (API 35): the probe's `GET /api/version`
+  to `valid-isrgrootx1.letsencrypt.org` failed with the verifier's stack on `tid == pid`, while the
+  same chain through `Api::probe_certificate` (which runs on `spawn_blocking`) was trusted on API 35,
+  36 and 37 — which is why `ReleaseTlsTrustTest` stayed green. Rule: `nz-api` sends every request
+  through `send_off_caller` (a task on the ambient runtime, aborted when the caller drops it);
+  `a_send_opens_its_connection_off_the_polling_thread` fails on the old `request.send().await`.
+  Still true and not fixed here: the rest of an FFI future (parsing, cache reads) is polled on the
+  caller's thread.
+- **A `@Composable` compiled without the Compose compiler is a crash at runtime, not a build error.**
+  The plugin appends a `Composer` and a `$changed` int to every `@Composable`'s JVM signature, and a
+  compose-compiled caller calls that signature. `:bridge` declared `CoilCovers.Image(url, sizePx)`
+  without `alias(libs.plugins.kotlin.compose)`, so kotlinc wrote `Image(String, int)` while `:app`
+  called `Image(String, int, Composer, int)`; kotlinc and R8 accepted both, and v1.6.6 died with
+  `NoSuchMethodError … CoilCovers.Image(Ljava/lang/String;ILandroidx/compose/runtime/Composer;I)V`
+  on the owner's phone the moment the home drew its first cover (six crashes in a row) — in debug as
+  much as in release: R8 was not the cause (`javap` on the unminified classes shows the same
+  mismatch). The root build script registers `checkComposeCompiler` in every Kotlin module, wired
+  before `preBuild`: a module with a line-leading `@Composable` and no Compose compiler plugin fails
+  every `assemble*`, `test*` and `lint*` with the files named. Run on the v1.6.6 tree it fails on
+  `bridge/src/main/java/fr/neezer/mobile/bridge/CoilCovers.kt`.
+- **An AAR can bring its own `android:networkSecurityConfig`, and it silently cancels
+  `usesCleartextTraffic`.** `org.rustls:rustls-platform-verifier` 0.2.0 merges one whose
+  `base-config` sets `cleartextTrafficPermitted=false` (with an allowlist of 376 CRL domains, so the
+  verifier can fetch `http://*.c.lencr.org` CRLs — upstream issue #221). Android ignores
+  `usesCleartextTraffic="true"` once a config is present (read back from v1.6.6's merged manifest
+  with `aapt2 dump xmltree`). It costs nothing today because every request to the person's server
+  goes through the Rust core's own sockets, which the policy does not govern; a Java-side client
+  (`HttpURLConnection`, a WebView) would refuse an `http://192.168.x.y` server. Rule: never talk to
+  the person's server from the JVM; if that ever becomes necessary, `:app` declares its own config
+  that keeps the CRL allowlist.
 - **Autofill is declared, never guessed.** A Compose field a password manager should fill carries
   `androidx.compose.ui.autofill.ContentType` through `Modifier.semantics { contentType = … }`
   (`ContentType.Username` / `ContentType.Password` in the account form); the password field's IME
@@ -1742,6 +1796,7 @@ lot copying them by hand eventually gets wrong, with the person's speakers and p
 | `mobile/tools/benchdata.py` | AndroidX's 200 kB `benchmarkData.json` → medians and pooled p50/p90/p95/p99, and it FAILS when a bench measured none of its metrics (the emulator's frame source is a real way to get zeros). |
 | `mobile/tools/aaudio-probe.c` | Opens one AAudio stream exactly as the app's engine will (PowerSaving, media/music, 48 kHz stereo float, 1 s buffer), writes silence from a real-time callback and prints frames/ticks/xruns. Built by `measure.sh underruns` with NDK clang for API 28, pushed to `/data/local/tmp`, removed after. |
 | `mobile/tools/ci-emulator.sh` | What `mobile.yaml`'s `emulator` job runs: boot, prepare the device (no error dialogs, no animation scales, keyguard down), install, walk the shell through the accessibility tree (5 doors, each proved by the text only that screen draws), probe 5 app links, print the counts, check the guest is still alive after each step, then `connectedDebugAndroidTest` on every module that has `src/androidTest` (installing the NDK, cargo-ndk and the Rust targets first when the job does not have them). Every failure stops the emulator through `emu.sh` first. |
+| `mobile/tools/release-signin.sh --serial S` | Called by `ci-emulator.sh` on the installed RELEASE APK: « Vérifier le certificat » on against Let's Encrypt's test host (must read « Le serveur a répondu 404 »), then a fresh install signed in over HTTPS to a 200-title `perf_api.py --serve` (self-signed leaf accepted on screen), the home's marker, and ≥ 1 `GET /api/cover/…` 200 on the server's log with the app process alive (*Pitfalls*, "A release is proved signed in"). |
 | `:baselineprofile` | `StartupBenchmark` (COLD, 10 iterations, profile off/on), `ScrollBenchmark` (library 8 000, queue 4 000 — inactive until the lists exist, see below), `ShellFramesBenchmark` (the tab walk), `BaselineProfileGenerator` (start → home → library scroll → play). |
 | `app/src/androidTest/.../ShellSmokeTest.kt` | Three instrumented tests on the real APK: the shell paints the home stub, a tab opens its own destination, Réglages › Aide prints the version the RUST crate reports (Gradle → APK → instrumentation → JNA → `libnz_ffi.so`). Found by semantics, never by coordinates. |
 

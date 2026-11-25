@@ -27,6 +27,9 @@ on:
       - webapp/measure/**
       - webapp/trainer/**
       - android/nscore/**
+      # The emulator's release sign-in serves the phone from this bench
+      # (mobile/tools/release-signin.sh): a change to it is a change to the smoke.
+      - tools/perf_api.py
       - .github/workflows/mobile.yaml
   pull_request:
     paths:
@@ -37,6 +40,9 @@ on:
       - webapp/measure/**
       - webapp/trainer/**
       - android/nscore/**
+      # The emulator's release sign-in serves the phone from this bench
+      # (mobile/tools/release-signin.sh): a change to it is a change to the smoke.
+      - tools/perf_api.py
       - .github/workflows/mobile.yaml
   workflow_dispatch:
 
@@ -716,6 +722,17 @@ jobs:
             "platform-tools" "emulator" "system-images;android-35;default;x86_64"
           echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" create avd \
             -n nz35 -k "system-images;android-35;default;x86_64" --device pixel_6 --force
+
+      # The release sign-in (mobile/tools/release-signin.sh) signs the release APK
+      # in to `tools/perf_api.py --serve`: the real server, its own packages.
+      - uses: actions/setup-python@v5
+        if: steps.harness.outputs.present == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install the bench server
+        if: steps.harness.outputs.present == 'true'
+        run: pip install -e .
 
       - name: Smoke
         if: steps.harness.outputs.present == 'true'

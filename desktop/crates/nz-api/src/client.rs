@@ -834,7 +834,7 @@ impl Api {
                 .header(reqwest::header::ACCEPT, Want::Bytes.accept())
                 .timeout(ANSWER_TIMEOUT);
             self.stats.request(&self.tag, 0);
-            let answer = match request.send().await {
+            let answer = match send_off_caller(request).await {
                 Ok(mut response) => {
                     let status = response.status().as_u16();
                     if (200..300).contains(&status) {
@@ -864,7 +864,8 @@ impl Api {
                         Err(external_error(status, &text))
                     }
                 }
-                Err(error) => {
+                Err(SendFailure::Stopped) => Err(ApiError::Offline),
+                Err(SendFailure::Http(error)) => {
                     if is_network_failure(&error) {
                         Err(ApiError::Offline)
                     } else {
@@ -1094,7 +1095,11 @@ impl Api {
                 self.stats.request(&self.tag, 0);
             }
             let mark = self.pin.as_ref().map(|pin| pin.mark());
-            let response = request.send().await.map_err(|err| {
+            let response = send_off_caller(request).await.map_err(|failure| {
+                let err = match failure {
+                    SendFailure::Http(err) => err,
+                    SendFailure::Stopped => return ApiError::Offline,
+                };
                 if !api {
                     // A pinned host that does not answer says nothing about THIS
                     // server: the app stays online when a model host is down.
@@ -1249,10 +1254,9 @@ impl Api {
             }
             self.stats.request(&self.tag, 0);
             let mark = self.pin.as_ref().map(|pin| pin.mark());
-            let response = request
-                .send()
+            let response = send_off_caller(request)
                 .await
-                .map_err(|err| self.send_error(&err, mark))?;
+                .map_err(|failure| self.send_failure(failure, mark))?;
             self.note_reachable();
             let status = response.status().as_u16();
             let headers = response.headers().clone();
@@ -1431,10 +1435,9 @@ impl Api {
             self.stats
                 .request(&self.tag, body.map_or(0, |bytes| bytes.len() as u64));
             let mark = self.pin.as_ref().map(|pin| pin.mark());
-            let response = request
-                .send()
+            let response = send_off_caller(request)
                 .await
-                .map_err(|err| self.send_error(&err, mark))?;
+                .map_err(|failure| self.send_failure(failure, mark))?;
             // Any answer at all — even a 401 — proves the server is reachable.
             self.note_reachable();
             let status = response.status().as_u16();
@@ -1540,6 +1543,14 @@ impl Api {
         current.join(&location).map(Some).map_err(|error| {
             ApiError::Invalid(format!("redirection illisible ({location}) : {error}"))
         })
+    }
+
+    /// [`send_off_caller`]'s failure, classified as [`Api::send_error`] does.
+    fn send_failure(&self, failure: SendFailure, mark: Option<u64>) -> ApiError {
+        match failure {
+            SendFailure::Http(err) => self.send_error(&err, mark),
+            SendFailure::Stopped => ApiError::Offline,
+        }
     }
 
     /// A failed `send`: a certificate this client refused is said as such, and
@@ -1805,6 +1816,58 @@ fn is_network_failure(err: &reqwest::Error) -> bool {
     err.is_connect() || err.is_timeout() || err.is_request() || err.is_body()
 }
 
+/// Why [`send_off_caller`] has no response.
+enum SendFailure {
+    /// reqwest's own error, classified by the caller as it always was.
+    Http(reqwest::Error),
+    /// The runtime the send was spawned on is shutting down: no answer will come.
+    Stopped,
+}
+
+/// Aborts the spawned send when the caller stops waiting for it (a screen that
+/// went away, a cancelled coroutine), so a dropped request costs no bytes.
+struct AbortOnDrop(tokio::task::JoinHandle<Result<reqwest::Response, reqwest::Error>>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Sends `request` on a task of the ambient tokio runtime, never on the thread
+/// that polls the caller's future.
+///
+/// **Why.** The connection is opened inside the send — DNS, TCP, the TLS
+/// handshake and with it the certificate verifier — and an FFI `async fn`
+/// (UniFFI's `async_runtime = "tokio"`) is polled on the FOREIGN caller's thread:
+/// on Android, a Compose screen's coroutine, i.e. the MAIN thread. There the
+/// platform verifier (`rustls-platform-verifier`, which asks
+/// `org.rustls.platformverifier.CertificateVerifier` over JNI) checks revocation
+/// by downloading the CA's CRL, Android's StrictMode refuses network I/O on the
+/// main thread, and the verifier answers "not trusted": every system-trusted
+/// server failed with « Hors ligne » / « certificat non accepté » while a pinned
+/// one passed (the pin overrides the platform's verdict). Measured on v1.6.6's
+/// release APK and on a debug build of the same tree, API 35: `GET /api/version`
+/// to `valid-isrgrootx1.letsencrypt.org` failed from thread == pid, while the
+/// same chain probed from `spawn_blocking` (`Api::probe_certificate`) was trusted.
+/// A handshake on the main thread is also a frozen frame (rule 1) even when it
+/// succeeds.
+///
+/// Outside a runtime (a plain executor in a test) the send runs where it is.
+async fn send_off_caller(
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, SendFailure> {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return request.send().await.map_err(SendFailure::Http);
+    };
+    let mut task = AbortOnDrop(runtime.spawn(request.send()));
+    match (&mut task.0).await {
+        Ok(answer) => answer.map_err(SendFailure::Http),
+        Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
+        Err(_) => Err(SendFailure::Stopped),
+    }
+}
+
 /// The SPA's `TRANSIENT` set: a restart, a cold worker.
 fn is_transient(err: &ApiError) -> bool {
     match err {
@@ -1875,6 +1938,81 @@ pub(crate) fn encode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The connection is opened off the thread that polls the request.**
+    ///
+    /// An FFI `async fn` is polled on the foreign caller's thread — Android's
+    /// MAIN thread for a Compose screen — and the platform certificate verifier
+    /// runs inside the connection's handshake, where StrictMode refuses its
+    /// revocation download (v1.6.6: every system-trusted server answered
+    /// « Hors ligne »). `Handle::block_on` from a plain thread polls exactly like
+    /// that, and the DNS resolver is the connection's first step: it must run on
+    /// a runtime worker. Run against the old `request.send().await` it records the
+    /// test's own thread and fails.
+    #[test]
+    fn a_send_opens_its_connection_off_the_polling_thread() {
+        use std::io::{Read as _, Write as _};
+        use std::sync::Mutex;
+        use std::thread::ThreadId;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .expect("answer");
+        });
+
+        struct Recording {
+            threads: Arc<Mutex<Vec<ThreadId>>>,
+            address: std::net::SocketAddr,
+        }
+        impl reqwest::dns::Resolve for Recording {
+            fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+                self.threads
+                    .lock()
+                    .unwrap()
+                    .push(std::thread::current().id());
+                let address = self.address;
+                Box::pin(
+                    async move { Ok(Box::new(std::iter::once(address)) as reqwest::dns::Addrs) },
+                )
+            }
+        }
+        let threads = Arc::new(Mutex::new(Vec::new()));
+        let client = reqwest::Client::builder()
+            .dns_resolver(Recording {
+                threads: Arc::clone(&threads),
+                address,
+            })
+            .build()
+            .expect("client");
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let caller = std::thread::current().id();
+        let request = client.get(format!("http://neezer.test:{}/", address.port()));
+        let response = match runtime.handle().block_on(send_off_caller(request)) {
+            Ok(response) => response,
+            Err(SendFailure::Http(error)) => panic!("the send failed: {error}"),
+            Err(SendFailure::Stopped) => panic!("the runtime stopped"),
+        };
+        assert_eq!(response.status().as_u16(), 200);
+        server.join().expect("the server thread");
+
+        let threads = threads.lock().unwrap();
+        assert_eq!(threads.len(), 1, "one resolution for one connection");
+        assert_ne!(
+            threads[0], caller,
+            "the connection (and its TLS verifier) ran on the thread that polls the caller"
+        );
+    }
 
     #[test]
     fn a_base_url_must_parse_and_keeps_its_root() {
