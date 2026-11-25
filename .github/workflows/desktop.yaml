@@ -604,6 +604,23 @@ jobs:
         run: cargo build --release --locked --workspace
       - name: Build the x86-64-v3 and x86-64-v4 engine children
         run: tools/build_engine_variants.sh --release
+      # THE RELEASE BINARY OPENS A WINDOW TOO — the one those four files ship.
+      #
+      # `cargo test + window` proves `target/debug/neezer-desktop` paints its
+      # first frame; this job builds the four RELEASE binaries that go into the
+      # packages, and until now none of them was ever opened. A release-only
+      # fault — an optimised path, a stripped symbol, a `--release` link against
+      # a different Vulkan/pipewire — shipped on a green run. Same Xvfb +
+      # lavapipe as the debug job (both come from `APT_DEPS`), same assertion:
+      # the binary prints `first_frame_ms=<n>` before quitting.
+      - name: The release binary opens its window and quits on its first frame
+        run: |
+          set -o pipefail
+          xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            ./target/release/neezer-desktop --self-test-quit-after-first-frame \
+            | tee "$RUNNER_TEMP/first-frame-release.log"
+          grep -E '^first_frame_ms=[0-9]+$' "$RUNNER_TEMP/first-frame-release.log"
+          ./target/release/neezer-transcribe --version
       - name: Binary sizes
         run: |
           du -h target/release/neezer-desktop target/release/neezer-transcribe \
