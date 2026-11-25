@@ -174,6 +174,19 @@ never committed; Rust 1.99.1):
   fails phase 1 (« Hors ligne », `StrictMode…onNetwork` under `URICertStore.engineGetCRLs`, next
   rule) AND phase 2 (`NoSuchMethodError … CoilCovers.Image`, the owner's crash). A failed phase 1
   still runs phase 2, so one run names both defects.
+- **…and then WALKED, on the same minified APK.** A signed-in home is not the app: the owner's third
+  defect was a door, « Réglages → Mode voiture », whose Activity died before its first frame on the
+  release build (MB24) while every CI job stayed green because nothing OPENED it.
+  `mobile/tools/release-journey.sh` follows the sign-in with the eight doors a person uses —
+  Accueil, Rechercher, Bibliothèque, Podcasts, Accueil, Réglages, Lecture & son, Mode voiture — each
+  proved by the literal ONLY that screen draws (`Recherche Neezer`; `Qualité demandée au serveur`,
+  which is `PlaybackSection`'s card and not the menu row that was just tapped; `Déclenchement`,
+  which only `CarSettingsActivity` draws), by `pidof fr.neezer.mobile` after every step, and by an
+  empty crash buffer (`FATAL EXCEPTION`, `ANR in fr.neezer.mobile`, `UnsatisfiedLinkError`). It
+  prints `release_journey=1 doors=8/8 car_settings=1 crash=0`; `ci-emulator.sh` runs it in place of
+  the sign-in alone, so the emulator job is the gate. The helpers live once, in `mobile/tools/ui.sh`,
+  which also XML-unescapes the dumped tree (`&` is `&amp;`) so a needle is the screen's own words —
+  « Lecture & son » included.
 - **A connection is never opened on the thread that polls an FFI future.** UniFFI's
   `async_runtime = "tokio"` only ENTERS a tokio context (`async_compat::Compat`): the Rust future is
   polled on the foreign caller's thread, which for a Compose screen's coroutine is Android's MAIN
@@ -606,8 +619,9 @@ For the underrun/battery measures that need a working audio HAL, `-no-audio` is 
 a real phone over `adb` and say so (see *Measures*).
 
 CI: the `mobile.yaml` workflow enables KVM on the runner (udev rule, the documented GitHub Actions
-recipe) and runs the smoke + Macrobenchmark job on an API 35 x86_64 emulator against
-`tools/perf_api.py --serve` reached at `10.0.2.2`.
+recipe) and runs the shell smoke, the RELEASE JOURNEY (`mobile/tools/release-journey.sh`: signed in
+on the minified APK, then its eight doors — see *Pitfalls*) and the Macrobenchmark job on an API 35
+x86_64 emulator against `tools/perf_api.py --serve` reached at `10.0.2.2`.
 
 **Measured rules around that CI (2026-11-18, completed 2026-11-24).**
 
