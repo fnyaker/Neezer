@@ -84,15 +84,29 @@ ui_screen() {
     printf '%s %s\n' "${width:-1080}" "${height:-2400}"
 }
 
-# Swipes up once: 70 % of the viewport, along the LEFT MARGIN. The margin matters:
-# a vertical drag that starts on a control which owns vertical gestures (the
-# equaliser's ten faders) moves the fader instead of the page — measured on the
-# « Lecture & son » section, whose car card sits after five long effect cards.
+# Swipes up once: from 70 % of the viewport to 30 %, along the LEFT MARGIN.
+#
+# The margin matters: a vertical drag that starts on a control which owns vertical
+# gestures (the equaliser's ten faders) moves the fader instead of the page —
+# measured on the « Lecture & son » section, whose car card sits after five long
+# effect cards. `pageX` is 20 dp (≈53 px on the emulator), so `width / 30` (36 px)
+# is inside the page margin, left of every card, and still inside the scroll
+# container.
+#
+# The START height matters as much: a drag that begins inside the tab bar never
+# reaches the page's scroll container — they are SIBLINGS under the Scaffold, and
+# the bar keeps the gesture. 88 % of 2400 px is 2112 px, and the bar's top is
+# ≈2106 px (64 dp of `tabBar` + the gesture inset), so the eight swipes of the
+# first T1 CI run moved nothing at all on the setup screen and
+# « Accepter ce certificat » stayed "absent" (`release_journey=0 doors=0/8`,
+# run 45695283121). 70 % (1680 px) is above the bar and 30 % (720 px) is above
+# the keyboard's usual band; the 40 %-of-viewport distance is the one
+# `release-signin.sh` had already proven on the same screen.
 ui_swipe_up() {
     local width height
     read -r width height < <(ui_screen)
-    adb_dev shell input swipe $((width / 30)) $((height * 88 / 100)) \
-        $((width / 30)) $((height * 18 / 100)) 240 >/dev/null
+    adb_dev shell input swipe $((width / 30)) $((height * 70 / 100)) \
+        $((width / 30)) $((height * 30 / 100)) 240 >/dev/null
 }
 
 # Hides the keyboard when — and only when — it is shown.
