@@ -8,7 +8,8 @@
   import { tick, onMount, onDestroy } from "svelte";
   import { REMOTE, CAN_KEEP, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
-  import { sheet, swap } from "../lib/motion.js";
+  import { sheet, swap, motionLevel } from "../lib/motion.js";
+  import { tracker, projected, settle, eventTime } from "../lib/gesture.js";
   import {
     player,
     current,
@@ -213,14 +214,32 @@
   // `dragY` (transitions.md P1).
   export let dragY = 0;
   export let dragging = false;
+  // A JS-driven settle owns `dragY` frame by frame; the host's CSS transition
+  // must stand down for the duration or the two fight (transitions.md P1).
+  export let settling = false;
   let dragArmed = false;
   let dragStartX = 0;
   let dragStartY = 0;
   let dragAxis = null;
   // Distance (px) a gesture must travel before we commit it to an axis, and how
-  // far it must be dragged down to actually dismiss on release.
+  // far the sheet has to be dragged to dismiss on release. Past the fraction it
+  // is gone; under it, the RELEASE VELOCITY decides: a 40 px flick at 1.2 px/ms
+  // is a dismissal, a slow 90 px drag is not (plan §3, S1/S4).
   const AXIS_LOCK = 8;
-  const DISMISS_PX = 110;
+  const DISMISS_FRACTION = 0.22;
+  const DISMISS_V = 0.5; // px/ms
+  // How the finger left, for both vertical directions: `vDismiss` in px/ms
+  // positive DOWN, `vReveal` positive UP (the panel opening).
+  const vDismiss = tracker();
+  const vReveal = tracker();
+  const vPanel = tracker();
+  let cancelSettle = null;
+  function stopSettle() {
+    cancelSettle?.();
+    cancelSettle = null;
+    settling = false;
+  }
+  const reduceMotion = () => $motionLevel !== "full";
 
   // -- swipe up: what is under the player ---------------------------------------
   // For music, the credits, the artist and the tracks that sound alike; for a
@@ -236,7 +255,6 @@
   let panelEl = null;
   let closeBtn = null;
   let lastFocus = null;
-  const REVEAL_PX = 70;
   $: if (reveal > 0) {
     panelShown = true;
     clearTimeout(hideTimer);
@@ -249,14 +267,44 @@
     reveal = Math.min(up, panelH());
   }
   // Returns true when the release opened the panel.
+  //
+  // The SAME rule as the dismissal, mirrored: past 22 % of the screen (the same
+  // fraction the sheet dismisses at, plan §3) it opens, and so does a flick
+  // (0.45 px/ms upward) even when it barely travelled. A release that decides
+  // neither returns to where the finger found it — never a jump to 0.
   function revealEnd() {
     if (!revealing) return false;
     revealing = false;
-    if (reveal > REVEAL_PX) {
+    const h = panelH();
+    const v = vReveal.velocity(); // px/ms, positive = the finger was going up
+    if (reveal + projected(v) > h * 0.22 || v > 0.45) {
       openMore();
       return true;
     }
-    closeMore();
+    // It was never open: glide away from where the finger left it (the CSS
+    // transition starts at the current translate, so nothing jumps).
+    if (!more) {
+      closeMore();
+      return false;
+    }
+    const to = h;
+    if (Math.abs(reveal - to) < 0.5) return false;
+    settling = true;
+    cancelSettle?.();
+    cancelSettle = settle({
+      from: reveal,
+      to,
+      velocity: v * 1000,
+      response: 0.3,
+      damping: 0.9,
+      reduce: reduceMotion(),
+      apply: (y) => (reveal = y),
+      done: () => {
+        settling = false;
+        cancelSettle = null;
+        reveal = to;
+      },
+    });
     return false;
   }
   $: if (
@@ -283,6 +331,7 @@
 
   function openMore() {
     if (!moreAvailable) return;
+    stopSettle();
     lastFocus = document.activeElement;
     showQueue = false;
     showLyrics = false;
@@ -293,15 +342,18 @@
     panelShown = true;
     tick().then(() => closeBtn?.focus({ preventScroll: true }));
   }
-  function closeMore() {
+  function closeMore(delay = 320) {
+    stopSettle();
     more = false;
     revealing = false;
     reveal = 0;
     // Unmounted once it has slid away (the glide is --dur-base, 200 ms, and
     // shorter or instant under reduced motion/eco): a bounded margin after it.
+    // A release that was settled frame by frame has ALREADY travelled, so its
+    // caller only needs a frame of margin (`delay`).
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => {
-      if (reveal === 0 && !revealing) {
+      if (Math.abs(reveal) < 0.5 && !revealing) {
         panelShown = false;
         if (lastFocus?.isConnected) lastFocus.focus?.({ preventScroll: true });
         lastFocus = null;
@@ -321,9 +373,12 @@
   let swallowClick = false;
   function panelStart(e) {
     if (e.touches.length !== 1) return;
+    stopSettle();
     const t = e.touches[0];
     const head = !!e.target.closest?.(".under-h");
     panelDrag = { x0: t.clientX, y0: t.clientY, head, top: head || !panelBody || panelBody.scrollTop <= 0, axis: head ? "y" : null };
+    vPanel.reset();
+    vPanel.sample(reveal, eventTime(e));
   }
   function panelMove(e) {
     if (!panelDrag || panelDrag.axis === "no") return;
@@ -339,6 +394,7 @@
     if (e.cancelable) e.preventDefault();
     revealing = true;
     reveal = Math.max(0, Math.min(panelH(), panelH() - dy));
+    vPanel.sample(reveal, eventTime(e));
   }
   function panelEnd() {
     if (!panelDrag) return;
@@ -348,15 +404,50 @@
     // The browser may still synthesise a click from the drag: it opened nothing.
     swallowClick = true;
     setTimeout(() => (swallowClick = false), 400);
-    if (panelH() - reveal > 90) closeMore();
-    else reveal = panelH();
+    const h = panelH();
+    const v = vPanel.velocity(); // px/ms on `reveal`: negative = going away
+    // The same rule as the sheet's own dismiss, mirrored: distance OR speed.
+    if (h - reveal > 90 || -v > 0.45) {
+      // Slide away from where the finger let go, at the finger's speed.
+      panelSettle(0, v, 0.9, () => closeMore(120));
+      return;
+    }
+    // Not a close: spring back up from where the finger let go.
+    panelSettle(h, v, 0.9);
   }
   function panelCancel() {
     // A cancel decides nothing: it stays where it was.
     panelDrag = null;
     if (!revealing) return;
     revealing = false;
-    reveal = more ? panelH() : 0;
+    const to = more ? panelH() : 0;
+    panelSettle(to, 0, 1, to === 0 ? () => closeMore(120) : null);
+  }
+  // One spring for the panel's own release paths: from the finger's offset and
+  // speed. `after` runs once it has landed.
+  function panelSettle(to, v, damping, after = null) {
+    if (Math.abs(reveal - to) < 0.5) {
+      reveal = to;
+      after?.();
+      return;
+    }
+    settling = true;
+    cancelSettle?.();
+    cancelSettle = settle({
+      from: reveal,
+      to,
+      velocity: v * 1000,
+      response: 0.3,
+      damping,
+      reduce: reduceMotion(),
+      apply: (y) => (reveal = y),
+      done: () => {
+        settling = false;
+        cancelSettle = null;
+        reveal = to;
+        after?.();
+      },
+    });
   }
   function onPanelKey(e) {
     if (!more) return;
@@ -394,14 +485,44 @@
     dragY = dy;
   }
   // Returns true when the release actually dismissed the sheet.
+  //
+  // A release neither keeps nor discards the gesture by distance alone: it does
+  // what it was HEADING for. `dragY + projected(v)` is where the sheet would
+  // be 160 ms later at the finger's speed, so a 40 px flick at 1.2 px/ms puts
+  // the sheet 232 px down — past 22 % of it — while a slow 90 px drag does not
+  // (plan §3, S1/S4). Under the threshold the sheet springs back from the
+  // finger's own offset and speed, so it never jumps to 0 under the finger.
+  function sheetHeight() {
+    return document.querySelector(".player-host")?.clientHeight || window.innerHeight;
+  }
   function dismissEnd() {
-    const go = dragging && dragY > DISMISS_PX;
-    dragging = false;
+    if (!dragging) return false;
+    const h = sheetHeight();
+    const v = vDismiss.velocity(); // px/ms, positive down
+    const go = dragY + projected(v) > h * DISMISS_FRACTION || v > DISMISS_V;
     if (go) {
-      close(); // fade out from the dragged position; the component unmounts
+      dragging = false;
+      close(); // slide out from the dragged position; the component unmounts
       return true;
     }
-    dragY = 0; // snap back
+    // Continue from the finger: the spring owns the transform, no CSS transition.
+    settling = true;
+    cancelSettle?.();
+    cancelSettle = settle({
+      from: dragY,
+      to: 0,
+      velocity: v * 1000,
+      response: 0.28,
+      damping: 1,
+      reduce: reduceMotion(),
+      apply: (y) => (dragY = y),
+      done: () => {
+        settling = false;
+        cancelSettle = null;
+        dragging = false;
+        dragY = 0;
+      },
+    });
     return false;
   }
   // A touch does NOT always end with `touchend`. Android cancels the whole
@@ -416,10 +537,13 @@
   //
   // A cancel is never a decision: it snaps back, it never dismisses.
   function resetDrag() {
+    stopSettle();
     dragArmed = false;
     dragAxis = null;
     dragging = false;
     dragY = 0;
+    vDismiss.reset();
+    vReveal.reset();
     if (revealing) {
       revealing = false;
       if (more) reveal = panelH();
@@ -437,10 +561,17 @@
       dragArmed = false;
       return;
     }
+    // A finger landing mid-settle takes the movement back from it.
+    stopSettle();
     dragArmed = true;
     dragAxis = null;
     dragStartX = e.touches[0].clientX;
-    dragStartY = e.touches[0].clientY;
+    // Measured from where the sheet actually is, so re-grabbing a settling
+    // sheet continues instead of teleporting it to the new finger's origin.
+    dragStartY = e.touches[0].clientY - dragY;
+    vDismiss.reset();
+    vReveal.reset();
+    vDismiss.sample(dragY, eventTime(e));
   }
   function onTouchMove(e) {
     if (!dragArmed) return;
@@ -452,9 +583,11 @@
       // cancel the browser's native pull-to-refresh while we drag to dismiss
       if (e.cancelable) e.preventDefault();
       dismissMove(dy);
+      vDismiss.sample(dragY, eventTime(e));
     } else if (dragAxis === "y" && dy < 0) {
       if (e.cancelable) e.preventDefault();
       revealMove(-dy);
+      vReveal.sample(reveal, eventTime(e));
     }
   }
   function onTouchEnd() {
@@ -481,17 +614,25 @@
   }
 
   // -- cover carousel (native scroll-snap) ----------------------------------
-  // [prev?, current, next?] keyed by queue position + track id: the position
-  // keeps the key STABLE as the window slides (advancing reuses each cover's
-  // DOM node — no reload, no fade flash) and the composite stays unique even
-  // when the same track appears twice in a row in the queue (a duplicate id
-  // alone would crash the keyed each). We then re-centre on the reused current
+  // [prev?, current, next?] keyed by the track's OCCURRENCE ORDINAL in the
+  // whole queue. Neither half works alone: `trackKey` is not unique (a queue may
+  // hold the same track twice) and the position is not stable (every slot shifts
+  // by one on an advance). The ordinal is both, so the keyed each reuses each
+  // cover's DOM node across an advance — no reload, no fade flash — while a
+  // duplicate track still gets a distinct key. We then re-centre on the reused
   // node, which cancels the reorder -> seamless, glitch-free.
+  const trackKeys = (i) => trackKey(q[i]);
+  function slotKey(i) {
+    const k = trackKeys(i);
+    let n = 0;
+    for (let j = 0; j < i; j++) if (trackKeys(j) === k) n++;
+    return k + "#" + n;
+  }
   $: slots = (() => {
     const s = [];
     if (idx < 0) return s;
     for (const i of [idx - 1, idx, idx + 1]) {
-      if (i >= 0 && i < q.length) s.push({ track: q[i], key: i + ":" + trackKey(q[i]) });
+      if (i >= 0 && i < q.length) s.push({ track: q[i], key: slotKey(i) });
     }
     return s;
   })();
@@ -626,6 +767,12 @@
     stopAnim();
     clearTimeout(settleTimer);
     setSnap(false);
+    stopSettle();
+    dragging = false;
+    dragY = 0;
+    vDismiss.reset();
+    vReveal.reset();
+    vDismiss.sample(dragY, eventTime(e));
     covDragging = false; // not yet — we don't know whose gesture this is
     covAxis = null;
     recentering = true; // our scroll writes must not look like a user settle
@@ -667,8 +814,13 @@
     }
     if (covAxis === "y") {
       const dy = y - covStartY;
-      if (dy >= 0) dismissMove(dy);
-      else revealMove(-dy);
+      if (dy >= 0) {
+        dismissMove(dy);
+        vDismiss.sample(dragY, eventTime(e));
+      } else {
+        revealMove(-dy);
+        vReveal.sample(reveal, eventTime(e));
+      }
       return;
     }
 
@@ -859,12 +1011,14 @@
       }
     }
     if (nearest < curSlot && prevT) {
+      captureAnchor();
       swipeAdvance = true;
       // Go to the adjacent track unconditionally — NOT player.prev(), whose
       // "restart current if >3s" semantics (right for the button) would replay
       // the same track while the carousel has already moved to the prev cover.
       player.jump(idx - 1);
     } else if (nearest > curSlot && nextT) {
+      captureAnchor();
       swipeAdvance = true;
       player.jump(idx + 1);
     } else {
@@ -889,6 +1043,13 @@
   // swipe-advance (the "enabling shuffle skips to the next song" bug). Handling
   // the reindex re-centres instead.
   $: if (scroller && idx >= 0 && $current) recenter(trackKey($current), idx);
+  // The node a commit is anchored to, captured BEFORE the store change so its
+  // own move can be applied to the scroll offset once the strip has reordered.
+  let pendingAnchor = null;
+  function captureAnchor() {
+    const node = scroller ? scroller.children[curSlot] : null;
+    pendingAnchor = node ? { node, before: node.offsetLeft } : null;
+  }
   async function recenter(id, index) {
     const idChanged = id !== lastId;
     const idxChanged = index !== prevIdx;
@@ -899,11 +1060,26 @@
     prevIdx = index;
     const wasSwipe = swipeAdvance;
     swipeAdvance = false;
+    // A swipe already had the strip where the finger left it: after the reorder
+    // we must move the scroll by exactly the distance the SAME node moved, so
+    // the pixels under the finger do not change. Never assign a recomputed
+    // centre here — that is the whole-cover jump this fixes.
+    const anchor = wasSwipe ? pendingAnchor : null;
+    pendingAnchor = null;
+    const node = anchor ? anchor.node : wasSwipe && scroller ? scroller.children[curSlot] : null;
+    const before = anchor ? anchor.before : node ? node.offsetLeft : 0;
     await tick();
-    // Open, a finger swipe, or a same-track reindex (shuffle/reorder) -> just
-    // snap to centre. A real track change (button / auto-advance) slides in.
-    if (first || wasSwipe || !idChanged) centerCurrent();
-    else slideToCurrent(dir);
+    if (node && scroller && scroller.contains(node)) {
+      stopAnim();
+      holdRecenter(60);
+      scroller.scrollLeft += node.offsetLeft - before;
+    } else if (first || wasSwipe || !idChanged) {
+      // Nothing to anchor to (first paint, a reindex): snap to centre.
+      centerCurrent();
+    } else {
+      // A real track change (button / auto-advance) slides the new cover in.
+      slideToCurrent(dir);
+    }
   }
   onDestroy(() => {
     stopAnim();
@@ -1119,6 +1295,7 @@
     <div
       class="under"
       class:revealing
+      class:settling
       bind:this={panelEl}
       style={`transform:translateY(${panelH() - reveal}px)`}
       role="dialog"
@@ -1935,7 +2112,11 @@
   .under.revealing {
     transition: none;
   }
-  .under-h {
+  /* A JS settle writes `reveal` frame by frame; the CSS transition must not
+     fight it (the same rule as `.player-host.settling`). */
+  .under.settling {
+    transition: none;
+  }  .under-h {
     flex: none;
     touch-action: none;
     padding: calc(var(--safe-top, env(safe-area-inset-top, 0px)) + 4px) 10px 4px 18px;

@@ -17,7 +17,8 @@
   import { openMenuAt, keepNativeMenu, menuKey } from "../lib/trackmenu.js";
   import { duration as fmtDuration } from "../lib/format.js";
   import { playbackIdle } from "../lib/playback.js";
-  import { swap } from "../lib/motion.js";
+  import { swap, motionLevel } from "../lib/motion.js";
+  import { tracker, settle, eventTime } from "../lib/gesture.js";
   import Icon from "./Icon.svelte";
   import { iconOf, offMain, sourceTitle } from "../lib/sources.js";
   import Cover from "./Cover.svelte";
@@ -87,6 +88,7 @@
   // page background — gradient header included — it happens to sit on.
   const AXIS_LOCK = 10; // px before a gesture commits to an axis
   const COMMIT = 64; // px of pull that actually queues the track
+  const COMMIT_V = 0.6; // px/ms: a flick queues it even when it barely moved
   const MAX_PULL = 104; // hard stop, rubber-banded past COMMIT
   // iOS reserves the very left edge for its own back gesture; starting there
   // means the system wins mid-drag and we would be left holding a translated
@@ -100,6 +102,10 @@
   let startX = 0;
   let startY = 0;
   let swiped = false; // this gesture ended in a commit -> swallow the click
+  // How the finger left: px/ms, positive to the right.
+  const vx = tracker();
+  let cancelSettle = null;
+  let settling = false;
 
   $: committed = dx >= COMMIT;
 
@@ -113,10 +119,13 @@
   }
 
   function resetSwipe() {
+    cancelSettle?.();
+    cancelSettle = null;
     armed = false;
     axis = null;
     dragging = false;
     dx = 0;
+    vx.reset();
   }
 
   function onTouchStart(e) {
@@ -132,10 +141,15 @@
       armed = false;
       return;
     }
+    // A finger landing mid-settle takes the row back from the spring.
+    cancelSettle?.();
+    cancelSettle = null;
     armed = true;
     axis = null;
     startX = t.clientX;
     startY = t.clientY;
+    vx.reset();
+    vx.sample(t.clientX, eventTime(e));
   }
 
   function onTouchMove(e) {
@@ -159,6 +173,7 @@
     if (e.cancelable) e.preventDefault();
     dragging = true;
     dx = mx <= COMMIT ? mx : COMMIT + Math.min(MAX_PULL - COMMIT, (mx - COMMIT) * 0.35);
+    vx.sample(t.clientX, eventTime(e));
   }
 
   // The click the browser synthesises after a drag would play the track (or hit
@@ -175,7 +190,11 @@
   function onTouchEnd(e) {
     if (!armed) return;
     armed = false;
-    const go = axis === "x" && dx >= COMMIT;
+    const v = vx.velocity();
+    // A flick decides by INTENT: 30 px at 1.5 px/ms queues the track, a slow
+    // 50 px pull does not (plan §3, S4). The two must agree — a fast return
+    // toward the left after over-pulling means "no".
+    const go = axis === "x" && (dx >= COMMIT || v > COMMIT_V);
     // Any horizontal drag has already moved the row under the finger: the click
     // the browser would synthesise from it would play the track (or hit a
     // control) on release. Swallow it.
@@ -185,15 +204,37 @@
     }
     axis = null;
     dragging = false;
-    dx = 0;
     if (go) {
+      // The row leaves under its own momentum instead of snapping to 0.
+      settleBack(v);
       player.playNext([track]);
       try {
         navigator.vibrate?.(12);
       } catch {
         /* no haptics here — the queue still got the track */
       }
+    } else if (dx > 0) {
+      // Not a commit: spring back from where the finger let go.
+      settleBack(v);
     }
+  }
+  function settleBack(v) {
+    cancelSettle?.();
+    settling = true;
+    cancelSettle = settle({
+      from: dx,
+      to: 0,
+      velocity: v * 1000,
+      response: 0.3,
+      damping: 0.85,
+      reduce: $motionLevel !== "full",
+      apply: (x) => (dx = x),
+      done: () => {
+        cancelSettle = null;
+        settling = false;
+        dx = 0;
+      },
+    });
   }
 </script>
 
@@ -203,6 +244,7 @@
 <div
   class="swipe"
   class:dragging
+  class:settling
   on:touchstart|passive={onTouchStart}
   on:touchmove={onTouchMove}
   on:touchend={onTouchEnd}
@@ -346,6 +388,11 @@
   }
   .swipe.dragging .track,
   .swipe.dragging .action {
+    transition: none;
+  }
+  /* A JS settle owns the transform and the strip's width frame by frame. */
+  .swipe.settling .track,
+  .swipe.settling .action {
     transition: none;
   }
   .swipe.dragging .track {

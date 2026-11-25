@@ -9,6 +9,8 @@
   import { onMount, onDestroy, createEventDispatcher } from "svelte";
   import RecapSlide from "./RecapSlide.svelte";
   import { cardIds, slideTitle } from "../lib/recap.js";
+  import { ecoMode } from "../lib/stores.js";
+  import { tracker, settle, eventTime } from "../lib/gesture.js";
 
   export let payload;
   export let index = 0;
@@ -32,6 +34,12 @@
   let rootEl = null;
   let swipe = null;
   let suppressTapUntil = 0;
+  // The card follows the finger and settles on its release velocity (plan W1,
+  // S4): the deck used to decide on distance alone at pointerup, in one frame.
+  let cardEl = null;
+  let dragX = 0;
+  let cancelSettle = null;
+  const vt = tracker();
   const queries = [];
 
   $: ids = cardIds(payload);
@@ -102,26 +110,102 @@
     // A gesture that starts on a real control belongs to that control.
     const control = e.target && e.target.closest && e.target.closest(".slide button, .slide a, .slide input");
     if (control) return;
+    cancelSettle?.();
+    cancelSettle = null;
     holding = true;
+    dragX = 0;
+    // The deck's tap zones sit ON TOP of the slide, so the event target is not
+    // inside the card: the card to move is the active one.
+    cardEl =
+      (rootEl && rootEl.querySelector(".slide-wrap.active")) ||
+      (e.target.closest && e.target.closest(".slide-wrap")) ||
+      null;
     swipe = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    vt.reset();
+    vt.sample(e.clientX, eventTime(e));
+    // Followed on the WINDOW: the card may leave the DOM under the finger.
+    window.addEventListener("pointermove", onPointerMove);
+  }
+
+  // 1:1 under the finger, rubber-banded past half the card so a big pull never
+  // tears the card off its stage before the release decides.
+  function onPointerMove(e) {
+    if (!swipe || e.pointerId !== swipe.id || !cardEl) return;
+    const dx = e.clientX - swipe.x;
+    const dy = e.clientY - swipe.y;
+    // A vertical drag scrolls the page: it is not the card's.
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 8) return;
+    vt.sample(e.clientX, eventTime(e));
+    const w = cardEl.clientWidth || 1;
+    const half = w / 2;
+    const out = Math.abs(dx) > half ? half + (Math.abs(dx) - half) * 0.35 : Math.abs(dx);
+    writeCard(dx < 0 ? -out : out);
+  }
+  function writeCard(x) {
+    dragX = x;
+    if (cardEl) cardEl.style.transform = x ? `translateX(${x}px)` : "";
   }
   function onPointerUp(e) {
     holding = false;
     if (!swipe || swipe.id !== e.pointerId) {
       swipe = null;
+      detachMove();
       return;
     }
-    const dx = e.clientX - swipe.x;
-    const dy = e.clientY - swipe.y;
+    const v = vt.velocity(); // px/ms, positive to the right
     swipe = null;
-    if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+    detachMove();
+    if (!cardEl) return;
+    const w = cardEl.clientWidth || 1;
+    // Direction from what the finger DID, or — for a flick that barely moved —
+    // from where it was heading.
+    const sign = Math.abs(dragX) > 1 ? Math.sign(dragX) : Math.sign(v);
+    const canGo = sign < 0 ? index < ids.length - 1 : index > 0;
+    const goAhead = (Math.abs(dragX) > w * 0.35 || Math.abs(v) > 0.7) && sign !== 0 && canGo;
+    if (goAhead) {
       suppressTapUntil = Date.now() + 400;
-      go(dx < 0 ? 1 : -1);
+      settleCard(sign < 0 ? -w : w, v * 1000, 0.82, () => {
+        writeCard(0);
+        cardEl = null;
+        go(sign < 0 ? 1 : -1);
+      });
+      return;
     }
+    if (dragX) settleCard(0, v * 1000, 1, () => {
+      writeCard(0);
+      cardEl = null;
+    });
+    else cardEl = null;
+  }
+  function settleCard(to, velocity, damping, after) {
+    cancelSettle?.();
+    cancelSettle = settle({
+      from: dragX,
+      to,
+      velocity,
+      response: to === 0 ? 0.28 : 0.32,
+      damping,
+      reduce: reduce || $ecoMode,
+      apply: writeCard,
+      done: () => {
+        cancelSettle = null;
+        after?.();
+      },
+    });
+  }
+  function detachMove() {
+    window.removeEventListener("pointermove", onPointerMove);
   }
   function onPointerCancel() {
     holding = false;
     swipe = null;
+    detachMove();
+    // A cancel is never a decision (S8): spring back, never advance.
+    if (cardEl && dragX) settleCard(0, 0, 1, () => {
+      writeCard(0);
+      cardEl = null;
+    });
+    else cardEl = null;
   }
 
   onMount(() => {
@@ -146,7 +230,11 @@
     };
   });
 
-  onDestroy(() => clearTimeout(timer));
+  onDestroy(() => {
+    clearTimeout(timer);
+    cancelSettle?.();
+    detachMove();
+  });
 </script>
 
 <!-- The deck is a keyboard-operable reading region: the handler lives on the
