@@ -159,6 +159,21 @@ never committed; Rust 1.99.1):
   `NoSuchMethodError: No static method e(...) in class Lkotlin/jvm/internal/k;`. `ReleaseTlsTrustTest`
   therefore lives in the ordinary instrumented suite (debug); the minified APK itself is driven from
   OUTSIDE by `mobile/tools/release-signin.sh` (next rule).
+- **…and every module's `-keep` promise, not only the one bug already seen.** The three-class TLS grep
+  catches v1.6.5 and nothing else: a reflective edge that is not named in that list is unguarded. The
+  `apk` job therefore also runs `mobile/tools/r8-kept-classes.py`, which reads the SOURCE OF TRUTH —
+  every `proguard-rules.pro` and `consumer-rules.pro` under `mobile/android` — and proves each
+  `-keep class <pattern>` on the shipped artifact: the class is in `mapping.txt` unrenamed (`X -> X:`,
+  never `X -> a.b:`), its `LX;` descriptor is in the universal APK's dex, and a rule that matches no
+  class is red (dead config, or a dependency that vanished). One run over the tree prints
+  `r8_kept_classes=1 specs=7 classes=<n> synthetic_skipped=<m>`; the TLS greps stay as the fast
+  pre-check they always were. R8's own synthesised classes (`Foo$$ExternalSyntheticLambda3`,
+  `Foo$$ExternalSyntheticOutline0`) are skipped and counted — R8 replaced them with a direct call,
+  nothing names them — measured on this PR: **102 synthetic classes renamed under `-keep class
+  uniffi.**` / `fr.neezer.mobile.bridge.**`, zero hand-written class renamed**. A missing MEMBER
+  (the `CoilCovers.Image` shape of crash) is not visible this way — that one was a
+  Compose compiler plugin, refused at compile time by `checkComposeCompiler` — so the keep check
+  guards the name, and the release journey guards the runtime.
 - **A release is proved signed in, not only opened.** v1.6.5 (verifier stripped by R8) and v1.6.6
   (a crash on the home's first cover) both passed every CI job, because the emulator smoke walked a
   shell with no server. `ci-emulator.sh` now runs `mobile/tools/release-signin.sh` on the universal
@@ -632,6 +647,19 @@ CI: the `mobile.yaml` workflow enables KVM on the runner (udev rule, the documen
 recipe) and runs the shell smoke, the RELEASE JOURNEY (`mobile/tools/release-journey.sh`: signed in
 on the minified APK, then its eight doors — see *Pitfalls*) and the Macrobenchmark job on an API 35
 x86_64 emulator against `tools/perf_api.py --serve` reached at `10.0.2.2`.
+
+**The instrumented step gets the bench servers its `assumeTrue` gates ask for.** A gate that skips
+when its fixture is absent is honest on a developer machine and a silent hole in CI: run
+**45688339009** printed `Tests 16/10 completed. (8 skipped)` in `:playback` and the job was green.
+`ci-emulator.sh` now starts, before the instrumented step and stops them in `cleanup`:
+`mobile/tools/tone-server.py` on **4711** (the default `nzServer` of the 7 `NzMediaServiceTest`
+tests — MB3c's real FLAC per title, and the coexist run measured **7/7 pass** against it) and
+`mobile/tools/perf-server.sh` on **5610** (the default `SERVER` of `LanNodeLifecycleTest`; it only
+needs `set_server` + `login(bench, Bench1)`, so the seed is 200 titles, not the 8 000-track measure).
+`AutoBrowseTest` (a 200-favourite / 6-playlist / 120-title seed on 5595) and `PartyDeviceTest` (a
+party server plus ffmpeg) stay gated: their fixtures are the lots' own and the tests keep saying so.
+A server that fails to answer is a red job — a fixture CI owns must never degrade back into a skip.
+
 
 **Measured rules around that CI (2026-11-18, completed 2026-11-24).**
 

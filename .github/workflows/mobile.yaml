@@ -504,6 +504,29 @@ jobs:
           fi
           echo "   found $descriptor in $(basename "$APK") ($(stat -c %s "$APK") bytes)"
 
+      # EVERY KEEP RULE, ACROSS EVERY MODULE, HELD TO THE SHIPPED APK.
+      #
+      # The two steps above name the TLS classes by hand: they catch the bug
+      # already seen, not the next reflective edge R8 strips. This reads the
+      # source of truth — each module's `-keep` rules — and proves each promise on
+      # the artifact a person installs: its class is in `mapping.txt` unrenamed
+      # (`X -> X:`), and its `LX;` descriptor is in the shipped dex. A rule that
+      # matches nothing is red too (dead config, or a dependency that vanished).
+      #
+      # `mapping.txt` and the universal APK are the two files `assembleRelease`
+      # just wrote; the TLS steps stay as the fast pre-check they always were.
+      - name: Every kept class is in the shipped APK (all modules)
+        run: |
+          set -euo pipefail
+          mapfile -t rules < <(find mobile/android -type f \
+            \( -name 'proguard-rules.pro' -o -name 'consumer-rules.pro' \) \
+            -not -path '*/build/*' | sort)
+          (( ${#rules[@]} > 0 )) || { echo "::error::no -keep rule file found under mobile/android"; exit 1; }
+          printf '   rules: %s\n' "${rules[*]}"
+          python3 mobile/tools/r8-kept-classes.py \
+            --mapping mobile/android/app/build/outputs/mapping/release/mapping.txt \
+            --apk "$APK" "${rules[@]}"
+
       # THE RELEASE ASSETS' OWN NAMES. `neezer.apk` belongs to the WebView app
       # (android.yaml): a native asset must never be called that, and a person
       # downloading from the release page must see which app each file is.
