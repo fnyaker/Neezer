@@ -19,7 +19,9 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from datetime import datetime, timedelta
+from io import BytesIO
 from unittest import mock
 
 import peewee
@@ -40,6 +42,7 @@ from neezer.managers.user import UserManager
 from neezer.transcribe import engine, job, runner, settings
 from neezer.web import create_application
 from neezer.webui.remote import POLICY
+from neezer.webui.export import _claim_export, _release_export
 from neezer.webui.transcribe import (
     mark_limiter,
     panel_search_limiter,
@@ -311,6 +314,17 @@ class TranscriptionApiTestCase(unittest.TestCase):
             ("GET", "/api/podcast/episode/%s/transcript" % episode.id, None),
             ("GET", "/api/podcast/%s/transcript/search?q=memoire" % channel.id, None),
             ("GET", "/api/transcripts/search?q=memoire", None),
+            (
+                "GET",
+                "/api/podcast/episode/%s/transcript/export?format=txt" % episode.id,
+                None,
+            ),
+            ("GET", "/api/podcast/%s/transcripts/seasons" % channel.id, None),
+            (
+                "GET",
+                "/api/podcast/%s/transcripts/export?season=all&format=txt" % channel.id,
+                None,
+            ),
         ]
         for method, path, body in calls:
             response = anonymous.open(path, method=method, json=body)
@@ -1321,6 +1335,9 @@ class TranscriptionApiTestCase(unittest.TestCase):
         for name, level in (
             ("transcribe_status", "read"),
             ("episode_transcript", "read"),
+            ("episode_transcript_export", "read"),
+            ("show_transcript_seasons", "read"),
+            ("show_transcripts_export", "read"),
             ("show_transcript_search", "read"),
             ("podcast_search", "read"),
             ("transcribe_settings", "never"),
@@ -1330,6 +1347,235 @@ class TranscriptionApiTestCase(unittest.TestCase):
             ("delete_episode_transcript", "never"),
         ):
             self.assertEqual(POLICY[name], level, name)
+
+    # -- exporting the text -----------------------------------------------------
+
+    def test_an_episode_exports_each_format_as_one_file(self):
+        channel = self.channel(title="La Mémoire")
+        episode = self.episode(channel, number=1, title="Épisode 1 — Le labo")
+        self.transcript(episode)
+        base = "/api/podcast/episode/%s/transcript/export" % episode.id
+
+        txt = self.client.get(base + "?format=txt")
+        self.assertEqual(txt.status_code, 200, txt.get_json())
+        self.assertEqual(txt.mimetype, "text/plain")
+        self.assertIn("attachment;", txt.headers["Content-Disposition"])
+        self.assertIn("filename*=UTF-8''", txt.headers["Content-Disposition"])
+        self.assertEqual(txt.headers["Cache-Control"], "no-store")
+        body = txt.get_data(as_text=True)
+        self.assertTrue(
+            body.startswith(
+                "Titre : Épisode 1 — Le labo\nÉmission : La Mémoire\nDate : "
+            ),
+            body[:120],
+        )
+        self.assertIn("[00:00:00] Bonjour à tous.", body)
+
+        srt = self.client.get(base + "?format=srt")
+        self.assertEqual(srt.mimetype, "application/x-subrip")
+        self.assertTrue(
+            srt.get_data(as_text=True).startswith(
+                "1\n00:00:00,000 --> 00:00:06,000\n"
+            )
+        )
+        vtt = self.client.get(base + "?format=vtt")
+        self.assertEqual(vtt.mimetype, "text/vtt")
+        self.assertTrue(
+            vtt.get_data(as_text=True).startswith("WEBVTT\n\n00:00:00.000")
+        )
+        md = self.client.get(base + "?format=md")
+        self.assertEqual(md.mimetype, "text/markdown")
+        self.assertTrue(
+            md.get_data(as_text=True).startswith(
+                "# Épisode 1 — Le labo\n\n*La Mémoire — "
+            )
+        )
+        # Podcasts are server-wide: bob reads the same text, and the export
+        # grants no write.
+        self.assertEqual(self.user_client.get(base + "?format=txt").status_code, 200)
+
+    def test_an_episode_without_ready_text_is_refused(self):
+        channel = self.channel()
+        blank = self.episode(channel, number=2)
+        queued = self.episode(channel, number=3)
+        self.transcript(queued, status="queued")
+        for episode in (blank, queued):
+            response = self.client.get(
+                "/api/podcast/episode/%s/transcript/export?format=txt" % episode.id
+            )
+            self.assertEqual(response.status_code, 409, episode.id)
+            self.assertEqual(
+                response.get_json()["error"], "pas encore de transcription"
+            )
+
+    def test_an_unknown_format_or_id_is_refused(self):
+        channel = self.channel()
+        episode = self.episode(channel)
+        self.transcript(episode)
+        base = "/api/podcast/episode/%s/transcript/export" % episode.id
+        for query in ("", "?format=", "?format=ass"):
+            self.assertEqual(self.client.get(base + query).status_code, 400, query)
+        for path in (
+            "/api/podcast/episode/not-a-uuid/transcript/export?format=txt",
+            "/api/podcast/episode/00000000-0000-4000-8000-000000000000/transcript/export?format=txt",
+            "/api/podcast/00000000-0000-4000-8000-000000000000/transcripts/seasons",
+            "/api/podcast/00000000-0000-4000-8000-000000000000/transcripts/export?season=all&format=txt",
+        ):
+            self.assertEqual(self.client.get(path).status_code, 404, path)
+
+    def test_the_season_list_is_derived_from_the_titles(self):
+        channel = self.channel(title="Show")
+        one = self.episode(channel, number=1, title="Saison 1 - Un")
+        two = self.episode(channel, number=2, title="Saison 2 - Deux")
+        other = self.episode(channel, number=3, title="Hors série")
+        self.transcript(one)
+        self.transcript(two)
+        body = self.client.get(
+            "/api/podcast/%s/transcripts/seasons" % channel.id
+        ).get_json()
+        self.assertEqual(
+            [season["key"] for season in body["seasons"]], ["s2", "s1", "autres"]
+        )
+        self.assertEqual(
+            [season["label"] for season in body["seasons"]],
+            ["Saison 2", "Saison 1", "Hors saison"],
+        )
+        self.assertEqual(
+            body["seasons"][0],
+            {"key": "s2", "label": "Saison 2", "episodes": 1, "transcribed": 1},
+        )
+        self.assertEqual(
+            body["seasons"][2],
+            {"key": "autres", "label": "Hors saison", "episodes": 1, "transcribed": 0},
+        )
+        self.assertEqual(body["all"], {"episodes": 3, "transcribed": 2})
+        # Bob sees the same list: a podcast is server-wide.
+        self.assertEqual(
+            self.user_client.get(
+                "/api/podcast/%s/transcripts/seasons" % channel.id
+            ).status_code,
+            200,
+        )
+
+    def test_the_season_list_costs_the_same_for_10_and_200_episodes(self):
+        def build(count):
+            channel = self.channel(title="Show %d" % count)
+            episodes = [
+                self.episode(channel, number=number, title="Épisode %d" % number)
+                for number in range(1, count + 1)
+            ]
+            self.transcript(episodes[0])
+            return channel, episodes
+
+        small, small_episodes = build(10)
+        big, big_episodes = build(200)
+        counts = []
+        for channel, episodes in ((small, small_episodes), (big, big_episodes)):
+            with statements() as seen:
+                response = self.client.get(
+                    "/api/podcast/%s/transcripts/seasons" % channel.id
+                )
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertEqual(response.get_json()["all"]["episodes"], len(episodes))
+            counts.append(len(seen))
+        self.assertEqual(counts[0], counts[1], counts)
+        # The session's user read plus the route's own three: channel, episode
+        # list, ready ids.
+        self.assertEqual(counts[0], 4, counts)
+
+    def test_a_season_exports_the_ready_texts_and_names_the_missing_ones(self):
+        channel = self.channel(title="La Mémoire")
+        titles = [
+            "Saison 1 - Un",
+            "Saison 1 - Deux",
+            "Saison 1 - Trois",
+            "Saison 1 - Quatre",
+            "Saison 1 - Cinq",
+        ]
+        episodes = [
+            self.episode(channel, number=index + 1, title=title)
+            for index, title in enumerate(titles)
+        ]
+        self.transcript(episodes[0])
+        self.transcript(episodes[1], status="running")
+        self.transcript(episodes[2])
+        self.transcript(episodes[3], status="error", error_code="exit")
+        before = PodcastTranscript.select().count()
+
+        response = self.client.get(
+            "/api/podcast/%s/transcripts/export?season=s1&format=srt" % channel.id
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.mimetype, "application/zip")
+        self.assertIn("Saison 1.zip", response.headers["Content-Disposition"])
+        self.assertEqual(response.headers["X-Accel-Buffering"], "no")
+        with zipfile.ZipFile(BytesIO(response.data)) as archive:
+            self.assertEqual(
+                archive.namelist(),
+                [
+                    "001 - Saison 1 - Un.srt",
+                    "003 - Saison 1 - Trois.srt",
+                    "MANQUANTS.txt",
+                ],
+            )
+            self.assertTrue(
+                archive.read("001 - Saison 1 - Un.srt")
+                .decode("utf-8")
+                .startswith("1\n00:00:00,000 --> 00:00:06,000\n")
+            )
+            missing = archive.read("MANQUANTS.txt").decode("utf-8")
+        self.assertIn("002 - Saison 1 - Deux — en cours", missing)
+        self.assertIn("004 - Saison 1 - Quatre — échec : exit", missing)
+        self.assertIn("005 - Saison 1 - Cinq — en attente", missing)
+        # A pure read: the export started nothing and wrote nothing.
+        self.assertEqual(PodcastTranscript.select().count(), before)
+        self.assertEqual(
+            PodcastTranscript.get(PodcastTranscript.episode == episodes[1].id).status,
+            "running",
+        )
+
+        whole = self.client.get(
+            "/api/podcast/%s/transcripts/export?season=all&format=md" % channel.id
+        )
+        self.assertEqual(whole.status_code, 200, whole.get_json())
+        self.assertIn("Int", whole.headers["Content-Disposition"])
+        with zipfile.ZipFile(BytesIO(whole.data)) as archive:
+            self.assertEqual(
+                archive.namelist()[:2],
+                ["001 - Saison 1 - Un.md", "003 - Saison 1 - Trois.md"],
+            )
+
+    def test_an_empty_or_unknown_season_is_refused(self):
+        channel = self.channel()
+        self.episode(channel, number=1, title="Saison 1 - Un")
+        self.transcript(self.episode(channel, number=2, title="Saison 2 - Deux"))
+        base = "/api/podcast/%s/transcripts/export" % channel.id
+        self.assertEqual(self.client.get(base + "?season=s1&format=txt").status_code, 409)
+        self.assertEqual(self.client.get(base + "?season=zzz&format=txt").status_code, 404)
+        self.assertEqual(self.client.get(base + "?format=txt").status_code, 400)
+        self.assertEqual(self.client.get(base + "?season=s2&format=ass").status_code, 400)
+
+    def test_one_export_at_a_time_per_user(self):
+        channel = self.channel(title="Show")
+        for number in (1, 2):
+            self.transcript(
+                self.episode(channel, number=number, title="Saison 1 - %d" % number)
+            )
+        url = "/api/podcast/%s/transcripts/export?season=all&format=txt" % channel.id
+        uid = str(self.alice.id)
+        self.assertTrue(_claim_export(uid))
+        try:
+            busy = self.client.get(url)
+            self.assertEqual(busy.status_code, 429)
+            self.assertEqual(busy.get_json()["code"], "export_running")
+        finally:
+            _release_export(uid)
+        # Consuming the stream releases the slot, so the next export starts.
+        first = self.client.get(url)
+        self.assertEqual(first.status_code, 200, first.get_json())
+        self.assertTrue(first.data)
+        second = self.client.get(url)
+        self.assertEqual(second.status_code, 200, second.get_json())
 
 
 if __name__ == "__main__":

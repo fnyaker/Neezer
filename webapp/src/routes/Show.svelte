@@ -5,7 +5,7 @@
   import { api } from "../lib/api.js";
   import { online } from "../lib/net.js";
   import { get } from "svelte/store";
-  import { player, currentId, playing, isAdmin, toasts, seekTo, openExport, immersiveOpen } from "../lib/stores.js";
+  import { player, currentId, playing, isAdmin, toasts, seekTo, openExport, openTranscriptExport, immersiveOpen } from "../lib/stores.js";
   import { podcastProgress, setResumePoint } from "../lib/podcastProgress.js";
   import { episodeMarkers, loadShowMarkers, removeMarker } from "../lib/markers.js";
   import { chaptersByEpisode, loadChapters, chapterAt, chapterCountLabel } from "../lib/chapters.js";
@@ -866,6 +866,14 @@
         {#if queuedCount}
           <p class="tr-help">{queuedCount} épisode{queuedCount > 1 ? "s" : ""} en attente de transcription.</p>
         {/if}
+        <button
+          type="button"
+          class="tr-btn ghost"
+          on:click={() => openTranscriptExport(id, data.title)}
+          title="Télécharger le texte des épisodes prêts (TXT, SRT, WebVTT, Markdown)"
+        >
+          <Icon name="download" size={15} /> Exporter les transcriptions
+        </button>
       </section>
     {/if}
 

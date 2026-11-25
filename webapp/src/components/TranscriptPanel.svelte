@@ -88,6 +88,13 @@
 
   let menu = null;
   let menuOpen = false;
+  let exportOpen = false;
+  const EXPORT_FORMATS = [
+    { id: "txt", label: "Texte (.txt)" },
+    { id: "srt", label: "Sous-titres (.srt)" },
+    { id: "vtt", label: "WebVTT (.vtt)" },
+    { id: "md", label: "Markdown (.md)" },
+  ];
   let actionBusy = false;
   let actionError = "";
   let retryLeft = 0;
@@ -832,9 +839,21 @@
     }
   }
 
+  // A plain download: the server renders the file and the browser's own
+  // download manager takes it (works in the Android WebView, no blob).
+  function exportTranscript(fmt) {
+    exportOpen = false;
+    if (!epId) return;
+    window.location.href = api.transcriptExportUrl(epId, fmt);
+    announceText = "Export de la transcription lancé.";
+  }
+
   function onKeydown(event) {
     if (event.key !== "Escape") return;
-    if (menuOpen) {
+    if (exportOpen) {
+      exportOpen = false;
+      event.stopPropagation();
+    } else if (menuOpen) {
       menuOpen = false;
       event.stopPropagation();
     } else if (menu) {
@@ -1089,6 +1108,29 @@
           </button>
         {/if}
       </div>
+      {#if status === "ready"}
+        <div class="menu-wrap">
+          <button
+            type="button"
+            class="btn ghost"
+            aria-haspopup="menu"
+            aria-expanded={exportOpen}
+            title="Exporter la transcription"
+            on:click={() => (exportOpen = !exportOpen)}
+          >
+            <Icon name="download" size={16} /> Exporter
+          </button>
+          {#if exportOpen}
+            <div class="menu" role="menu" transition:pop={{ origin: "top right", placement: "down" }}>
+              {#each EXPORT_FORMATS as entry (entry.id)}
+                <button type="button" role="menuitem" on:click={() => exportTranscript(entry.id)}>
+                  {entry.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
       {#if admin && isTerminalStatus(status)}
         <div class="menu-wrap">
           <button
