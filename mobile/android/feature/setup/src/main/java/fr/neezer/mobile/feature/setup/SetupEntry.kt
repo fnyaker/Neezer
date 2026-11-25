@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -31,7 +32,11 @@ import android.app.Activity
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.autofill.ContentType
+import androidx.compose.ui.platform.LocalAutofillManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -190,7 +195,7 @@ fun SetupEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
                     }
                 }
             }
-            server.probe?.let { probe -> CertificateCard(probe, onAccept = setup::acceptPin) }
+            server.probe?.let { probe -> CertificateCard(probe, onAccept = { setup.acceptPin() }) }
         } else {
             LoginForm(login, nav)
         }
@@ -233,14 +238,31 @@ fun LoginEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
         LoginForm(login, nav)
-        DeezerAccountCard()
     }
 }
 
-/** The account form: two fields, one request, the cause under it. */
+/**
+ * The account form: two fields, one request, the cause under it.
+ *
+ * The two fields are declared to the platform's autofill service (the
+ * `ContentType`s below), which is why a password manager offers the saved
+ * Neezer login instead of guessing — and the password field's "Done" submits,
+ * with `commit()` on success so the manager offers to save a new password.
+ * Before this, both fields were plain text to autofill, and Proton Pass
+ * mis-detected them (owner's report on v1.6.5).
+ */
 @Composable
 private fun LoginForm(model: LoginModel, nav: NzNavigator) {
     val state by model.state.collectAsState()
+    val autofill = LocalAutofillManager.current
+    // ONE submit path for the button and the keyboard's "Done": the same
+    // request, the same commit of a successful save.
+    val submit = {
+        model.submit {
+            autofill?.commit()
+            nav.openHomeAfterSignIn()
+        }
+    }
     NzCard {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
             Text("Ton compte", style = Sillon.type.titleSmall)
@@ -250,6 +272,8 @@ private fun LoginForm(model: LoginModel, nav: NzNavigator) {
                 label = "Nom d'utilisateur",
                 placeholder = "",
                 keyboard = KeyboardType.Text,
+                contentType = ContentType.Username,
+                imeAction = ImeAction.Next,
             )
             NzField(
                 value = state.password,
@@ -258,19 +282,22 @@ private fun LoginForm(model: LoginModel, nav: NzNavigator) {
                 placeholder = "",
                 keyboard = KeyboardType.Password,
                 secret = true,
+                contentType = ContentType.Password,
+                imeAction = ImeAction.Done,
+                onImeAction = submit,
             )
             state.cause?.let { cause ->
                 Text(cause, style = Sillon.type.bodySmall, color = Sillon.colors.hrt)
                 NzButton(
                     text = "Réessayer",
-                    onClick = { model.submit { nav.openHomeAfterSignIn() } },
+                    onClick = submit,
                     kind = NzButtonKind.Secondary,
                     enabled = state.canSubmit,
                 )
             }
             NzButton(
                 text = if (state.busy) "Connexion…" else "Se connecter",
-                onClick = { model.submit { nav.openHomeAfterSignIn() } },
+                onClick = submit,
                 enabled = state.canSubmit,
                 glyph = NzGlyph.User,
             )
@@ -388,6 +415,12 @@ fun MigrationNotice(state: MigrationRunner.State, modifier: Modifier = Modifier)
  *
  * A grammar of its own would be worse than one honest re-skin; `NzSheet` does
  * the same for Material's sheet.
+ *
+ * [contentType] is only for the fields a password manager may fill: Compose
+ * publishes it to the autofill framework through `Modifier.semantics`
+ * (`androidx.compose.ui.autofill.ContentType`). The server-address fields pass
+ * nothing — a host and a port are not credentials, and declaring them as any
+ * would put the account login in front of somebody still naming their server.
  */
 @Composable
 private fun NzField(
@@ -397,6 +430,9 @@ private fun NzField(
     placeholder: String,
     keyboard: KeyboardType,
     secret: Boolean = false,
+    contentType: ContentType? = null,
+    imeAction: ImeAction = ImeAction.Next,
+    onImeAction: (() -> Unit)? = null,
 ) {
     val colors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = Sillon.colors.tx,
@@ -412,7 +448,15 @@ private fun NzField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (contentType == null) {
+                    Modifier
+                } else {
+                    Modifier.semantics { this.contentType = contentType }
+                },
+            ),
         label = { Text(label, style = Sillon.type.labelSmall) },
         placeholder = { Text(placeholder, style = Sillon.type.bodySmall) },
         singleLine = true,
@@ -422,7 +466,15 @@ private fun NzField(
         } else {
             VisualTransformation.None
         },
-        keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = ImeAction.Next),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = imeAction),
+        keyboardActions = if (onImeAction == null) {
+            KeyboardActions.Default
+        } else {
+            KeyboardActions(
+                onNext = { onImeAction() },
+                onDone = { onImeAction() },
+            )
+        },
         colors = colors,
         shape = RoundedCornerShape(NzRadius.field),
     )
