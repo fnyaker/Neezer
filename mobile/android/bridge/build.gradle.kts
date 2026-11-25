@@ -132,6 +132,9 @@ dependencies {
     // Coil: the views decode Rust's file; the singleton lives in `coil`, the
     // fetcher/keyer API in `coil-core` (a transitive `api` of it).
     implementation("io.coil-kt.coil3:coil:${libs.versions.coil.get()}")
+    // `AsyncImage` : MB2 n'avait que le singleton et le fetcher ; le seam
+    // `NzCoverLoader` du design system a besoin du composable (M11).
+    implementation(libs.coil.compose)
     // The Android half of `rustls-platform-verifier`: the JVM component its JNI
     // calls into, at the version the Rust crate locked.
     implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")

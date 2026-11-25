@@ -5,6 +5,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import fr.neezer.mobile.bridge.CoilCovers
+import fr.neezer.mobile.designsystem.LocalNzCoverLoader
+import fr.neezer.mobile.designsystem.NzCoverLoader
 import fr.neezer.mobile.feature.settings.AppSettings
 import fr.neezer.mobile.feature.settings.NzAppearance
 import fr.neezer.mobile.feature.settings.NzAppearanceTheme
@@ -55,7 +60,13 @@ class MainActivity : ComponentActivity() {
             // first frame, so a launch in Papier never flashes Encre, and every
             // change since then repaints through the same state — no reload.
             NzAppearanceTheme {
-                NzApp(graph)
+                // Le seam du design system, fourni UNE fois : sans ce
+                // `CompositionLocalProvider` il reste `null` et chaque pochette
+                // est sa rainure (mesuré par l'audit : le seul fournisseur de
+                // l'arbre était un test).
+                CompositionLocalProvider(LocalNzCoverLoader provides CoilNzCoverLoader) {
+                    NzApp(graph)
+                }
             }
         }
     }
@@ -74,5 +85,24 @@ class MainActivity : ComponentActivity() {
             else -> null
         }
         url?.takeIf { it.isNotBlank() }?.let(graph::openLinkLater)
+    }
+}
+
+/**
+ * Le seam des pochettes du design system, branché sur Coil (audit, bloqueur 3).
+ *
+ * Le design system déclare `LocalNzCoverLoader` avec `null` par défaut et peint la rainure
+ * déterministe dessous : sans fournisseur, chaque pochette de l'app reste sa rainure et AUCUN test
+ * n'échoue. Fourni UNE fois, ici, autour de `NzApp`.
+ *
+ * Le pont est dans `:app` et non dans `:bridge` parce que `:designsystem` dépend de `:bridge`
+ * (`api(project(":bridge"))`, ses lignes dessinent des `TrackRow` UniFFI) : une interface de
+ * `:designsystem` implémentée depuis `:bridge` serait un cycle de modules. `CoilCovers` reste dans
+ * `:bridge` (le fetcher, le keyer et Coil y vivent déjà).
+ */
+private object CoilNzCoverLoader : NzCoverLoader {
+    @Composable
+    override fun Image(url: String, sizePx: Int) {
+        CoilCovers.Image(url = url, sizePx = sizePx)
     }
 }
