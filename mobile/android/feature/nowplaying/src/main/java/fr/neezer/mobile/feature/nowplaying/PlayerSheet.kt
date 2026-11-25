@@ -619,8 +619,8 @@ private fun Transport(state: NowPlayingModel.State, model: NowPlayingModel) {
  * at it misses (measured on the M5 capture).
  *
  * **Five doors, and the words yield before a target does.** On a 360 dp phone the
- * row has 320 dp; three icon doors and the two word doors need ~292 dp at a 100 %
- * font scale, and ~392 dp at 200 %. Two 48 dp targets and a label cannot share
+ * row has 320 dp; three icon doors and the two word doors need 296 dp at a 100 %
+ * font scale, and 390 dp at 200 %. Two 48 dp targets and a label cannot share
  * that line, so the words become glyphs when they no longer fit (the doors keep
  * their contentDescription, so TalkBack still reads « Paroles » and « File
  * d'attente »). The third answer — letting Compose shrink the last control — is
@@ -713,7 +713,7 @@ private fun Doors(
  * 360 dp phone ask 348 dp of the 320 usable, and a `Row` that overflows shrinks
  * its last child instead of clipping — the chevron fell to ~20 dp (M5's own
  * capture, `mb11-encre-360dp-lecteur.png`). Under the row, the five remaining
- * doors fit in 292 dp and this control keeps its 48 dp.
+ * doors fit in 296 dp and this control keeps its 48 dp.
  *
  * The look is the SPA's `.peek`: a glass pill 26 % of the first tier, the
  * specular hairline on its top edge, the mono label in small capitals and the
