@@ -221,3 +221,34 @@ workstation and a real phone still run every one of them, and a skip is printed,
 the one place a green check does not mean "measured"; the number that replaces it is the run on
 dedicated hardware that the area note records. Skipping is for timing comparisons only — a
 functional test that happens to be slow still runs on CI.
+
+## CI tests what ships
+
+Owner, 2026-11-25 (« revérifie entièrement les workflows, je ne veux plus voir ce genre de
+soucis »): two regressions in a row shipped in v1.6.5/v1.6.6 with every job green — R8 stripped the
+TLS verifier, then a crash at the first cover render — because the artifact a person installs was
+built and never RUN in the form it ships. The rule below is now the bar for every workflow, and the
+table is the inventory it is held to: for each workflow, what a person downloads and what CI actually
+does with that same file.
+
+**A shipped artifact is tested in its shipped form.** The APK, the image, the binaries and the
+packages are launched and walked as a person gets them (release / minified / signed, the real image,
+the installed package), through the first user path, never only built; a `v*` tag may not publish an
+artifact in a form CI never ran.
+
+| Workflow | What ships | What the workflow does on the shipped form |
+|---|---|---|
+| `tests` | the Python server (inside the image and the packages) | `tools/partest.py` on two Python versions (image + minimal), and the migrations replayed on a real PostgreSQL 16 and MySQL 8 (`NS_REQUIRE_DATABASE=1`, so an absent engine fails instead of skipping). Providers' real endpoints are the weekly `network` run. |
+| `webapp` | the SPA build (`neezer/webui/dist`, bundled into the server and the image) | `npm test` (node, the shipped WebAssembly analyser) then `npm run build` — the dist the server serves. The browser benches (`webapp/test/{clicks,ui,requests}/run.mjs`) are run by hand on the area they cover, not by this workflow. |
+| `docker` | `ghcr.io/fnyaker/neezer` (amd64 + arm64) | builds amd64 and runs `docker/smoke.sh` (boot, admin bootstrap, `/app/` serves the SPA, a real `/rest/ping` login, a wrong password refused); then **pulls the published tag back (linux/amd64) and re-runs the same smoke**, so the manifest a person pulls is proven, not a lookalike. |
+| `android` | `neezer.apk` (the WebView app) | release-variant unit tests, lint, the structural verify (signature v1/v2/v3, 4-byte alignment, package id), and now **the release APK installed and driven on a headless emulator**: setup screen → point it at `tools/perf_api.py` over the emulator's `10.0.2.2` bridge → « Se connecter » → MainActivity → the WebView fetches the SPA (a `/app/*.js` request in the server's log), empty crash buffer. The bench server is plain HTTP: this app carries no verifier of its own, so the TLS path is `mobile`'s. |
+| `desktop` | the four release binaries (packaged by `release`) | fmt, clippy, `cargo test --workspace`, the **debug window** under Xvfb + lavapipe, the **release binary's window** (`--self-test-quit-after-first-frame`), and the CPU floors on the engine children those binaries run. |
+| `mobile` | `neezer-native*.apk` (minified release, signed with the stable key) | the Rust and JVM suites, **`release-journey.sh` on the signed-in minified APK** (eight doors, car-mode settings, empty crash buffer), the **general R8 `-keep` check** (every module's rule, unrenamed in `mapping.txt` and present in the shipped dex), and the instrumented suite on the debug build with **the bench servers its `assumeTrue` gates need** (tone server on 4711, bench on 5610), so 8 tests measure instead of skip. |
+| `release` | the Arch, deb, rpm, AppImage and Flatpak packages, the four binaries, `docker-compose.yml` | each package is **installed and its app started** under Xvfb (deb/rpm/AppImage/Flatpak already, Arch now via `pacman -U` + lavapipe); the binaries' CPU floors and dispatch run on the packaged files; the docker image is `docker.yaml`'s. |
+| `network` | nothing | `tests/net` against the real third-party services — Last.fm, ListenBrainz, LRCLIB, and Deezer/YouTube link imports — on a weekly cron, once, as a red run instead of a `continue-on-error` nobody read. |
+| `security` | nothing | CodeQL, Semgrep, Bandit, Trivy, Gitleaks — every job `continue-on-error`, so its check can be green with findings: the finding is read and fixed, the check is never trusted as the answer. `cargo-audit` is the exception (never `continue-on-error`). |
+
+Two gaps are stated rather than hidden. The SPA's browser benches are not in a workflow: they need a
+server and Chromium and are run on the area a change touches (the `webapp` section of
+[commands.md](commands.md)). And `tests`/`network`/`security` ship no artifact of their own, so they
+are the supply side of the rule, not a place to look for a released file.
