@@ -2440,8 +2440,8 @@ request):
   (`recent.tracks` in `localStorage`) that no core store carries yet; it needs
   MB3b's listen accounting to publish the last played rows.
 - **« Tout afficher »** (the door to Nouveautés) — `NzNavigator` speaks
-  `AppLink`s and there is no `AppLink` for the releases shelf; MB14 adds one when
-  it fills that screen (this lot may not edit `links.rs`).
+  `AppLink`s and there was no `AppLink` for the releases shelf when MB5 landed;
+  **M8 delivers it** over `AppLink.Releases` (see its section below).
 - **The discovery SLIDER** — `DiscoverySlider.svelte` is MB14's; the hero's
   tuning chip opens the four `discovery.js` stops as chips, which is the same
   value set the slider snaps to.
@@ -6463,3 +6463,31 @@ et ne doivent pas bouger). `onboarding` porte donc `#[uniffi(default = None)]` :
 exactement « le serveur ne l'a pas dit », et les constructions existantes compilent. (2) Un smart
 cast sur `event.me` est refusé (propriété `val` d'un AUTRE module Gradle) : la branche écrit
 `when (val me = event.me)`, sinon `mobile.yaml` échoue à la compilation Kotlin.
+### M8 — Nouveautés : « Tout afficher » (delivered 2026-11-24)
+
+**La règle.** L'en-tête de la carte « Nouveautés » de l'accueil porte les DEUX actions du SPA
+(`webapp/src/routes/Home.svelte:252`) : le bouton de lecture (« Tout lire », le même
+`NzIconButton(Play)` qu'avant) et, dessous, le lien fantôme « Tout afficher ». Le tap passe par
+`AppLink.Releases` — l'`AppLink` que l'écran Nouveautés utilise déjà pour son propre en-tête
+(`DiscoveryEntries.kt`), donc une seule route pour la porte et la page, jamais un `NavController`
+dans l'écran.
+
+**Pourquoi « Tout afficher » sur sa propre rangée, et pas empilé sous le bouton de lecture.** Le
+plan empilait les deux dans une `Column` de l'en-tête ; cette colonne mesure alors la largeur du
+LIBELLÉ, et à 200 % elle a pris sur le titre : « Nouveautés » s'est coupé en « Nouveau-/tés » et
+« 3 titres » est passé à un caractère par ligne (mesuré sur le rendu 200 % de MB5, refait par ce
+lot). Sur sa propre rangée, le lien est au MÊME bord droit, et le titre garde la largeur qu'il avait
+avant que la porte existe — le rendu 200 % redevient celui de MB5. Un `spacedBy(NzSpacing.xxs)`
+garde les deux actions serrées à 360 comme à 600 dp.
+
+**+0 requête, +0 octet.** La porte ne fait que naviguer : `openReleases = { nav.go(AppLink.Releases) }`
+n'ajoute aucun appel FFI et ne lit rien. `grep -n "openReleases" mobile/android/feature/home/src/main`
+→ 3 lignes (le champ de `HomeActions`, l'`NzButton` et le câblage), zéro appel au noyau. La page
+Nouveautés lit sa propre route (MB14 : `GET /releases` 116 835 B à froid, 0 à chaud).
+
+**Mesuré, pas supposé.** `:feature:home:testDebugUnitTest` : **27 tests, 0 échec** sur la JVM (JDK
+17, Gradle 8.14.7, Robolectric en graphismes NATIFS, en 1 min) — dont `HomeReleasesDoorTest`
+(`w360dp-h800dp-xhdpi`, `hasText("Tout afficher") and hasClickAction()` → `openReleases` appelé
+**une** fois). Les images de l'accueil de MB5 sont refaites par ce lot (le rendu de la vraie page,
+pas une maquette) : `docs/agents/screenshots/mobile/MB5/mb5-encre-360dp.png` porte le lien, et le
+200 % (`mb5-encre-360dp-font200.png`) est inchangé pour le titre.
