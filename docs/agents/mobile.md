@@ -4330,7 +4330,7 @@ CI's sake, the desktop's own `nz-remote::host` + `nz_player` as the controlled p
 - The SPA's whole-app read-only browsing at `read` level: the SERVER enforces the four levels, and
   every screen already reads through the owner's session, so a `read` loan browses the owner's
   library with MB5–MB9's screens unchanged. Nothing extra to port.
-=======
+
 ### MB12 — Audio effects (delivered 2026-11-18)
 
 **What landed.** The SPA's whole effects card on the phone's own player, and the one measurement
