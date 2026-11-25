@@ -139,3 +139,27 @@ jobs:
           # the two race, and the loser dies with "failed to reserve cache" even
           # though it built the image perfectly. PRs still read the cache.
           cache-to: type=gha,mode=max
+
+      # THE IMAGE PEOPLE PULL IS THE ONE THAT ANSWERED.
+      #
+      # `Smoke test` runs `neezer:smoke`, the amd64 image this job built and
+      # loaded. The push above is a SEPARATE buildx invocation (amd64 + arm64,
+      # written to the registry): it reuses the layers, but nothing yet proves the
+      # manifest a person pulls boots. So the published tag is pulled back, amd64
+      # (the architecture the smoke just exercised), and put through the same
+      # `docker/smoke.sh` — the boot, the admin bootstrap, `/app/` and a real
+      # `/rest/ping` login. A registry that lost a layer, a wrong manifest list,
+      # or a tag that points elsewhere is red here, not on a user's machine.
+      - name: The published image is the one that answers
+        if: github.event_name != 'pull_request'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          ref="$(printf '%s\n' "$TAGS" | head -1)"
+          test -n "$ref" || { echo "::error::the metadata step named no tag"; exit 1; }
+          echo "   pulling the published $ref (linux/amd64)"
+          docker pull --platform linux/amd64 "$ref"
+          docker/smoke.sh "$ref"
+          echo "published_image_smoked=$ref"
+
