@@ -35,7 +35,13 @@ import uniffi.nz_ffi.Screens
  * - **A refused URL never reaches the network.** `cover_path` enforces the CDN
  *   allow-list; this file cannot bypass it because it has no other path.
  */
-class NzCoverRequest(
+/**
+ * A **data class on purpose**: Coil compares models by equality, and it restarts
+ * the request when `model != previousModel`. A plain class made two requests for
+ * the same sleeve unequal, so every player recomposition asked for a new decode
+ * and the neighbours flashed on each track change (P1).
+ */
+data class NzCoverRequest(
     /** The URL a row carries: our `/api/cover/<id>` or a `*.dzcdn.net` address. */
     val url: String,
     /** The size the view draws it at, in pixels. */
