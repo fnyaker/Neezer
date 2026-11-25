@@ -104,6 +104,33 @@ class AppLinkColdStartTest {
         }
     }
 
+    /**
+     * M10 : un lien de titre ne laisse plus l'app muette (audit, bloqueur 8).
+     *
+     * Le serveur n'a aucune lecture qui rend l'album d'un titre, et la table de
+     * routes du SPA n'a pas `/track/:id` : la branche `AppLink.Track` ne peut
+     * pas ouvrir d'écran. Elle le DIT (rule 3 : un échec dit pourquoi) et l'app
+     * reste sur son écran. Le parseur qui produit `AppLink::Track` est celui que
+     * `mobile/rust/crates/nz-core/src/links/mod.rs:401` teste déjà.
+     */
+    @Test
+    fun aTrackLinkSaysItCannotOpen() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val intent = Intent(Intent.ACTION_SEND, null).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "https://neezer.example/app/#/track/3000168")
+            setClass(context, MainActivity::class.java)
+        }
+        ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            assertTrue(scenario.state.isAtLeast(Lifecycle.State.RESUMED))
+            // Le toast est un nœud de la coquille : il porte la phrase entière.
+            assertTrue(
+                "le lien de titre n'a rien dit",
+                device.wait(Until.hasObject(By.textContains("ne s'ouvre pas encore")), TIMEOUT_MS),
+            )
+        }
+    }
+
     private companion object {
         /** The emulator's first paint plus the core's own start: MQ1 measured 13–25 s. */
         const val TIMEOUT_MS = 15_000L

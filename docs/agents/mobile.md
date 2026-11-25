@@ -6727,3 +6727,34 @@ reste due sur une machine de banc.
 **Fichiers** (ce lot) : `feature/remote/.../RemoteHostNotice.kt` (nouveau), `RemoteModel.kt`
 (`cutAllNow`, `resumeHostAtStart`), `feature/remote/src/test/.../HostChipTest.kt` (nouveau),
 `app/.../NavGraph.kt` (les deux emplacements) et cette section.
+
+### M10 — Un lien de titre dit pourquoi il n'ouvre rien (delivered 2026-11-24)
+
+**La règle.** Un lien `#/track/<id>` ou `neezer://track/<id>` ne laisse plus la personne devant
+l'écran précédent sans explication : la branche `AppLink.Track` de `AppGraph.go` lève le toast
+« Un lien de titre ne s'ouvre pas encore : cherche le titre dans la recherche. » et l'app reste où
+elle était. Le parseur n'a pas changé : `AppLink::Track` est déjà produit et testé
+(`mobile/rust/crates/nz-core/src/links/mod.rs:401`).
+
+**Pourquoi pas mieux.** Il n'y a rien à ouvrir : la table de routes du SPA (`webapp/src/App.svelte`)
+n'a pas `/track/:id`, aucun `push("/track/…")` n'existe dans `webapp/src`, et le serveur n'a aucune
+lecture qui rende l'album d'un titre (`neezer/webui` n'a pas de `GET /api/track/<id>`) ; le seul lien
+de titre du produit est la page publique `…/t/<token>` (`neezer/webui/trackshare.py`,
+`track_page`), qui s'ouvre dans un navigateur. Ouvrir « l'album du titre » demanderait une route
+serveur : un autre lot, une autre décision. La branche reste donc volontairement sans navigation —
+mais elle parle (rule 3 : un échec dit pourquoi).
+
+**Le piège du silence.** Un lien de titre arrive AVANT que la coquille ait un `NavHost` (démarrage à
+froid) : `go()` est la seule porte commune aux deux cas (l'intent qui a lancé l'app et `onNewIntent`),
+donc le message est levé là, pas dans `openLinkLater`, où il serait tombé pendant que le lien
+attendait son graphe. L'hôte des toasts est le seul de l'app et M2 l'a monté dans `Hosts` : aucune
+coquille à ajouter.
+
+**Mesuré.** **+0 requête, +0 octet** : la branche appelait déjà `resolveLink` (calcul local, aucune
+E/S) ; le diff n'ajoute ni appel FFI, ni requête, ni lecture de fichier — seulement
+`NzToasts.show`. Preuve de forme : `git diff` ne touche que `AppGraph.kt` (la branche et l'import) et
+ce fichier. Le test instrumenté `AppLinkColdStartTest.aTrackLinkSaysItCannotOpen` lance
+`MainActivity` avec un `ACTION_SEND` portant `https://neezer.example/app/#/track/3000168` et attend
+le nœud « ne s'ouvre pas encore » dans l'arbre d'accessibilité (le toast vit 2,4 s :
+`NzToasts.LingerMs`). L'image du worker n'a ni JDK ni émulateur : la capture du toast et la passe du
+test sont prouvées par le job `Emulator smoke` de `mobile.yaml`, pas par une capture jointe au PR.
