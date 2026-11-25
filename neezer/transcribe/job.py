@@ -49,7 +49,10 @@ from . import engine, settings, sidecar
 
 logger = logging.getLogger(__name__)
 
-QUEUE_MAX = 20
+#: Rows written per ``queue_backlog("all")`` call; ``resume_auto`` loops until done.
+FILL_BATCH = 100
+#: Active rows listed by ``queue_status`` (the total is counted separately).
+QUEUE_PREVIEW = 50
 LEASE_SECONDS = 15 * 60
 HEARTBEAT_WRITE_SECONDS = 60
 LEASE_ATTEMPTS = 3
@@ -203,8 +206,12 @@ def _no_local_runner(values):
 
 
 def enqueue(episode_id, user=None, force=False, language=None, app=None,
-            source="server"):
-    """Put one archived episode in the queue; never run the engine here."""
+            source="server", ready=None):
+    """Put one archived episode in the queue; never run the engine here.
+
+    ``ready`` carries the engine verdict a batch already resolved, so a
+    100-row backlog checks the binary and the model once, not 100 times.
+    """
     values = settings.load(app)
     if not values["enabled"]:
         raise QueueError("disabled", "la transcription est désactivée")
@@ -215,7 +222,7 @@ def enqueue(episode_id, user=None, force=False, language=None, app=None,
     root = settings.archive_root(app)
     path = archive_file(episode, root)
     duration = _check_limits(episode, path, values)
-    if values["runner"] == "inline":
+    if ready is None and values["runner"] == "inline":
         verdict = engine.quick_check(settings.paths(app))
         if not verdict["ok"] and not worker_ready():
             # No local engine and no enrolled device: nothing would ever claim
@@ -227,6 +234,11 @@ def enqueue(episode_id, user=None, force=False, language=None, app=None,
                 "aucun moteur local ni ordinateur enrôlé pour transcrire",
                 detail=verdict["message"],
             )
+    elif ready is False:
+        raise QueueError(
+            "no_worker",
+            "aucun moteur local ni ordinateur enrôlé pour transcrire",
+        )
 
     explicit = engine.normalize_language(language) if language else None
     transcript = _transcript_of(episode.id)
@@ -240,23 +252,6 @@ def enqueue(episode_id, user=None, force=False, language=None, app=None,
             }
         if transcript.status == "ready" and not force:
             raise QueueError("ready", "cet épisode est déjà transcrit")
-
-    if transcript is None and active_count() >= QUEUE_MAX:
-        raise QueueError(
-            "queue_full",
-            "la file de transcription est pleine",
-            retry_in=60,
-        )
-    if (
-        transcript is not None
-        and transcript.status in ("error", "stopped", "ready")
-        and active_count() >= QUEUE_MAX
-    ):
-        raise QueueError(
-            "queue_full",
-            "la file de transcription est pleine",
-            retry_in=60,
-        )
 
     when = now()
     source = source if source in SOURCES else "server"
@@ -315,12 +310,13 @@ def enqueue(episode_id, user=None, force=False, language=None, app=None,
     }
 
 
-def auto_enqueue(episode, app=None):
+def auto_enqueue(episode, app=None, ready=None):
     """The archive hook: one row for a new episode of a marked show.
 
-    Never raises, never runs the engine, and creates nothing when the budget,
-    the queue or the engine say no — a skipped episode stays ``none`` (not
-    "waiting") and a later ``resume_auto`` can pick it up.
+    Never raises, never runs the engine, and creates nothing when the budget
+    or the engine say no — a skipped episode stays ``none`` (not "waiting")
+    and a later ``resume_auto`` can pick it up. ``ready`` is the engine
+    verdict ``queue_backlog`` resolves once per batch; ``None`` checks it here.
     """
     try:
         values = settings.load(app)
@@ -351,20 +347,19 @@ def auto_enqueue(episode, app=None):
                 return {"status": "skipped", "reason": "too_big", "episode_id": str(episode.id)}
         except OSError:
             return {"status": "skipped", "reason": "not_archived", "episode_id": str(episode.id)}
-        if active_count() >= QUEUE_MAX:
-            return {"status": "skipped", "reason": "queue_full", "episode_id": str(episode.id)}
-        if values["runner"] == "inline":
+        if ready is None and values["runner"] == "inline":
             verdict = engine.quick_check(settings.paths(app))
-            if not verdict["ok"] and not worker_ready():
-                return {
-                    "status": "skipped",
-                    "reason": "no_worker",
-                    "episode_id": str(episode.id),
-                }
+            ready = verdict["ok"] or worker_ready()
+        if ready is False:
+            return {
+                "status": "skipped",
+                "reason": "no_worker",
+                "episode_id": str(episode.id),
+            }
         limit = int(values["daily_minutes"] or 0) * 60_000
         if limit and auto_budget_used_ms() + duration > limit:
             return {"status": "skipped", "reason": "budget", "episode_id": str(episode.id)}
-        out = enqueue(episode.id, user=None, app=app)
+        out = enqueue(episode.id, user=None, app=app, ready=ready)
         try:
             from . import runner
 
@@ -1331,7 +1326,7 @@ def queue_status(app=None):
         PodcastTranscript.select()
         .where(PodcastTranscript.status.in_(ACTIVE))
         .order_by(PodcastTranscript.queued_at)
-        .limit(QUEUE_MAX)
+        .limit(QUEUE_PREVIEW)
     ):
         active.append(
             {
@@ -1361,6 +1356,7 @@ def queue_status(app=None):
         "reason": reason,
         "counts": counts,
         "active": active,
+        "active_total": active_count(),
         "budget": budget,
     }
 
@@ -1428,34 +1424,49 @@ def estimate(channel=None, app=None):
 def queue_backlog(channel=None, backlog="all", user=None, app=None, limit=None):
     """Queue what marking a show means: none, the 10 last, or everything.
 
-    ``all`` is the resumable BULK job: it fills the free queue slots under the
-    budget, and ``resume_auto`` refills as jobs finish. A caller never waits on
-    it — the rows are written and the runner is woken.
+    ``all`` is the resumable BULK job: each call writes at most ``FILL_BATCH``
+    rows under the budget and says ``more`` when the show has more left;
+    ``resume_auto`` on the runner thread writes the next batches. A caller
+    never waits on it — the rows are written and the runner is woken.
     """
     mode = str(backlog or settings.BACKLOG_DEFAULT).strip().lower()
     if mode not in settings.BACKLOG_MODES:
         raise QueueError("invalid_backlog", "backlog doit être all, recent ou none")
-    summary = {"queued": 0, "skipped": {}, "considered": 0, "backlog": mode}
+    summary = {"queued": 0, "skipped": {}, "considered": 0, "backlog": mode, "more": False}
     if mode == "none":
         return summary
-    wanted = 10 if mode == "recent" else (limit or QUEUE_MAX)
-    episodes = candidates(channel=channel, limit=wanted * 3, app=app)
+    values = settings.load(app)
+    ready = None
+    if values["runner"] == "inline":
+        ready = engine.quick_check(settings.paths(app))["ok"] or worker_ready()
+        if not ready:
+            summary["skipped"]["no_worker"] = 1
+            return summary
+    if mode == "recent":
+        wanted = 10
+        episodes = candidates(channel=channel, limit=wanted * 3, app=app)
+    else:
+        wanted = limit or FILL_BATCH
+        blocked = _blocked_ids()
+        episodes = (
+            episode
+            for episode in _candidate_query(channel=channel).iterator()
+            if str(episode.id) not in blocked
+        )
     for episode in episodes:
         if summary["queued"] >= wanted:
-            break
-        if active_count() >= QUEUE_MAX:
-            summary["skipped"]["queue_full"] = summary["skipped"].get("queue_full", 0) + 1
+            summary["more"] = mode == "all"
             break
         summary["considered"] += 1
         try:
             if user is None:
-                outcome = auto_enqueue(episode, app=app)
+                outcome = auto_enqueue(episode, app=app, ready=ready)
                 if outcome.get("status") == "queued":
                     summary["queued"] += 1
                 else:
                     reason = outcome.get("reason") or "skipped"
                     summary["skipped"][reason] = summary["skipped"].get(reason, 0) + 1
-                    if reason in ("budget", "queue_full"):
+                    if reason == "budget":
                         break
             else:
                 enqueue(episode.id, user=user, app=app)
@@ -1480,7 +1491,7 @@ def _stored_backlog(channel):
 
 
 def resume_auto(app=None):
-    """Fill the free queue slots from marked shows, each with its stored backlog."""
+    """Queue the marked shows' backlog from the runner thread, batch by batch."""
     values = settings.load(app)
     if not values["enabled"]:
         return 0
@@ -1495,21 +1506,24 @@ def resume_auto(app=None):
     )
     if not channels:
         return 0
-    free = QUEUE_MAX - active_count()
-    if free <= 0:
-        return 0
+    from ..deezer import workload
+
     queued = 0
     for channel in channels:
-        if queued >= free:
-            break
-        summary = queue_backlog(
-            channel=channel,
-            backlog=_stored_backlog(channel),
-            user=None,
-            app=app,
-            limit=free - queued,
-        )
-        queued += summary["queued"]
+        while True:
+            workload.quiet_wait()
+            summary = queue_backlog(
+                channel=channel,
+                backlog=_stored_backlog(channel),
+                user=None,
+                app=app,
+                limit=FILL_BATCH,
+            )
+            queued += summary["queued"]
+            if summary["skipped"].get("budget"):
+                return queued
+            if not summary["more"] or not summary["queued"]:
+                break
     return queued
 
 

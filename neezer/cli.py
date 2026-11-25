@@ -1075,6 +1075,9 @@ def _print_transcribe_status(state):
         )
         if item.get("error"):
             click.echo(f"           cause : {item['error']}")
+    others = state.get("active_total", 0) - len(state["active"])
+    if others > 0:
+        click.echo(f"  … et {others} autres")
 
 
 def _print_episode_status(item):

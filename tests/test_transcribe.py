@@ -587,17 +587,30 @@ class QueueTestCase(_Base):
         self.assertEqual((row.status, row.done_ms, row.n_segments), ("queued", 0, 0))
         self.assertEqual(PodcastTranscriptSegment.select().count(), 0)
 
-    def test_a_full_queue_refuses_the_twenty_first(self):
+    def test_manual_queue_has_no_cap(self):
+        # 105 > the old 20-row cap: every click queues, none is refused.
         channel = self.channel()
-        for number in range(1, job.QUEUE_MAX + 2):
+        for number in range(1, 106):
             self.episode(number=number, duration=60, channel=channel)
         episodes = list(PodcastEpisode.select().order_by(PodcastEpisode.title))
-        for episode in episodes[: job.QUEUE_MAX]:
-            job.enqueue(episode.id, app=self.config)
-        with self.assertRaises(job.QueueError) as caught:
-            job.enqueue(episodes[-1].id, app=self.config)
-        self.assertEqual(caught.exception.code, "queue_full")
-        self.assertEqual(caught.exception.retry_in, 60)
+        for episode in episodes:
+            job.enqueue(episode.id, user=self.user, app=self.config)
+        self.assertEqual(PodcastTranscript.select().count(), 105)
+        self.assertEqual(
+            PodcastTranscript.select()
+            .where(PodcastTranscript.status == "queued")
+            .count(),
+            105,
+        )
+
+    def test_queue_status_previews_fifty_rows_and_counts_the_rest(self):
+        for number in range(1, 61):
+            episode = self.episode(number=number, duration=60)
+            job.enqueue(episode.id, user=self.user, app=self.config)
+        state = job.queue_status(self.config)
+        self.assertEqual(len(state["active"]), job.QUEUE_PREVIEW)  # 50 of 60
+        self.assertEqual(state["active_total"], 60)
+        self.assertEqual(state["counts"]["queued"], 60)
 
     def test_stop_keeps_what_was_already_transcribed(self):
         episode = self.episode()
@@ -1030,35 +1043,27 @@ class RunnerTestCase(_Base):
         self.assertEqual((status["runner"], status["started"]), ("external", False))
 
     def test_the_external_runner_refills_the_backlog_without_duplicating(self):
-        """``resume_auto`` had no caller outside the inline loop, so with
-        ``runner = external`` nothing ever filled the queue after the first
-        batch: the backlog stopped at 20 episodes for ever, silently."""
-        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, runner="external")
+        """The scheduler thread writes batch after batch until the show is
+        queued; the old 20-row cap stopped it for ever after the first one."""
+        self.config.TRANSCRIBE = dict(
+            self.config.TRANSCRIBE, runner="external", daily_minutes=0
+        )
         channel = self.channel(auto_transcribe=True)
-        for number in range(1, 31):
+        for number in range(1, 131):
             self.episode(number=number, duration=60, channel=channel)
         external = runner.build_runner(self.config)
         first = job.queue_backlog(channel=channel, backlog="all", app=self.config)
-        self.assertEqual(first["queued"], 20)
-        self.assertEqual(PodcastTranscript.select().count(), 20)
+        self.assertEqual(first["queued"], job.FILL_BATCH)  # 100
+        self.assertTrue(first["more"])
+        self.assertEqual(PodcastTranscript.select().count(), 100)
 
-        # A finished job frees one slot; one scheduler pass queues the 21st.
-        done = PodcastTranscript.select().first()
-        done.status = "ready"
-        done.done_ms = done.duration_ms = 60_000
-        done.save(
-            only=(
-                PodcastTranscript.status,
-                PodcastTranscript.done_ms,
-                PodcastTranscript.duration_ms,
-            )
-        )
-        self.assertEqual(external.refill(), 1)
-        self.assertEqual(PodcastTranscript.select().count(), 21)
+        # One scheduler pass writes the remaining batch, then has nothing left.
+        self.assertEqual(external.refill(), 30)
+        self.assertEqual(PodcastTranscript.select().count(), 130)
         self.assertEqual(external.refill(), 0)
-        self.assertEqual(PodcastTranscript.select().count(), 21)
+        self.assertEqual(PodcastTranscript.select().count(), 130)
         self.assertEqual(
-            len({row.episode_id for row in PodcastTranscript.select()}), 21
+            len({row.episode_id for row in PodcastTranscript.select()}), 130
         )
         # Requeuing a job is not transcribing it: no engine process was started.
         self.assertEqual(self.log_lines(), [])
@@ -1159,22 +1164,15 @@ class AutoTranscribeTestCase(_Base):
         self.assertEqual(everything["queued"], 12)
         self.assertEqual(PodcastTranscript.select().count(), 12)
 
-    def test_the_all_backlog_continues_past_the_first_twenty(self):
+    def test_queue_backlog_all_writes_one_batch(self):
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, daily_minutes=0)
         channel = self.channel(auto_transcribe=True)
-        for number in range(1, 31):
+        for number in range(1, 131):
             self.episode(number=number, duration=60, channel=channel)
         first = job.queue_backlog(channel=channel, backlog="all", app=self.config)
-        self.assertEqual(first["queued"], 20)
-        row = PodcastTranscript.select().first()
-        row.status = "ready"
-        row.done_ms = row.duration_ms = 60_000
-        row.save(only=(PodcastTranscript.status, PodcastTranscript.done_ms,
-                       PodcastTranscript.duration_ms))
-        self.assertEqual(job.resume_auto(self.config), 1)
-        self.assertEqual(
-            PodcastTranscript.select().where(PodcastTranscript.status == "queued").count(),
-            20,
-        )
+        self.assertEqual(first["queued"], job.FILL_BATCH)  # 100 rows, not 130
+        self.assertTrue(first["more"])
+        self.assertEqual(PodcastTranscript.select().count(), 100)
 
     def test_the_daily_budget_skips_automatic_jobs_and_never_manual_ones(self):
         self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, daily_minutes=1)
@@ -1219,15 +1217,26 @@ class AutoTranscribeTestCase(_Base):
         # shows are asked once: two statements on an idle server.
         self.assertEqual(sum(counts.values()), 2)
 
-    def test_resume_auto_fills_the_free_slots_and_does_not_duplicate(self):
+    def test_resume_auto_queues_every_episode_and_does_not_duplicate(self):
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, daily_minutes=0)
         channel = self.channel(auto_transcribe=True)
-        for number in range(1, 25):
+        for number in range(1, 131):
             self.episode(number=number, duration=60, channel=channel)
         filled = job.resume_auto(self.config)
-        self.assertEqual(filled, job.QUEUE_MAX)
-        self.assertEqual(PodcastTranscript.select().count(), job.QUEUE_MAX)
+        self.assertEqual(filled, 130)
+        self.assertEqual(PodcastTranscript.select().count(), 130)
         self.assertEqual(job.resume_auto(self.config), 0)
-        self.assertEqual(PodcastTranscript.select().count(), job.QUEUE_MAX)
+        self.assertEqual(PodcastTranscript.select().count(), 130)
+
+    def test_resume_auto_respects_budget(self):
+        # Exactly three 10 min episodes fit in a 30 min daily budget.
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, daily_minutes=30)
+        channel = self.channel(auto_transcribe=True)
+        for number in range(1, 11):
+            self.episode(number=number, duration=600, channel=channel)
+        self.assertEqual(job.resume_auto(self.config), 3)
+        self.assertEqual(PodcastTranscript.select().count(), 3)
+        self.assertEqual(job.resume_auto(self.config), 0)
 
     def test_resume_auto_honours_the_stored_show_backlog(self):
         channel = self.channel(auto_transcribe=True)
@@ -1512,6 +1521,27 @@ class StatementTestCase(_Base):
         self.assertGreaterEqual(enqueue_statements, 5)
         self.assertGreaterEqual(claim_statements, 5)
         self.assertGreaterEqual(chunk_statements, 3)
+
+    def test_a_hundred_row_backlog_checks_the_engine_once(self):
+        """A batch resolves the engine verdict once: 100 rows, one `stat`
+        pair on the binary and the model, not 100."""
+        self.config.TRANSCRIBE = dict(self.config.TRANSCRIBE, daily_minutes=0)
+        channel = self.channel(auto_transcribe=True)
+        for number in range(1, 101):
+            self.episode(number=number, duration=60, channel=channel)
+        with mock.patch.object(
+            job.engine, "quick_check", wraps=job.engine.quick_check
+        ) as check:
+            with count_statements() as counts:
+                summary = job.queue_backlog(
+                    channel=channel, backlog="all", app=self.config
+                )
+        self.assertEqual(summary["queued"], 100)
+        self.assertEqual(check.call_count, 1)
+        statements = sum(counts.values())
+        # Measured on SQLite: 703 statements for 100 rows (about 7 per row).
+        self.assertLess(statements, 720, statements)
+        self.assertGreaterEqual(statements, 650, statements)
 
 
 class RealEngineTestCase(unittest.TestCase):
