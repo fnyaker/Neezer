@@ -346,7 +346,9 @@ check_door "Rechercher" "Recherche Neezer"
 # is gone now the lot paints the real screen, and the bottom bar's own
 # « Bibliothèque » would open this door from any tab.
 check_door "Bibliothèque" "Bibliothèque Neezer"
-check_door "Podcasts" "Les abonnements, la recherche"
+# M4 a supprimé le stub MB0 ; le marqueur est celui de l'écran, comme Accueil et
+# Bibliothèque (`PodcastsEntry.kt`'s `PODCASTS_MARKER`).
+check_door "Podcasts" "Podcasts Neezer"
 # Accueil draws a STABLE marker (`HomeScreen.kt`'s `HOME_MARKER`, a
 # contentDescription on the screen's root) instead of its MB0 stub text: the
 # home's own copy names the weekday and the person, so a needle taken from it

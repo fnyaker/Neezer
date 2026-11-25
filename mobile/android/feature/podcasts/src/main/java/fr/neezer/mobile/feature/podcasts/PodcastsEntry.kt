@@ -135,7 +135,12 @@ fun PodcastsScreen(
     toast: @Composable (String) -> Unit = {},
 ) {
     val colors = Sillon.colors
-    Box(modifier.fillMaxSize().background(colors.bg)) {
+    Box(
+        modifier
+            .fillMaxSize()
+            .semantics { contentDescription = PODCASTS_MARKER }
+            .background(colors.bg),
+    ) {
         Column(Modifier.fillMaxSize()) {
             if (isAdmin) {
                 PodcastSearchField(
@@ -451,3 +456,11 @@ internal fun CoreUnavailable(modifier: Modifier = Modifier) {
         )
     }
 }
+
+/**
+ * Le marqueur de l'écran, pour la sonde de l'émulateur et le test de coquille : le
+ * texte du stub MB0 (« Les abonnements, la recherche ») a disparu avec lui, et
+ * aucune phrase de la grille n'est stable dans tous les états (la règle de
+ * `HOME_MARKER` / `LIBRARY_MARKER`).
+ */
+const val PODCASTS_MARKER = "Podcasts Neezer"
