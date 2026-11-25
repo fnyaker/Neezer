@@ -7002,6 +7002,20 @@ lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les 
 
 **Le piège.** `testDebugUnitTest` réécrit les PNG de `docs/agents/screenshots/mobile/MB8` avec le Skia de l'hôte : les restaurer, ne jamais les committer.
 
+### G1 — Les gestes de liste : une seule implémentation (delivered 2026-11-25)
+
+**Le besoin.** « Glisser à droite = Lire ensuite » existait QUATRE fois — `Media.kt` (`TrackRowView`), `EntityBits.kt` (`EntityTrackRow`), `LibraryBits.kt` (`LibraryTrackRow`) et `PlaylistScreen.kt` (`PlaylistRow`). Les quatre faisaient `drag = 0f` sur le relâchement : la rangée **téléportait** au lieu de revenir, sans vitesse, et les quatre consommaient aussi un glissement **vers la gauche** — donc le pager d'onglets de L1 n'aurait jamais reçu un glissement commencé sur une ligne.
+
+**Ce qui a changé.** `designsystem/SwipeRow.kt` (nouveau) porte le geste une seule fois ; les quatre corps (trois dans ce lot, `TrackRowView` en P1) l'appellent. Commit à **60 dp ou 600 dp/s** (le 64 px / 0,6 px/ms du SPA), retour `spring(dampingRatio = 0,85, stiffness = Spring.StiffnessMediumLow)` **amorcé de la vitesse de relâchement**, annulation `spring(1, …)`, et sous `NzMotionLevel.Reduced/Off` le retour est instantané (M14). `SectionTitle` prend `top = NzSpacing.pageY` (M11).
+
+**La règle que ce lot a apprise.** `detectHorizontalDragGestures` **consomme le changement qui franchit le touch slop, quelle que soit la direction** (le `change.consume()` est dans le callback du slop, avant de savoir où va le doigt) : « ne pas consommer si le delta est négatif » dans `onHorizontalDrag` ne suffit donc pas, et le pager reste sourd. `SwipeRow` lit les événements elle-même (`awaitEachGesture` + `awaitPointerEvent`) et ne consomme qu'une fois l'axe **et** le sens décidés (horizontal, vers la droite) ; un glissement vertical ou vers la gauche rend la main sans rien consommer. Ne pas revenir à `detectHorizontalDragGestures` ici sans relire `SwipeRowTest.aLeftwardDragReachesTheEnclosingParent`.
+
+**Mesuré.** Un glissement = **0 requête réseau** et **0 octet** (le composant ne fait aucune I/O ; il n'appelle que `Animatable.snapTo` et, au relâchement, `onQueue()` — la file est l'appelant). Le rappel de déplacement n'alloue rien d'autre que la `snapTo` (aucun `launch` par événement : le retour est le seul `launch`, un par geste). Le coût de frame sur une liste de 8 000 lignes (`FrameTimingMetric`, p95 ≤ 16,7 / p99 ≤ 25 ms) reste **dû sur un vrai appareil** : l'image de ce worker n'a ni KVM ni image système, donc pas d'émulateur — `mobile.yaml` est la preuve de compilation, et les captures sont celles de Robolectric.
+
+**Tests.** `SwipeRowTest` (Robolectric, `createComposeRule`, 5 cas avec `performTouchInput`, distances converties en px) : 40 dp lent → rien et retour à 0 ; 70 dp → un appel ; 20 dp en 16 ms (~1 200 dp/s) → un appel par la vitesse ; 80 dp vers la gauche → rien, traduction 0 **et** le parent `horizontalScroll` reçoit le geste (`scroll.value > 0`) ; `cancel()` → rien et retour à 0. `SwipeRowScreenshotTest` écrit `g1-rangees-repos.png` et `g1-rangees-glisse.png` (360 dp, Encre) ; les PNG de MB7/MB8/MB9 réécrits par `testDebugUnitTest` sont restaurés, jamais commités.
+
+**Hors portée.** `TrackRowView` (`Media.kt`, P1), la rangée de la file (`QueueSheet.kt`), les rangées du SPA (W1), tout redessin visuel de la rangée.
+
 ### M13 — Notifications demandées en contexte, mode voiture dans Réglages (delivered 2026-11-24)
 
 **La règle.** `POST_NOTIFICATIONS` est déclarée depuis MB0 et n'était jamais DEMANDÉE : la
