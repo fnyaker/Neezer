@@ -23,6 +23,7 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.minSdk.get().toInt()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -40,6 +41,12 @@ android {
     // its test pins).
     lint {
         disable += "UseTomlInstead"
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
     }
 }
 
@@ -70,6 +77,14 @@ dependencies {
     // said ("nothing else here may depend on GMS").
     implementation("com.google.android.gms:play-services-location:21.3.0")
 
-    // The ported policies: pure Kotlin, no device, no Robolectric.
+    // The ported policies: pure Kotlin, no device. Robolectric is for the ONE
+    // screen this module owns: `CarSettingsActivityLaunchTest` inflates it under
+    // the app's real window theme, the check that catches an `AppCompatActivity`
+    // (or a theme) that refuses to paint at all.
     testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.18")
+    // The device test that opens the settings and manoeuvres every control.
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }
