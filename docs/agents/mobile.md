@@ -6531,3 +6531,43 @@ chiffrée (`NzCore::stats()` froid puis chaud, deux captures d'émulateur à 360
 un appareil : l'image de ce worker n'a ni JDK, ni SDK Android, ni émulateur — même limite que M1 et
 M2. Ce que la CI prouve à la place : `testDebugUnitTest`, `lintDebug`, **`assembleRelease`** (R8
 garde `AsyncImage`, le fetcher et le keyer) et `Emulator smoke`.
+
+### M9 — Les deux portes de la Bibliothèque (delivered 2026-11-24)
+
+**La règle.** Le « + » de la Bibliothèque ouvre une feuille de quatre entrées (`Nouvelle playlist`,
+`Nouveau dossier`, `Organiser les playlists`, `Importer une playlist partagée`), et l'icône de lien
+de l'en-tête ouvre l'import sans passer par elle — les deux portes du SPA
+(`webapp/src/routes/Library.svelte:545`, `:611`). « Nouvelle playlist » demande le nom dans une
+feuille, parce que le téléphone n'a pas de `window.prompt` : `LibraryModel.newPlaylist` ne devine
+RIEN (pas de ligne optimiste — un nom sans playlist serait un mensonge), il fait le `POST
+/api/playlists` puis relit l'arbre (`GET /api/me/playlists`, le `userPlaylists(true)` du SPA) et
+publie l'identifiant rendu dans `State.openPlaylist` ; la coquille le suit
+(`LaunchedEffect(state.openPlaylist)` → `consumeOpenPlaylist()` → `nav.go(AppLink.Playlist(id))`).
+L'import part avec `AppLink.Import(url = "")` : l'écran d'import ne lit donc rien avant qu'une URL
+soit tapée.
+
+**Le piège.** `openPlaylist` doit être EFFACÉ avant la navigation, sinon revenir à la Bibliothèque
+rejoue l'`AppLink` et rouvre la playlist : la consommation précède le `go`, et
+`consumeOpenPlaylist()` est la seule écriture qui l'efface. Un nom vide ou fait d'espaces ne part
+pas du tout (`trim()` avant la requête).
+
+**Mesuré.** Créer une playlist = **2 requêtes** (`POST /api/playlists` + `GET /api/me/playlists`) ;
+ouvrir l'import = **0 requête**, **0 octet** (le diff n'ajoute aucun appel FFI pour cette porte,
+seulement `nav.go(AppLink.Import(""))`). Tests JVM `:feature:library` : **75 → 79**, mesuré en
+local sur `:feature:library:testDebugUnitTest` (79 tests, 0 échec, 0 sauté : `HistoryModelTest` 13,
+`LibraryModelTest` 28, `LibraryPlaylistDoorTest` 2, les deux captures 18 + 18) — `LibraryModelTest`
+gagne `creatingAPlaylistOpensItAndReloads` (la doublure rend `"41"`, la relecture de l'arbre est
+comptée, `consumeOpenPlaylist` remet `null`) et `aRefusedCreationNamesItsCauseAndOpensNothing` ;
+`LibraryPlaylistDoorTest` (Robolectric, 360 dp) clique l'icône de lien de l'en-tête et le chemin
+« + » → « Nouvelle playlist » → un nom → « Créer ».
+
+**Les deux captures du critère 2 ne sont pas dans ce lot.** `LibraryScreenshotTest` ne fait pas
+partie des `Fichiers` du lot, et les deux feuilles sont de l'état LOCAL de `LibraryScreen`
+(`addMenu`, `newPlaylistSheet`) : les capturer demande un clic avant le rendu, donc une variante du
+helper `capture(...)` qui accepte une interaction — un changement dans un fichier que le lot
+n'autorise pas. Mesuré au passage : `testDebugUnitTest` fait bien tourner le rendu Robolectric NATIVE
+sur un JDK 17 + SDK 36 installés à la main (les 38 PNG de MB8 ont été réécrits, octets différents de
+ceux committés — Skia de l'hôte ≠ celui qui les a produits), donc les réécrire depuis ce worker
+aurait changé 38 images d'un autre lot ; ils ont été restaurés. Reste prouvé par la CI :
+`testDebugUnitTest` (les deux feuilles sont composées ET cliquées par `LibraryPlaylistDoorTest`),
+`lintDebug`, `assembleRelease` et `Emulator smoke`.

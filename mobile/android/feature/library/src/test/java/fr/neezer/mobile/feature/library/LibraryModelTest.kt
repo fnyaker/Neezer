@@ -69,9 +69,12 @@ class LibraryModelTest {
         var probeCalls = 0
         var removed = mutableListOf<String>()
         val orders = mutableListOf<List<String>>()
+        /** Les noms des playlists créées, dans l'ordre. */
+        val created = mutableListOf<String>()
         var failFavorites: Exception? = null
         var failTree: Exception? = null
         var failCreate: Exception? = null
+        var failCreatePlaylist: Exception? = null
         var failRename: Exception? = null
         var failDelete: Exception? = null
         var failMove: Exception? = null
@@ -94,6 +97,12 @@ class LibraryModelTest {
         override suspend fun foldersSupported(): Boolean? {
             probeCalls++
             return supported
+        }
+
+        override suspend fun createPlaylist(title: String): String {
+            failCreatePlaylist?.let { throw it }
+            created += title
+            return "41"
         }
 
         override suspend fun createFolder(title: String): LibraryTree {
@@ -704,5 +713,49 @@ class LibraryModelTest {
         harness.model.filterFavorites("rien")
         assertEquals(0, harness.state.favoriteRows!!.len())
         assertEquals("rien", harness.state.favoriteFilter)
+    }
+
+    // -- la création d'une playlist --------------------------------------------
+
+    /**
+     * « Nouvelle playlist » : UNE création, l'arbre relu (le `userPlaylists(true)`
+     * du SPA), et l'identifiant rendu à la coquille qui ouvre la liste.
+     */
+    @Test
+    fun creatingAPlaylistOpensItAndReloads() {
+        val service = FakeLibrary()
+        val harness = Harness(service = service).loaded()
+        harness.model.selectLeaf(LibraryLeaf.Playlists)
+        assertEquals("the leaf's own read", 1, service.treeCalls)
+
+        harness.model.newPlaylist("   ")
+        assertEquals("a blank name asks nothing", emptyList<String>(), service.created)
+
+        harness.model.newPlaylist("  Test  ")
+        assertEquals(listOf("Test"), service.created)
+        assertEquals("the tree is read again, not guessed", 2, service.treeCalls)
+        assertEquals("41", harness.state.openPlaylist)
+        assertTrue("the reloaded tree is on screen", harness.state.treeData != null)
+
+        harness.model.consumeOpenPlaylist()
+        assertNull("the shell followed it once", harness.state.openPlaylist)
+    }
+
+    /** Une création refusée dit sa cause et n'ouvre rien. */
+    @Test
+    fun aRefusedCreationNamesItsCauseAndOpensNothing() {
+        val service = FakeLibrary()
+        service.failCreatePlaylist = IllegalStateException("Hors ligne")
+        val harness = Harness(service = service).loaded()
+
+        harness.model.newPlaylist("Test")
+
+        assertTrue(
+            "the toast names the cause: ${harness.toasts}",
+            harness.toasts.any {
+                it.startsWith("Impossible de créer la playlist : ") && it.contains("Hors ligne")
+            },
+        )
+        assertNull(harness.state.openPlaylist)
     }
 }

@@ -99,6 +99,10 @@ class LibraryActions(
     val closeMoveSheet: () -> Unit = {},
     val openPlaylist: (String) -> Unit = {},
     val openSearch: () -> Unit = {},
+    /** L'icône de lien de l'en-tête (`routes/Library.svelte:611`). */
+    val openImport: () -> Unit = {},
+    /** « Nouvelle playlist » de la feuille d'ajout. */
+    val newPlaylist: (String) -> Unit = {},
     val removeDislike: (TrackRow) -> Unit = {},
     /** The history leaf's body — `HistoryScreen`, owned by the same lot. */
     val historyBody: @Composable () -> Unit = {},
@@ -107,9 +111,9 @@ class LibraryActions(
 /**
  * Bibliothèque — lot MB8.
  *
- * The SPA's screen in the phone's shell: a head (title, counters, search and the
- * add action), a strip of leaves, the leaf's own tools, then ONE leaf. The
- * structures follow `routes/Library.svelte`:
+ * The SPA's screen in the phone's shell: a head (title, counters, search, the
+ * import link and the add action), a strip of leaves, the leaf's own tools, then
+ * ONE leaf. The structures follow `routes/Library.svelte`:
  *
  * - the « Titres » table is windowed over the core's handle (`ListHandle` →
  *   `ListWindow`), its search and sort go through `appcore`'s own fold, and
@@ -136,6 +140,7 @@ fun LibraryScreen(
     val listState = rememberLazyListState()
     var sectionMenu by remember { mutableStateOf<SectionView?>(null) }
     var addMenu by remember { mutableStateOf(false) }
+    var newPlaylistSheet by remember { mutableStateOf(false) }
     val openSectionMenu: (SectionView) -> Unit = { sectionMenu = it }
 
     // A leaf is a new pane: land at its top, as the SPA's panel does.
@@ -171,7 +176,12 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(bottom = SHELL_CLEARANCE),
             ) {
                 item(key = "head") {
-                    LibraryHead(state, onAdd = { addMenu = true }, onSearch = actions.openSearch)
+                    LibraryHead(
+                        state,
+                        onAdd = { addMenu = true },
+                        onImport = actions.openImport,
+                        onSearch = actions.openSearch,
+                    )
                 }
                 item(key = "leaves") { LeafBar(state, actions.selectLeaf) }
                 item(key = "tools") { LeafTools(state, actions) }
@@ -204,7 +214,15 @@ fun LibraryScreen(
                     onDismiss = { addMenu = false },
                     onNewFolder = { addMenu = false; actions.openFolderSheet(null, "") },
                     onOrganize = { addMenu = false; actions.organize() },
+                    onNewPlaylist = { addMenu = false; newPlaylistSheet = true },
+                    onImport = { addMenu = false; actions.openImport() },
                     canFolders = state.foldersSupported != false,
+                )
+            }
+            if (newPlaylistSheet) {
+                NewPlaylistSheet(
+                    onDismiss = { newPlaylistSheet = false },
+                    onCreate = { name -> newPlaylistSheet = false; actions.newPlaylist(name) },
                 )
             }
         }
@@ -226,6 +244,7 @@ private const val WINDOW_OFFSET = 3
 private fun LibraryHead(
     state: LibraryModel.State,
     onAdd: () -> Unit,
+    onImport: () -> Unit,
     onSearch: () -> Unit,
 ) {
     val colors = Sillon.colors
@@ -246,6 +265,11 @@ private fun LibraryHead(
                 glyph = NzGlyph.Search,
                 contentDescription = "Explorer",
                 onClick = onSearch,
+            )
+            NzIconButton(
+                glyph = NzGlyph.Link,
+                contentDescription = "Importer une playlist partagée",
+                onClick = onImport,
             )
             NzIconButton(
                 glyph = NzGlyph.Plus,
@@ -1112,16 +1136,26 @@ private fun SectionSheet(
     }
 }
 
-/** The one add menu (`Library.svelte#addMenu`, without the lots that own its
- * other items: playlist creation and import are MB9's, upload MB15's). */
+/**
+ * The one add menu (`Library.svelte#addMenu`, without the lots that own its
+ * other items: upload is MB15's, the Deezer sync is MB16's).
+ */
 @Composable
 private fun AddSheet(
     onDismiss: () -> Unit,
     onNewFolder: () -> Unit,
     onOrganize: () -> Unit,
+    onNewPlaylist: () -> Unit,
+    onImport: () -> Unit,
     canFolders: Boolean,
 ) {
     LibraryOverlay(title = "Ajouter à la bibliothèque", onDismiss = onDismiss) {
+        NzButton(
+            text = "Nouvelle playlist",
+            onClick = onNewPlaylist,
+            glyph = NzGlyph.Plus,
+            kind = NzButtonKind.Ghost,
+        )
         if (canFolders) {
             NzButton(
                 text = "Nouveau dossier",
@@ -1142,7 +1176,37 @@ private fun AddSheet(
                 color = Sillon.colors.dim,
             )
         }
+        NzButton(
+            text = "Importer une playlist partagée",
+            onClick = onImport,
+            glyph = NzGlyph.Link,
+            kind = NzButtonKind.Ghost,
+        )
         NzButton(text = "Fermer", onClick = onDismiss, kind = NzButtonKind.Ghost)
+    }
+}
+
+/** « Nom de la playlist ? » — le `window.prompt` du SPA (`Library.svelte:531`), en feuille. */
+@Composable
+private fun NewPlaylistSheet(
+    onDismiss: () -> Unit,
+    onCreate: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    LibraryOverlay(title = "Nouvelle playlist", onDismiss = onDismiss) {
+        NzSearchField(
+            value = name,
+            onValueChange = { name = it },
+            placeholder = "Nom de la playlist",
+            label = "Nom de la playlist",
+        )
+        NzButton(
+            text = "Créer",
+            onClick = { onCreate(name) },
+            enabled = name.isNotBlank(),
+            glyph = NzGlyph.Check,
+        )
+        NzButton(text = "Annuler", onClick = onDismiss, kind = NzButtonKind.Ghost)
     }
 }
 
