@@ -63,6 +63,7 @@ import fr.neezer.mobile.feature.playlist.SharedPlaylistEntry
 import fr.neezer.mobile.feature.podcasts.PodcastsEntry
 import fr.neezer.mobile.feature.podcasts.ShowEntry
 import fr.neezer.mobile.feature.remote.RemoteClaimEntry
+import fr.neezer.mobile.feature.remote.RemoteHostNotice
 import fr.neezer.mobile.feature.search.SearchEntry
 import fr.neezer.mobile.feature.settings.SettingsEntry
 import fr.neezer.mobile.feature.setup.LoginEntry
@@ -227,9 +228,14 @@ fun NzApp(graph: AppGraph) {
         if (wide) {
             Row(Modifier.fillMaxSize()) {
                 WideShell(nav, destination)
-                Box(Modifier.fillMaxSize()) {
-                    NavGraph(graph, nav, startRoute)
-                    Hosts(graph)
+                Column(Modifier.fillMaxSize()) {
+                    // M6 : « quelqu'un pilote ce lecteur » se voit depuis N'IMPORTE
+                    // quel écran, en haut de la colonne de contenu sur large.
+                    RemoteHostNotice(Modifier.fillMaxWidth())
+                    Box(Modifier.fillMaxSize()) {
+                        NavGraph(graph, nav, startRoute)
+                        Hosts(graph)
+                    }
                 }
             }
         } else {
@@ -249,6 +255,10 @@ fun NzApp(graph: AppGraph) {
                 },
                 bottomBar = {
                     Column {
+                        // M6 : la barre « Contrôlé par X · Couper » se glisse
+                        // au-dessus du mini-lecteur, donc visible sur tous les
+                        // écrans de la coquille téléphone (audit, bloqueur 6).
+                        RemoteHostNotice()
                         // The bar IS the door to the full-screen player on a
                         // phone (the SPA's `PlayerBar#cardTap`): `MiniPlayer`'s
                         // default `onClick` is a no-op, so mounting it bare left

@@ -6681,3 +6681,49 @@ tests (`podcastsTabOpensTheRealScreen`), et la sonde rend `door=Podcasts opened=
 été produites : l'image du worker n'a ni JDK, ni SDK Android, ni émulateur, ni `/dev/kvm`. La preuve
 fonctionnelle est la CI (`mobile.yaml`, job *Emulator smoke*), qui ouvre la porte et affirme le
 marqueur.
+
+### M6 — Télécommande : créer un lien, voir qui pilote (delivered 2026-11-24)
+
+**La règle.** Deux choses, une seule surface. Le lecteur crée un lien de télécommande (le glyphe
+« Contrôle à distance » et sa feuille sont MB19/M5, livrés) ; et dès qu'un contrôleur pilote CE
+téléphone, une barre « Contrôlé par X · Couper » est peinte dans la coquille, au-dessus du
+mini-lecteur sur téléphone et en haut de la colonne de contenu sur large — donc depuis N'IMPORTE
+quel écran, pas seulement la feuille. « Couper » y révoque TOUT au premier geste (`cutAllNow`),
+sans la confirmation en deux temps de la feuille : la personne voit qui la pilote et reprend son
+lecteur d'un seul tap (audit, bloqueur 6). La feuille garde son propre rituel (`cutAll`).
+
+**Pourquoi dans la coquille et pas dans un écran.** `:feature:settings` et `:feature:nowplaying`
+ne peuvent pas monter une barre de coquille, et `HostChip` reste interne à `:feature:remote` :
+c'est `:app` qui appelle `RemoteHostNotice` (`NavGraph.kt`, les deux coquilles). Le statut vient
+de Rust sur CHANGEMENT (`RemoteListener`), jamais d'un minuteur ; la barre ne dessine rien tant
+qu'aucun contrôleur n'est connecté (`controllers.isEmpty()` → 0 dp, la coquille est inchangée).
+
+**Ce que MB19 laissait en attente, et qui est fait ici.** MB19 notait « Resuming at LAUNCH » comme
+suivi pour un fichier partagé : un appareil prêté lors d'une session précédente ne répondait plus
+après un redémarrage tant que la feuille (ou le bouton) n'avait pas été ouvert. `resumeHostAtStart()`
+appelle `subscribe()` puis `resumeHost()` une fois, dans une coroutine du scope de la barre : le
+noyau ne pose la question au serveur que si `remote.hosted` est vrai (appareil déjà prêté), et
+`false` sinon.
+
+**Mesuré — et un écart avec la prédiction du plan.** **0 requête** au lancement d'un appareil qui
+n'a JAMAIS été prêté (`RemoteHost::resume` sort avant tout appel, `nz-remote/src/host.rs`). Pour un
+appareil déjà prêté, le lancement coûte **2 `GET /api/remote/links?device=`**, pas 1 : le premier
+appel async du process attache le service (`remote_attach`), et cette attache pose DÉJÀ la question
+(`nz-core/src/remote/mod.rs#resume_host`), puis `resumeHost()` la repose. Le plan prévoyait « +1 ».
+Le total reste borné et minuscule (2 petits GET, lane `User`, une fois par lancement), mais le
+dédoublonnage demande une décision hors de ce lot : soit `remote_attach` ne reprend que si l'appelant
+ne va pas le faire, soit la barre appelle l'attache directement (`RemoteCore.api()`, interne au
+module) au lieu de `resumeHost()`. **Preuve de forme** : `grep -rn "resumeHostAtStart"
+mobile/android` ne rend que la définition (`RemoteModel.kt`) et le seul appelant
+(`RemoteHostNotice.kt`, son `LaunchedEffect`), et le diff n'ajoute aucun autre appel FFI.
+
+**Tests.** `HostChipTest` (Robolectric, `w360dp-h800dp-xhdpi`, rendu natif) : la barre NOMME qui
+pilote (`onNodeWithText("Léa").assertIsDisplayed()`) et « Couper » part au premier geste
+(`assertEquals(1, cuts)`). Les deux assertions tiennent la règle du lot ; la capture d'émulateur de
+la barre (créer un lien, le réclamer depuis un `curl`) n'a pas été produite — l'image du worker n'a
+ni JDK, ni SDK Android, ni émulateur — donc `mobile.yaml` est la preuve automatique, et la capture
+reste due sur une machine de banc.
+
+**Fichiers** (ce lot) : `feature/remote/.../RemoteHostNotice.kt` (nouveau), `RemoteModel.kt`
+(`cutAllNow`, `resumeHostAtStart`), `feature/remote/src/test/.../HostChipTest.kt` (nouveau),
+`app/.../NavGraph.kt` (les deux emplacements) et cette section.
