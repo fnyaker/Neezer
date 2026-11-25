@@ -51,6 +51,8 @@ import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState.Pane
+import fr.neezer.mobile.feature.party.PartyButton
+import fr.neezer.mobile.feature.remote.RemoteButton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -235,6 +237,12 @@ fun NowPlayingHost(nav: NzNavigator, modifier: Modifier = Modifier) {
             lyrics = lyrics,
             about = about,
             onClose = { NowPlayingState.hide() },
+            // Les deux portes du SPA (`MobileNowPlaying.svelte` §9), à leur place
+            // dans la rangée du pouce. `PlayerSurface` a les slots depuis MB11 et
+            // la coquille n'y passait rien : ni la soirée ni la télécommande
+            // n'avaient de porte (audit 5 et 6).
+            party = { PartyButton() },
+            remote = { RemoteButton() },
         )
     }
 

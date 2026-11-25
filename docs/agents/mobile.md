@@ -6758,3 +6758,56 @@ ce fichier. Le test instrumenté `AppLinkColdStartTest.aTrackLinkSaysItCannotOpe
 le nœud « ne s'ouvre pas encore » dans l'arbre d'accessibilité (le toast vit 2,4 s :
 `NzToasts.LingerMs`). L'image du worker n'a ni JDK ni émulateur : la capture du toast et la passe du
 test sont prouvées par le job `Emulator smoke` de `mobile.yaml`, pas par une capture jointe au PR.
+### M5 — Soirée : la porte de l'hôte (delivered 2026-11-24)
+
+**La règle.** Le lecteur plein écran porte les deux portes du SPA, dans la rangée du pouce entre
+« + » et « Paroles » : « Soirée d'écoute » (`PartyButton`, MB20) et « Contrôle à distance »
+(`RemoteButton`, MB19). `PlayerSurface` a ces deux slots depuis MB11 (`PlayerSheet.kt`,
+`party`/`remote`) et la coquille n'y passait rien : les deux feuilles existaient mais aucune porte
+ne les ouvrait depuis le lecteur (audit 5 et 6). `NowPlayingHost` passe les deux composables, sans
+état : chacun construit son modèle et se cache de lui-même (noyau absent, serveur sans la route,
+personne non connectée), donc la rangée ne montre jamais une porte qui ne mène nulle part (rule 7).
+`:feature:nowplaying` dépendait déjà de `:feature:remote` et `:feature:party` : aucune dépendance
+Gradle ajoutée.
+
+**Ce que le test prouve, et ce qu'il ne prouve pas.** `NowPlayingScreenshotTest`
+`thePlayerRowHasRoomForTheTwoDoors` compose `PlayerSurface` avec deux `NzIconButton` aux libellés
+« Soirée d'écoute » et « Contrôle à distance », puis lit la géométrie dans l'arbre de sémantique :
+à **chaque** largeur de la classe (360, 600 et 1280 dp) et aux **deux** échelles de police (100 %
+et 200 %), il asserte que chacune des cinq portes garde une cible de 48 × 48 dp, que la rangée tient
+sur UNE ligne dans la largeur utile de la page, sans chevauchement, et que « À propos » est SOUS la
+rangée, centré. Il prouve que `Doors` peint les slots et que la rangée tient ; **pas** que l'app les
+alimente. Cette seconde moitié se lit dans `NowPlayingHost` (deux lignes) et se voit à l'écran.
+`mobile.yaml` (`testDebugUnitTest`, `lintDebug`, `assembleRelease`) est la mesure.
+
+**La rangée du pouce tient cinq portes à 48 dp — les mots cèdent avant une cible.** Mesuré par le
+test (`MEASURE m5 row`), à 360 dp : 296 dp des 320 utiles (360 − 2 × 20 dp de `pageX`) à 100 %, et
+256 dp à 200 %. À 600 dp : 296 des 560 dp à 100 %, 388,5 à 200 %. À 1280 dp : 295 des 1232 dp,
+390 à 200 %. Au-delà de 100 %, les deux portes à mot ne tiennent plus à côté des trois icônes :
+`Doors` mesure « Paroles » et « File · n » avec `rememberTextMeasurer` dans l'échelle en force et
+les remplace par `NzGlyph.Music` / `NzGlyph.Queue` quand la ligne déborderait — le
+`contentDescription` reste, donc TalkBack dit toujours « Paroles » et « File d'attente ».
+
+**Six cibles de 48 dp ne tiennent pas sur 320 dp : une action secondaire passe SOUS la rangée.** Six
+cibles et leurs intervalles demandent 348 dp pour 320, et un `Row` qui déborde ne coupe pas : Compose
+rétrécit son DERNIER enfant, le chevron « À propos » tombait à ~20 dp (mesuré sur
+`mb11-encre-360dp-lecteur.png`, 720 px = 360 dp). Le SPA met d'ailleurs « À propos » sous sa rangée
+(`.peek`). `PlayerSheet.kt` fait pareil avec `AboutPeek` : une pastille de verre centrée sous la
+rangée, cible de 48 dp, petites capitales mono et chevron haut, même `onClick` et même
+`contentDescription` que l'ancien chevron. La règle, pour les prochaines actions : **la rangée du
+pouce porte au plus cinq cibles de 48 dp à 320 dp utiles ; tout le reste va dessous ou dans le menu
+⋯.**
+
+**Un slot n'est pas une porte à mot.** Les deux slots étaient enveloppés dans `Door`, dont les 8 dp
+de marge laissaient 32 dp à la porte de soirée (mesuré par le test sur `dcb78607`) : la rangée les
+enveloppe maintenant dans une boîte de 48 dp **sans** marge intérieure.
+
+**La capture MB11 est refaite.** `docs/agents/screenshots/mobile/MB11/mb11-*-lecteur*.png` (360, 600
+et 1280 dp, Encre et Papier, plus `…-font200.png`) : la pastille « À propos » sous la rangée à
+100 %, la rangée en glyphes à 200 %. Dans ce banc les deux portes peignent leur corps de test
+(`NzIconButton`) — `PartyButton` sort avant de dessiner quand `PartyCore.service()` est nul — donc la
+preuve des vraies portes reste `Emulator smoke` (`doors_opened=6 doors_failed=0`).
+
+**+0 requête.** Le diff n'ajoute aucun appel FFI : les deux boutons sondent le serveur une fois à
+leur première composition, comme quand MB19/MB20 les ont écrits, puis vivent de leur état. Un
+lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les deux se cachent.

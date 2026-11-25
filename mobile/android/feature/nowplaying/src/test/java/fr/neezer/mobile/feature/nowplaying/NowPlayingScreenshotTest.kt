@@ -9,12 +9,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
@@ -22,6 +31,7 @@ import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.feature.nowplaying.NowPlayingState.Pane
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,7 +55,7 @@ import org.robolectric.annotation.GraphicsMode
  * not clip at 200 %, or the thumb row still fits five 44 dp targets on a 360 dp
  * phone.
  */
-abstract class NowPlayingScreenshotBase(private val width: Int) {
+abstract class NowPlayingScreenshotBase(protected val width: Int) {
     @get:Rule
     val rule = createAndroidComposeRule<ComponentActivity>()
 
@@ -284,6 +294,122 @@ abstract class NowPlayingScreenshotBase(private val width: Int) {
         assert(NowPlayingState.pane == Pane.Queue)
         NowPlayingState.hide()
         assert(!NowPlayingState.open && NowPlayingState.pane == Pane.None)
+    }
+
+    /**
+     * The two doors of M5: « Soirée d'écoute » and « Contrôle à distance », in the
+     * thumb row between « + » and « Paroles » (`MobileNowPlaying.svelte` §9).
+     *
+     * It proves the row FITS at every width of the class and at both font scales
+     * the plan names: every door keeps a ≥ 48 dp touch target, the five doors stay
+     * on ONE line inside the page's usable width, and « À propos » — which left the
+     * row in this lot — sits below it, centred. Run against `dcb78607` it fails
+     * first on « Soirée d'écoute » (**32 dp**: the slot was wrapped in `Door`'s
+     * 8 dp pads), then on « Paroles » (no contentDescription); the row of six with
+     * the chevron inside it is the ~20 dp last target MB11's capture measured.
+     *
+     * That the app PASSES the two slots is `NowPlayingHost`'s two lines, and the
+     * emulator smoke is what opens the real player.
+     */
+    @Test
+    fun thePlayerRowHasRoomForTheTwoDoors() {
+        val model = model()
+        // The state is read OUTSIDE the composition (lint's `StateFlow.value` rule).
+        val state = model.state.value
+        val fontScale = mutableStateOf(1f)
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
+                val density = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale.value)) {
+                    PlayerSurface(
+                        state = state,
+                        model = model,
+                        nav = navigator,
+                        lyrics = null,
+                        about = null,
+                        onClose = {},
+                        party = { NzIconButton(NzGlyph.Party, "Soirée d'écoute", {}) },
+                        remote = { NzIconButton(NzGlyph.Remote, "Contrôle à distance", {}) },
+                        liveReads = false,
+                    )
+                }
+            }
+        }
+        for (scale in listOf(1f, 2f)) {
+            fontScale.value = scale
+            rule.mainClock.advanceTimeBy(1_200)
+            shadowOf(Looper.getMainLooper()).idle()
+            rule.waitForIdle()
+            assertTheThumbRowFits(scale)
+        }
+    }
+
+    /**
+     * The row's own geometry, read from the semantics tree: five doors, one line,
+     * 48 dp each, inside the page's usable width — and the peek below them.
+     */
+    private fun assertTheThumbRowFits(fontScale: Float) {
+        val doors = listOf(
+            "Ajouter à une playlist",
+            "Soirée d'écoute",
+            "Contrôle à distance",
+            "Paroles",
+            "File d'attente",
+        )
+        val boxes = doors.map { description ->
+            val node = rule.onNodeWithContentDescription(description).assertIsDisplayed()
+            val bounds = node.getUnclippedBoundsInRoot()
+            println(
+                "MEASURE m5 door: width=${width}dp fontScale=$fontScale « $description » " +
+                    "${bounds.right - bounds.left}×${bounds.bottom - bounds.top} at x=${bounds.left.value}",
+            )
+            node.assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+            bounds
+        }
+        val left = boxes.minOf { it.left.value }
+        val right = boxes.maxOf { it.right.value }
+        val top = boxes.minOf { it.top.value }
+        val bottom = boxes.maxOf { it.bottom.value }
+        // 360 dp keeps the phone's `pageX` (20 dp); the wide shells keep `xl`.
+        val usable = width - 2 * if (width >= 640) 24 else 20
+        println(
+            "MEASURE m5 row: width=${width}dp fontScale=$fontScale " +
+                "row=${right - left}dp usable=${usable}dp top=${top}dp bottom=${bottom}dp",
+        )
+        assertTrue(
+            "the five doors span ${right - left} dp of the $usable dp usable at $fontScale×",
+            right - left <= usable + 0.5f,
+        )
+        assertTrue(
+            "the row is ONE line at $fontScale× (tops ${boxes.map { it.top.value }}, " +
+                "bottoms ${boxes.map { it.bottom.value }})",
+            boxes.all { it.top.value - top <= 0.5f && bottom - it.bottom.value <= 0.5f },
+        )
+        // Side by side, in order, no overlap: a wrapped Row would stack them.
+        boxes.zipWithNext { a, b ->
+            assertTrue("each door is right of the previous one at $fontScale×", b.left.value >= a.right.value)
+        }
+        val about = rule.onNodeWithContentDescription("À propos du titre")
+            .assertIsDisplayed()
+            .assertWidthIsAtLeast(48.dp)
+            .assertHeightIsAtLeast(48.dp)
+            .getUnclippedBoundsInRoot()
+        println(
+            "MEASURE m5 peek: width=${width}dp fontScale=$fontScale " +
+                "${about.right - about.left}×${about.bottom - about.top} at x=${about.left.value} " +
+                "rowBottom=${bottom}dp",
+        )
+        assertTrue(
+            "« À propos » sits UNDER the row at $fontScale× (about.top=${about.top.value}, row.bottom=$bottom)",
+            about.top.value >= bottom - 0.5f,
+        )
+        // Centred on the column the row lives in.
+        val rowCentre = (left + right) / 2
+        val aboutCentre = (about.left.value + about.right.value) / 2
+        assertTrue(
+            "« À propos » is centred under the row at $fontScale× ($aboutCentre vs $rowCentre)",
+            kotlin.math.abs(aboutCentre - rowCentre) <= 1f,
+        )
     }
 }
 
