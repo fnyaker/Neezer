@@ -256,6 +256,26 @@ jobs:
           NZ_WHISPER_AUDIO="$RUNNER_TEMP/whisper/jfk.wav" \
             desktop/tools/check_cpu_floor.sh "$RUNNER_TEMP/arch-pkg/usr/bin/neezer-transcribe" \
             --no-ggml
+      # THE INSTALLED PACKAGE OPENS THE APP. The deb, rpm, AppImage and Flatpak
+      # jobs already install their package and start it (`packaging/*/test.sh`);
+      # the Arch package — the Omarchy laptop this app is FOR — only ran
+      # `neezer-transcribe`. Here the package is INSTALLED through `pacman` (which
+      # resolves its `depends`, already present) and `neezer-desktop` paints its
+      # first frame under Xvfb + lavapipe, the same `first_frame_ms=<n>`
+      # assertion the other four make. `xorg-server-xvfb` and `vulkan-swrast`
+      # (lavapipe) are the test's own tools, not the package's dependencies;
+      # `ttf-dejavu` is the font GPUI needs (the deb test's `fonts-dejavu-core`).
+      - name: The installed package opens the app's window (Xvfb, our own display)
+        run: |
+          set -euo pipefail
+          pacman -S --noconfirm --needed xorg-server-xvfb vulkan-swrast ttf-dejavu
+          cd "$GITHUB_WORKSPACE/desktop/packaging/arch"
+          pacman -U --noconfirm --needed neezer-desktop-[0-9]*.pkg.tar.zst
+          # shellcheck source=desktop/packaging/lib.sh
+          source "$GITHUB_WORKSPACE/desktop/packaging/lib.sh"
+          trap neezer_xvfb_stop EXIT
+          neezer_xvfb_start
+          neezer_expect_first_frame neezer-desktop --self-test-quit-after-first-frame
       - name: Upload the package
         uses: actions/upload-artifact@v4
         with:
