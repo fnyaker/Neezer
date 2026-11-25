@@ -10,9 +10,11 @@
 //! - **The pin is remembered per origin**, in the same `kv` store as every other
 //!   setting, and cleared with an empty hash. `nz-api`'s TOFU verifier (SC3) is
 //!   what enforces it on the handshake; this file is what survives a restart.
-//! - **`probe_certificate` needs SC3's handshake-only probe**, which `nz-api`
-//!   does not have yet: until it lands, the answer is an explicit `Unsupported`
-//!   (the setup screen hides the control) rather than a made-up fingerprint.
+//! - **`probe_certificate` is SC3's handshake-only probe**, joined to this crate:
+//!   the leaf it records is the one the setup screen shows before trusting it,
+//!   and the one `ReleaseTlsTrustTest` asks a RELEASE build to produce (v1.6.6 —
+//!   the only call that makes the PLATFORM verifier answer, and therefore the
+//!   only one that proves R8 kept the JNI-reached verifier class).
 
 use std::sync::Arc;
 
@@ -197,12 +199,29 @@ impl Core {
     }
 
     /// Learns a certificate with a handshake that sends nothing — SC3's
-    /// `nz-api::probe_certificate`, which MB4's setup screen calls. Not in
-    /// `nz-api` yet, so the answer says exactly that instead of inventing a
-    /// fingerprint (rule 7: hide the control, do not fail every time).
-    pub async fn probe_certificate(&self, _url: &str) -> Result<CertificateInfo, CoreError> {
-        Err(CoreError::Unsupported {
-            feature: "mb4:probe_certificate".to_owned(),
+    /// `nz_api::Api::probe_certificate`, which MB4's setup probe reads the leaf
+    /// through.
+    ///
+    /// It was an explicit `Unsupported` while SC3's prober did not exist; it
+    /// does now, and this is its one FFI-facing door (`NzCore.probeCertificate`).
+    /// The instrumented `ReleaseTlsTrustTest` calls it against a Let's Encrypt
+    /// host on a MINIFIED build: the platform verifier is the only thing that can
+    /// answer `system_trusted`, so a release whose R8 config stripped
+    /// `org.rustls.platformverifier.CertificateVerifier` fails there (v1.6.5).
+    pub async fn probe_certificate(&self, url: &str) -> Result<CertificateInfo, CoreError> {
+        // Rule 3: a radio that is down answers at once, in zero sockets.
+        if !self.is_online() {
+            return Err(CoreError::Offline);
+        }
+        let info = nz_api::Api::probe_certificate(url)
+            .await
+            .map_err(CoreError::from)?;
+        Ok(CertificateInfo {
+            sha256: info.sha256,
+            subject: info.subject,
+            issuer: info.issuer,
+            not_after: info.not_after,
+            system_trusted: info.system_trusted,
         })
     }
 }
@@ -436,6 +455,49 @@ mod tests {
     const KEY_A: &[u8] = include_bytes!("fixtures/tls/key_a.der");
     const CERT_B: &[u8] = include_bytes!("fixtures/tls/cert_b.der");
     const KEY_B: &[u8] = include_bytes!("fixtures/tls/key_b.der");
+
+    // ---- probe_certificate (v1.6.6) -------------------------------------
+
+    /// `Core::probe_certificate` answers what SC3's prober answers: the leaf the
+    /// loopback server presents comes back with the fingerprint `Ssl.kt` spells
+    /// and `system_trusted == false` — a throwaway leaf is nobody's CA. This is
+    /// the call `ReleaseTlsTrustTest` makes on a device (with a Let's Encrypt
+    /// host, where the verdict must be true).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_core_certificate_probe_learns_a_self_signed_leaf() {
+        let (port, _seen, server) = tls_script(vec![TlsHop::new(CERT_A, KEY_A, 200, b"{}")]);
+        let url = format!("https://127.0.0.1:{port}");
+        let dir = TempDir::new("probe-cert");
+        let core = dir.core("test");
+
+        let info = core
+            .probe_certificate(&url)
+            .await
+            .expect("the leaf recorded");
+        assert_eq!(
+            info.sha256,
+            fingerprint_of(CERT_A),
+            "the fingerprint the setup screen shows and pins"
+        );
+        assert!(!info.system_trusted, "no public authority signs this leaf");
+        assert!(!info.issuer.is_empty(), "its names were read off the DER");
+        server.join().expect("the server thread");
+    }
+
+    /// Rule 3: no link, no socket, no wait — the same gate `set_server` takes.
+    #[tokio::test]
+    async fn a_certificate_probe_offline_answers_at_once() {
+        let dir = TempDir::new("probe-cert-offline");
+        let core = dir.core("test");
+        core.set_network(crate::core::NetworkState::None);
+        assert_eq!(
+            core.probe_certificate("https://neezer.example")
+                .await
+                .expect_err("no link"),
+            CoreError::Offline
+        );
+        assert!(core.stats().is_empty(), "not one socket was opened");
+    }
 
     /// The SHA-256 `Ssl.kt` spells, computed by the crate that owns the rule.
     fn fingerprint_of(cert: &'static [u8]) -> String {
