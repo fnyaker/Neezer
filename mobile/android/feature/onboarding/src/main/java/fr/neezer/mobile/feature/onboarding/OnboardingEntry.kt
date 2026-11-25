@@ -31,7 +31,7 @@ import uniffi.nz_ffi.Screens
 fun OnboardingEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
     OnboardingFlow(
         initialStep = null,
-        onDone = { nav.go(AppLink.Home) },
+        onDone = { nav.openHomeAfterSignIn() },
         modifier = modifier,
     )
 }

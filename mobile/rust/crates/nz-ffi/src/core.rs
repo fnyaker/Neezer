@@ -122,6 +122,15 @@ pub struct Me {
     pub name: String,
     /// The administrator sections of Réglages are only shown when true.
     pub admin: bool,
+    /// Where the first-run flow stands: `"artists"`, `"account"`, `"done"`, or
+    /// `None` on a server that does not send it. `lib/onboarding.js#stepFor`
+    /// reads the same field: anything but the two steps is `done`.
+    ///
+    /// `default = None` keeps the record ADDITIVE: a Kotlin `Me(...)` that omits
+    /// it still compiles (the field means "the server did not say", the same
+    /// thing `None` says), so no test double outside this lot has to change.
+    #[uniffi(default = None)]
+    pub onboarding: Option<String>,
     pub avatar: Option<String>,
 }
 
@@ -131,6 +140,7 @@ impl From<MeInner> for Me {
             id: me.user.id.as_str().to_owned(),
             name: me.user.name,
             admin: me.user.admin,
+            onboarding: me.user.onboarding,
             // `/api/me` carries no avatar: the shell paints the person's initial
             // until a route provides one (MB16).
             avatar: None,
@@ -288,6 +298,14 @@ impl NzCore {
     /// A session cookie is on the device (no socket, works offline).
     pub fn has_session(&self) -> bool {
         self.core.has_session()
+    }
+
+    /// The person the last successful `login`/`restore` left in memory, or
+    /// `None` before one answered. Reads the core's own slot, never the network:
+    /// `startRoute` asks it to honour the onboarding step at the first frame
+    /// (M3), and a cold start simply has `None` until `restore()` answers.
+    pub fn me(&self) -> Option<Me> {
+        self.core.me().map(Me::from)
     }
 
     /// Saves the server and checks it answers `GET /api/version`.
@@ -682,6 +700,19 @@ mod tests {
         assert!(me.is_none());
         assert!(reason.contains("Session"), "{reason}");
         assert!(!reason.contains("401"), "never a code: {reason}");
+    }
+
+    /// The onboarding step crosses the boundary as the shell's route guard reads
+    /// it (M3). The field comes from `/api/me`, already read by `restore()`:
+    /// nothing new is asked of the server.
+    #[test]
+    fn me_carries_the_onboarding_step() {
+        let mut inner = MeInner::default();
+        inner.user.onboarding = Some("artists".to_owned());
+        assert_eq!(Me::from(inner).onboarding, Some("artists".to_owned()));
+        // A server that does not send the field leaves the step unknown, and the
+        // shell then treats the preparation as done (the SPA's `stepFor`).
+        assert_eq!(Me::from(MeInner::default()).onboarding, None);
     }
 
     /// A screen-shaped list crosses with what it draws: 8 000 rows stay in Rust

@@ -61,4 +61,13 @@ interface NzNavigator {
      * Une méthode par DÉFAUT, comme [openViz].
      */
     fun openSetup() {}
+
+    /**
+     * La préparation du compte (`#/onboarding` du SPA) : un compte connecté qui
+     * n'a pas terminé sa préparation y atterrit au lieu de la coquille vide.
+     *
+     * Une méthode par DÉFAUT, comme [openViz] : les doublures de test des autres
+     * modules n'ont pas à l'implémenter.
+     */
+    fun openOnboarding() {}
 }

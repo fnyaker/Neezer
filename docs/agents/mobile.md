@@ -2440,8 +2440,8 @@ request):
   (`recent.tracks` in `localStorage`) that no core store carries yet; it needs
   MB3b's listen accounting to publish the last played rows.
 - **« Tout afficher »** (the door to Nouveautés) — `NzNavigator` speaks
-  `AppLink`s and there is no `AppLink` for the releases shelf; MB14 adds one when
-  it fills that screen (this lot may not edit `links.rs`).
+  `AppLink`s and there was no `AppLink` for the releases shelf when MB5 landed;
+  **M8 delivers it** over `AppLink.Releases` (see its section below).
 - **The discovery SLIDER** — `DiscoverySlider.svelte` is MB14's; the hero's
   tuning chip opens the four `discovery.js` stops as chips, which is the same
   value set the slider snaps to.
@@ -6427,6 +6427,70 @@ définition est `val sessions` dans `NzBridge.kt`. `AccountDoorsTest` (Robolectr
 (aucun producteur de `Session.Ended` sans `.so`) : il se prouve à l'émulateur, en invalidant le
 cookie côté banc — l'image du worker n'a ni JDK ni émulateur, donc ce lot ne l'a pas capturé.
 
+### M3 — Onboarding gardé par le serveur (delivered 2026-11-24)
+
+**La règle.** Un compte connecté dont `/api/me` dit que la préparation reste à faire atterrit sur
+`Routes.Onboarding`, comme la garde du SPA : `user.onboarding` vaut `"artists"` ou `"account"` →
+préparation ; `"done"` ou absent → accueil (`stepFor` de `webapp/src/lib/onboarding.js:230` : tout ce
+qui n'est pas les deux étapes est terminé). Deux chemins l'appliquent, une seule table de décision
+(`AppGraph.routeFor`) : le collecteur `MeChanged` (restauration au lancement, compte créé par une
+invitation, changement de personne) et `AppGraph.startRoute()` quand le noyau connaît déjà la
+personne. Terminer la préparation (`OnboardingEntry.onDone`) passe par `openHomeAfterSignIn` : elle
+sort de la pile, sinon « retour » depuis l'accueil ramène sur une préparation terminée.
+
+**Pourquoi `NzCore::me()` a été ajouté.** La consigne du plan écrivait `startRoute()` avec un `me` en
+portée, qui n'existait pas : `AppGraph` ne lisait que `server()` et `has_session()`, et le `Me` ne
+vivait que dans le noyau. L'accesseur rend le `Me` que `login`/`restore` a déjà mis en mémoire (une
+lecture de verrou, **aucune** requête) ; sans lui le seul recours aurait été de persister l'étape,
+une décision que le plan ne prend pas. Le repli de M1 reste intact : au démarrage à froid la personne
+n'est pas encore lue, donc un cookie ouvre l'accueil et c'est `MeChanged` qui ouvre la préparation
+s'il en reste une. La ligne littérale du plan (`else Routes.Login`) aurait envoyé tout porteur de
+cookie sur la connexion à chaque lancement, un retour en arrière sur M1.
+
+**Mesuré.** **+0 requête, +0 octet** : le champ vient de `/api/me`, déjà lu par `restore()` ; le
+collecteur et `startRoute()` ne font que lire un `Option<Me>` en mémoire. Preuve Rust :
+`me_carries_the_onboarding_step()` (nz-ffi) construit un `MeInner` à `Some("artists")` et vérifie le
+champ chez `Me`, plus le cas absent (`None`). Les bindings Kotlin sont régénérées par
+`mobile/rust/build-android.sh` en CI, jamais commitées. La capture d'émulateur d'un premier écran
+« préparation » n'a pas été produite : l'image du worker n'a ni JDK ni émulateur, et `mobile.yaml` ne
+lance pas de session de banc — la preuve automatique du lot est le test Rust du champ, la navigation
+étant prouvée par compilation et par les tests de la coquille.
+
+**Deux pièges pour le prochain champ d'un record.** (1) UniFFI ne donne PAS de valeur par défaut à
+un champ : un nouveau champ de `Me` casse toute construction Kotlin `Me(...)` qui l'omet (deux
+doublures Robolectric, dans `feature:setup` et `feature:onboarding`, sont hors des fichiers d'un lot
+et ne doivent pas bouger). `onboarding` porte donc `#[uniffi(default = None)]` : `None` est
+exactement « le serveur ne l'a pas dit », et les constructions existantes compilent. (2) Un smart
+cast sur `event.me` est refusé (propriété `val` d'un AUTRE module Gradle) : la branche écrit
+`when (val me = event.me)`, sinon `mobile.yaml` échoue à la compilation Kotlin.
+### M8 — Nouveautés : « Tout afficher » (delivered 2026-11-24)
+
+**La règle.** L'en-tête de la carte « Nouveautés » de l'accueil porte les DEUX actions du SPA
+(`webapp/src/routes/Home.svelte:252`) : le bouton de lecture (« Tout lire », le même
+`NzIconButton(Play)` qu'avant) et, dessous, le lien fantôme « Tout afficher ». Le tap passe par
+`AppLink.Releases` — l'`AppLink` que l'écran Nouveautés utilise déjà pour son propre en-tête
+(`DiscoveryEntries.kt`), donc une seule route pour la porte et la page, jamais un `NavController`
+dans l'écran.
+
+**Pourquoi « Tout afficher » sur sa propre rangée, et pas empilé sous le bouton de lecture.** Le
+plan empilait les deux dans une `Column` de l'en-tête ; cette colonne mesure alors la largeur du
+LIBELLÉ, et à 200 % elle a pris sur le titre : « Nouveautés » s'est coupé en « Nouveau-/tés » et
+« 3 titres » est passé à un caractère par ligne (mesuré sur le rendu 200 % de MB5, refait par ce
+lot). Sur sa propre rangée, le lien est au MÊME bord droit, et le titre garde la largeur qu'il avait
+avant que la porte existe — le rendu 200 % redevient celui de MB5. Un `spacedBy(NzSpacing.xxs)`
+garde les deux actions serrées à 360 comme à 600 dp.
+
+**+0 requête, +0 octet.** La porte ne fait que naviguer : `openReleases = { nav.go(AppLink.Releases) }`
+n'ajoute aucun appel FFI et ne lit rien. `grep -n "openReleases" mobile/android/feature/home/src/main`
+→ 3 lignes (le champ de `HomeActions`, l'`NzButton` et le câblage), zéro appel au noyau. La page
+Nouveautés lit sa propre route (MB14 : `GET /releases` 116 835 B à froid, 0 à chaud).
+
+**Mesuré, pas supposé.** `:feature:home:testDebugUnitTest` : **27 tests, 0 échec** sur la JVM (JDK
+17, Gradle 8.14.7, Robolectric en graphismes NATIFS, en 1 min) — dont `HomeReleasesDoorTest`
+(`w360dp-h800dp-xhdpi`, `hasText("Tout afficher") and hasClickAction()` → `openReleases` appelé
+**une** fois). Les images de l'accueil de MB5 sont refaites par ce lot (le rendu de la vraie page,
+pas une maquette) : `docs/agents/screenshots/mobile/MB5/mb5-encre-360dp.png` porte le lien, et le
+200 % (`mb5-encre-360dp-font200.png`) est inchangé pour le titre.
 
 ### M11 — Pochettes : fournir le chargeur (delivered 2026-11-24)
 
