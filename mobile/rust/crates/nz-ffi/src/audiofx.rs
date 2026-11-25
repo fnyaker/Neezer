@@ -623,6 +623,44 @@ mod tests {
         core.shutdown();
     }
 
+    /// **The screen's write reaches the LIVE engine, not only the string.**
+    ///
+    /// The other tests (and the JVM ones) stop at `"high"` coming back: this one
+    /// reads the player's own `AudioSettings`, the value `apply_audio` hands the
+    /// engine's atomics, which is the link that was missing between the card and
+    /// the sound (`docs/agents/mobile.md`, T6).
+    #[test]
+    fn fx_set_normalization_reaches_the_live_player() {
+        let core = test_core("normalization-live");
+        let api = core.player();
+        let live = api.player().expect("the live player");
+        assert_eq!(
+            live.audio().normalization,
+            nz_core::player::Normalization::Off
+        );
+        let state = api.fx_set_normalization("high".to_owned());
+        assert_eq!(state.normalization, "high", "the card draws what it wrote");
+        // The FFI's own record, which is what the screen reads…
+        assert_eq!(
+            api.audio().normalization,
+            crate::player::Normalization::High
+        );
+        // …and the CORE's settings, which `apply_audio` hands the engine.
+        assert_eq!(
+            live.audio().normalization,
+            nz_core::player::Normalization::High,
+            "the engine's own setting got the level"
+        );
+        // The unknown value is off, exactly as the chain's `parse` keeps it.
+        let state = api.fx_set_normalization("maximum".to_owned());
+        assert_eq!(state.normalization, "off");
+        assert_eq!(
+            live.audio().normalization,
+            nz_core::player::Normalization::Off
+        );
+        core.shutdown();
+    }
+
     /// A preset survives a restart of the core (it is in `kv`), a re-save keeps
     /// its id, and a built-in refuses both update and delete.
     #[test]

@@ -1232,7 +1232,10 @@ impl Player {
                 self.engine_event(event, work);
                 self.offer_work(work);
             }
-            Job::Audio => self.apply_audio(),
+            Job::Audio => {
+                self.apply_audio();
+                self.audio_changed(work);
+            }
             Job::Screen(on) => self.set_read_ahead(on),
         }
         // Every job that can move the transport (an advance, an end, a stall, a
@@ -2139,6 +2142,59 @@ impl Player {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .clone()
+    }
+
+    /// A settings change that can move the sound of what is PLAYING.
+    ///
+    /// Normalisation off at the moment a row opens asks the server NOTHING (rule
+    /// 1: no extra request on the play path), so a voice built then carries no
+    /// loudness and the engine's gain stays at 0 dB. A person changing the level
+    /// while the music plays is the one mid-track change that may move the level
+    /// — the SPA's own rule (`Player.svelte#onNormalizationChange`, "the one
+    /// mid-track change the [static-gain] rule doesn't apply to: the user asked
+    /// for it") — so the loudness is asked for HERE, on the `User` lane, and the
+    /// voice already playing takes it.
+    ///
+    /// Only the row playing and the preloaded next: everything else is primed by
+    /// [`Player::prime`] when it plays, so one switch never becomes a queue of
+    /// requests. A level change alone — the loudness already known — costs
+    /// nothing: the engine's gain follows the live level on its own.
+    fn audio_changed(&self, work: &mut Work) {
+        let (normalization, index, queue) = {
+            let machine = self.lock();
+            (
+                machine.audio.normalization,
+                usize::try_from(machine.state.index()).ok(),
+                machine.state.queue().to_vec(),
+            )
+        };
+        let Some(index) = index else {
+            // Nothing has ever played: the row that does is primed by its load.
+            return;
+        };
+        if normalization == Normalization::Off {
+            return;
+        }
+        let Some(current) = queue.get(index).cloned() else {
+            return;
+        };
+        let Some(reference) = current.reference().map(str::to_owned) else {
+            return;
+        };
+        // Already asked (this row's own load, or an earlier change): nothing was
+        // skipped, the voice carries it and the live level is enough.
+        if work.loudness.contains_key(&reference) {
+            return;
+        }
+        self.prime(&current, work, true);
+        let meta = work.meta.get(&reference).copied().unwrap_or_default();
+        self.engine.set_track_meta(&reference, meta);
+        self.engine.set_current_loudness(&reference, meta.loudness);
+        // The preloaded next row was built before this answer existed: rebuild it
+        // so the handover is normalised too (it is not playing, so this is free).
+        if let Some(next) = queue.get(index + 1).cloned() {
+            self.preload(Some(&next), work);
+        }
     }
 
     /// Applies the machine's audio settings to the engine. Idempotent, and cheap

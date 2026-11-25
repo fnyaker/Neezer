@@ -566,6 +566,20 @@ by the one-shot migration, MB4); local transcription (desktop-only).
 - **Kotlin, device**: instrumented tests and Macrobenchmark on the emulator (below). Compose UI
   tests use `createAndroidComposeRule` with semantics, never screen coordinates.
 
+**The bench answers a gain, so the normalisation can be measured.** `Bench::gains(id, Some(lufs))`
+serves what `/api/gains` would answer for that id (`None` = measured as absent, answered `null`); it
+used to answer `null` for every id, so no phone test could express a KNOWN loudness and the setting's
+only measurement was the desktop mixer's. Measured through the phone's own queue
+(`nz-core`'s `the_normalisation_gain_lowers_the_samples_by_the_expected_db`: a 440 Hz tone the server
+reports at 0 LUFS, the level flipped MID-TRACK as the person does in Réglages): **off_rms 0.35355 →
+high_rms 0.10677 = −10.40 dB**, and the `null` branch
+(`the_normalisation_does_nothing_without_loudness`) **0.00 dB** — the setting never invents a gain.
+Before the fix the same flip measured **0.00 dB and asked the server nothing**: a voice built while
+normalisation is off carries no loudness (Off asks for none, rule 1), and the mixer had no way to
+hear a loudness learned AFTER the voice was built — so the phone asks for it on the `User` lane when
+the level changes and hands it over with `Engine::set_current_loudness`, the SPA's own
+`Player.svelte#onNormalizationChange` rule.
+
 ### The emulator, headless, as the user
 
 `/dev/kvm` is world-read/writable here (measured `crw-rw-rw-`): acceleration needs no group and no

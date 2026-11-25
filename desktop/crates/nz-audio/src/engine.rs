@@ -713,6 +713,27 @@ impl Engine {
         self.inner.meta_of(id)
     }
 
+    /// The loudness of the track PLAYING, when it was learned after its voice was
+    /// built — which is the one case a gain may move a track mid-play.
+    ///
+    /// A DELIBERATE level change is that case (`Player.svelte#onNormalizationChange`:
+    /// "the one mid-track change the [static-gain] rule doesn't apply to: the user
+    /// asked for it"). A gain that merely ARRIVES late is not: the app primes it
+    /// before the swap, and a late answer lands with the next voice
+    /// ([`Engine::set_track_meta`]) rather than as a jump in the middle of a song.
+    ///
+    /// `id` is checked the way [`Engine::set_track_meta`] checks it: a call that
+    /// races a track change is a no-op, never the next track's level. The gain is
+    /// re-derived from the live level on the next buffer and ramped over 10 ms,
+    /// never stepped.
+    pub fn set_current_loudness(&self, id: &str, loudness: Option<f32>) {
+        if let Some((current, _)) = self.inner.now_playing()
+            && current == id
+        {
+            self.inner.send(MixerCmd::SetCurrentLoudness(loudness));
+        }
+    }
+
     /// The analysis tap: post-DSP stereo frames, dropped when the reader is
     /// behind. ONE reader per engine — the app's analysis thread takes it once.
     ///

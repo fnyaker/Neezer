@@ -572,10 +572,18 @@ mod tests {
             ),
             "a signed-in app plays even when no screen ever loaded"
         );
-        // No `shutdown()` here: this test is the one that BUILDS the player, and
-        // shutting an engine down joins its threads — blocking that is refused
-        // inside an async test (`Cannot drop a runtime in a context where
-        // blocking is not allowed`). The process ends with the test.
+        // Shutting the engine down JOINS its threads — the net runtime's, the
+        // worker's, the event bus's — and an async context refuses a blocking
+        // join ("Cannot drop a runtime in a context where blocking is not
+        // allowed"). The blocking pool may, and it must: a player left running
+        // here leaks four `nz-player*` threads for the whole test process, and
+        // the thread census in `core::tests::one_player_sees_one_queue_and_shutdown_joins_it`
+        // attributes them to the player IT built — measured 3 failing runs in 5
+        // with the leak (and one thread set named in each: `nz-player`,
+        // `nz-player-event`, two `nz-player-net`).
+        tokio::task::spawn_blocking(move || core.shutdown())
+            .await
+            .expect("the blocking pool shuts the player down");
     }
 
     /// The heart is the player's own answer, and its absence is the SPA's own

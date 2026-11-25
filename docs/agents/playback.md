@@ -128,6 +128,19 @@ graph node, on the direct path's volume and for the native element. No ramp is n
 track: the gain lands when the strip is built, at the head of playback. `test/nativegain.test.mjs` pins
 the equal volume of the first two elements and the trap that was removed.
 
+**A level the person changes mid-track moves THAT track; a gain that merely arrives late does not.**
+`graph.js` re-applies `normalization` to the node it has, so the SPA has always honoured the first
+case; the native engine could not, because the loudness is copied onto the voice when it is built
+(`mixer.rs#Playing::loudness`) and nothing heard a later one. `nz-audio` now has
+`Engine::set_current_loudness(id, loudness)` (`MixerCmd::SetCurrentLoudness`): it is called ONLY for
+a deliberate level change — `Player.svelte#onNormalizationChange`, "the one mid-track change the
+[static-gain] rule doesn't apply to: the user asked for it" — and is a no-op when `id` is not the
+voice playing, so a call that races a track change never lands on the next title. A gain that arrives
+on its own waits for the next voice; that is what `GAIN_LATE_GRACE` (2 s) protects in the web player.
+Measured on the phone's queue: **−10.40 dB** at High for a 0 LUFS track (`docs/agents/mobile.md`,
+*Tests and emulation*).
+
+
 Leaving the graph needs a NEW element: the idle one is replaced at once, the playing one hands its
 track over to a fresh one at the position it has reached (seek at metadata and again at `canplay`,
 measured 3.78 s landed for 3.79 s expected), and where that cannot land (a live first-play stream
