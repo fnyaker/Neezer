@@ -1,6 +1,7 @@
 package fr.neezer.mobile.feature.nowplaying
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -41,9 +42,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -244,6 +247,7 @@ private fun PlayerColumn(
             // keeps the transport within the thumb's arc.
             Spacer(Modifier.height(NzSpacing.xl))
             Doors(state, nav, party, remote)
+            AboutPeek()
         }
     }
 }
@@ -609,11 +613,18 @@ private fun Transport(state: NowPlayingModel.State, model: NowPlayingModel) {
  * and the two doors the other lots own.
  *
  * `party` and `remote` are SLOTS: MB20's `PartyButton()` and MB19's
- * `RemoteButton()`. They are empty here on purpose — their MB0 bodies are labelled
- * Material `OutlinedButton`s, and five 44 dp targets do not fit on a 360 dp phone
- * beside two of them (rule 5: no default-looking widget on a Sillon surface). The
- * day those lots replace the bodies, `NowPlayingHost` passes them and nothing here
- * moves.
+ * `RemoteButton()`, both an [NzIconButton] and therefore a 48 dp target by
+ * themselves — the row wraps them in a 48 dp box and adds NO padding, because an
+ * 8 dp pad on each side leaves the button 32 dp to live in and a thumb that aims
+ * at it misses (measured on the M5 capture).
+ *
+ * **Five doors, and the words yield before a target does.** On a 360 dp phone the
+ * row has 320 dp; three icon doors and the two word doors need ~292 dp at a 100 %
+ * font scale, and ~392 dp at 200 %. Two 48 dp targets and a label cannot share
+ * that line, so the words become glyphs when they no longer fit (the doors keep
+ * their contentDescription, so TalkBack still reads « Paroles » and « File
+ * d'attente »). The third answer — letting Compose shrink the last control — is
+ * the bug the M5 measurement found: the chevron fell to ~20 dp.
  */
 @Composable
 private fun Doors(
@@ -623,65 +634,123 @@ private fun Doors(
     remote: (@Composable () -> Unit)?,
 ) {
     val colors = Sillon.colors
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = NzSpacing.xxs),
-        horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Every door keeps its 44 dp target and its own width (the SPA's
-        // `justify-content: space-between`): the GAPS give way on a 360 dp phone,
-        // never a target and never a label (`MobileNowPlaying.svelte` §9).
-        Box(Modifier.width(NzMinTouchTarget)) {
-            NzIconButton(
-                glyph = NzGlyph.Plus,
-                contentDescription = "Ajouter à une playlist",
-                onClick = {
-                    val now = state.current ?: return@NzIconButton
-                    fr.neezer.mobile.feature.trackactions.TrackActions.open(
-                        row = nowPlayingRow(now),
-                        nav = nav,
-                        context = fr.neezer.mobile.feature.trackactions.TrackActionsContext(
-                            surface = "player",
-                            index = state.index,
-                            currentIndex = state.index,
-                        ),
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // The words in the type scale IN FORCE: at 200 % the measurer answers
+        // double, which is exactly the case the screenshot bench renders.
+        val words = with(density) {
+            (measurer.measure("Paroles", Sillon.type.label).size.width +
+                measurer.measure("File · ${state.upcoming}", Sillon.type.label).size.width).toDp()
+        }
+        val icons = 1 + (if (party != null) 1 else 0) + (if (remote != null) 1 else 0)
+        val needed = NzMinTouchTarget * icons + words + NzSpacing.s * 4 + NzSpacing.xs * (icons + 1)
+        val labelled = maxWidth >= needed
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = NzSpacing.xxs),
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.width(NzMinTouchTarget)) {
+                NzIconButton(
+                    glyph = NzGlyph.Plus,
+                    contentDescription = "Ajouter à une playlist",
+                    onClick = {
+                        val now = state.current ?: return@NzIconButton
+                        fr.neezer.mobile.feature.trackactions.TrackActions.open(
+                            row = nowPlayingRow(now),
+                            nav = nav,
+                            context = fr.neezer.mobile.feature.trackactions.TrackActionsContext(
+                                surface = "player",
+                                index = state.index,
+                                currentIndex = state.index,
+                            ),
+                        )
+                    },
+                )
+            }
+            if (party != null) Box(Modifier.width(NzMinTouchTarget)) { party() }
+            if (remote != null) Box(Modifier.width(NzMinTouchTarget)) { remote() }
+            Door(contentDescription = "Paroles", onClick = { NowPlayingState.showPane(Pane.Lyrics) }) {
+                if (labelled) {
+                    Text(
+                        "Paroles",
+                        style = Sillon.type.label,
+                        color = colors.tx,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Clip,
                     )
-                },
-            )
-        }
-        if (party != null) Door(Modifier.width(NzMinTouchTarget)) { party() }
-        if (remote != null) Door(Modifier.width(NzMinTouchTarget)) { remote() }
-        Door(onClick = { NowPlayingState.showPane(Pane.Lyrics) }) {
-            Text(
-                "Paroles",
-                style = Sillon.type.label,
-                color = colors.tx,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Clip,
-            )
-        }
-        Door(onClick = { NowPlayingState.showPane(Pane.Queue) }) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(NzSpacing.xxs),
+                } else {
+                    Icon(NzGlyph.Music, size = 20.dp, tint = colors.dim)
+                }
+            }
+            Door(
+                contentDescription = "File d'attente",
+                onClick = { NowPlayingState.showPane(Pane.Queue) },
             ) {
-                Text("File ·", style = Sillon.type.label, color = colors.tx, maxLines = 1, softWrap = false)
-                Text("${state.upcoming}", style = Sillon.type.mono, color = colors.dim, maxLines = 1)
+                if (labelled) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(NzSpacing.xxs),
+                    ) {
+                        Text("File ·", style = Sillon.type.label, color = colors.tx, maxLines = 1, softWrap = false)
+                        Text("${state.upcoming}", style = Sillon.type.mono, color = colors.dim, maxLines = 1)
+                    }
+                } else {
+                    Icon(NzGlyph.Queue, size = 20.dp, tint = colors.dim)
+                }
             }
         }
-        NzIconButton(
-            glyph = NzGlyph.ChevronUp,
-            contentDescription = "À propos du titre",
-            onClick = { NowPlayingState.showPane(Pane.About) },
-            tint = colors.dim,
-            size = 20.dp,
+    }
+}
+
+/**
+ * « À propos » — the line UNDER the thumb row, the SPA's `.peek`
+ * (`MobileNowPlaying.svelte`).
+ *
+ * It is not a door of the row for a measured reason: six 48 dp targets on a
+ * 360 dp phone ask 348 dp of the 320 usable, and a `Row` that overflows shrinks
+ * its last child instead of clipping — the chevron fell to ~20 dp (M5's own
+ * capture, `mb11-encre-360dp-lecteur.png`). Under the row, the five remaining
+ * doors fit in 292 dp and this control keeps its 48 dp.
+ *
+ * The look is the SPA's `.peek`: a glass pill 26 % of the first tier, the
+ * specular hairline on its top edge, the mono label in small capitals and the
+ * chevron that says "there is more below".
+ */
+@Composable
+private fun AboutPeek() {
+    val colors = Sillon.colors
+    val shape = RoundedCornerShape(NzRadius.pill)
+    Row(
+        modifier = Modifier
+            .padding(top = NzSpacing.xs)
+            .heightIn(min = NzMinTouchTarget)
+            .clip(shape)
+            .background(colors.s1.copy(alpha = 0.26f))
+            // A 1 dp border costs no size in Compose (it is painted inside the
+            // bounds): the ring the SPA draws as an inset shadow.
+            .border(1.dp, colors.tx.copy(alpha = 0.07f), shape)
+            .clickable(role = Role.Button) { NowPlayingState.showPane(Pane.About) }
+            .semantics { contentDescription = "À propos du titre" }
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(NzGlyph.ChevronUp, size = 16.dp, tint = colors.dim)
+        Text(
+            "À propos".uppercase(),
+            style = Sillon.type.labelMono,
+            color = colors.dim,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }
 
 /**
- * One door of the thumb row: a 44 dp target of glass, the SPA's `.fb`.
+ * One door of the thumb row: a 48 dp target of glass, the SPA's `.fb`.
  *
  * The fill is the first glass tier at 34 % with a hairline on its top edge — a
  * control over a photograph, not a floating glyph, and never a Material button on
@@ -689,19 +758,19 @@ private fun Doors(
  */
 @Composable
 private fun Door(
-    modifier: Modifier = Modifier,
-    onClick: (() -> Unit)? = null,
+    contentDescription: String,
+    onClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
     val colors = Sillon.colors
     Box(
-        modifier = modifier
+        modifier = Modifier
+            .widthIn(min = NzMinTouchTarget)
             .heightIn(min = NzMinTouchTarget)
             .clip(RoundedCornerShape(NzRadius.field))
             .background(colors.s1.copy(alpha = 0.34f))
-            .then(
-                if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier,
-            )
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
             .padding(horizontal = NzSpacing.s),
         contentAlignment = Alignment.Center,
     ) {
