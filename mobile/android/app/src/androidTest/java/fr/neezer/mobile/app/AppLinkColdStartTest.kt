@@ -9,6 +9,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import fr.neezer.mobile.feature.playlist.PLAYLIST_MARKER
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -68,8 +69,11 @@ class AppLinkColdStartTest {
     @Test
     fun a_link_that_starts_the_app_opens_the_playlist_page() {
         ActivityScenario.launch<MainActivity>(playlistIntent("pl-cold-start")).use { scenario ->
-            // The shell's own top bar names the route the graph opened.
-            val opened = device.wait(Until.hasObject(By.text("Playlist")), TIMEOUT_MS)
+            // The SCREEN names its own route since L1 removed the shell's top bar:
+            // `PLAYLIST_MARKER` is on the playlist's root in every state (skeleton,
+            // failure, page), so a deep link is still proved by the screen it
+            // opened and not by a title that only exists once the data arrived.
+            val opened = device.wait(Until.hasObject(By.desc(PLAYLIST_MARKER)), TIMEOUT_MS)
             assertTrue("la page playlist ne s'est pas ouverte", opened)
             scenario.onActivity { activity ->
                 assertFalse("l'activité s'est fermée après le lien", activity.isFinishing)
@@ -88,14 +92,14 @@ class AppLinkColdStartTest {
         ActivityScenario.launch<MainActivity>(
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         ).use { scenario ->
-            device.wait(Until.hasObject(By.text("Playlist")), TIMEOUT_MS)
+            device.wait(Until.hasObject(By.desc(PLAYLIST_MARKER)), TIMEOUT_MS)
             // The warm door: the same link while the app runs.
             scenario.onActivity { activity ->
                 activity.startActivity(playlistIntent("pl-warm", cold = false))
             }
             assertTrue(
                 "le lien reçu à chaud n'a pas ouvert la playlist",
-                device.wait(Until.hasObject(By.text("Playlist")), TIMEOUT_MS),
+                device.wait(Until.hasObject(By.desc(PLAYLIST_MARKER)), TIMEOUT_MS),
             )
             assertTrue(
                 "l'application a planté sur le lien à chaud",

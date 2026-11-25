@@ -67,6 +67,18 @@ import uniffi.nz_ffi.PlaylistRole
 import uniffi.nz_ffi.TrackRow
 
 /**
+ * The screen's marker, present in EVERY state — the skeleton, the failure, the
+ * page — and independent of the clock: what an instrumented test waits for
+ * instead of a sentence that only exists once the data arrived (the pattern of
+ * `ARTIST_MARKER`, `ALBUM_MARKER`, `HOME_MARKER`).
+ *
+ * It exists because L1 removed the shell's top bar, which is what named the
+ * route: `AppLinkColdStartTest` used to wait for the bar's word « Playlist »,
+ * and a deep link is exactly the case it must keep proving.
+ */
+const val PLAYLIST_MARKER = "Fiche playlist"
+
+/**
  * One playlist, drawn (lot MB9): the band, the actions, the windowed tracklist,
  * the suggestions at the bottom.
  *
@@ -88,12 +100,13 @@ fun PlaylistScreen(
     wide: Boolean = false,
 ) {
     val colors = Sillon.colors
-    Column(modifier = modifier.fillMaxSize()) {
+    Column(modifier = modifier.fillMaxSize().semantics { contentDescription = PLAYLIST_MARKER }) {
         // No top bar here: the SHELL draws the phone's (`app/NavGraph.kt`'s
         // Scaffold) and a second one showed two bars on the device — measured on
-        // the emulator capture (`mb9-emulateur-360dp.png` before the fix). The
-        // band below carries the playlist's title; the route's name is the
-        // shell's. Back is the system's, as every other screen.
+        // the emulator capture (`mb9-emulateur-360dp.png` before the fix). Since
+        // L1 the shell has no bar at all: the band below carries the playlist's
+        // title, and [PLAYLIST_MARKER] is what names the route to a test. Back is
+        // the system's (or the shell's `DetailBackRow`), as every other screen.
         when {
             state.page == null && state.failure != null -> LoadFailed(
                 cause = state.failure,

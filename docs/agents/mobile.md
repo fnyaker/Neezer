@@ -7110,6 +7110,14 @@ pastille d'accent sur l'item courant, 64 dp), et les quatre racines d'onglet dan
    Réglages est un item de coquille. `TabBarHost` prend donc `onOpenSettings` plutôt que d'appeler un
    `nav.navigate(Routes.Settings())` que le plan lui prêtait ; `NavGraph.kt` garde le seul appel
    (`openSettings()`, `launchSingleTop`). `RoutesHaveADoorTest` reste vert : la route garde sa porte.
+5. **Le bandeau portait trois preuves sans le dire, et les trois gardes ont dû suivre.** Mesuré dans
+   le job `emulator` : `ci-emulator.sh: no node « Bibliothèque » to tap` (l'item s'appelle « Biblio »
+   depuis ce lot) puis, une fois cette porte réparée, `la page playlist ne s'est pas ouverte` ×2 —
+   `AppLinkColdStartTest` attendait le TITRE « Playlist », qui était celui de la barre supprimée.
+   `PlaylistScreen` reçoit donc `PLAYLIST_MARKER = "Fiche playlist"` sur sa racine, au motif exact de
+   `ARTIST_MARKER`/`ALBUM_MARKER`/`HOME_MARKER` : **un écran dit son nom par un marqueur, jamais par
+   un titre que la coquille dessine.** Une barre de coquille est un détail d'affichage ; un test qui
+   l'attend devient un test de la coquille, pas de la route.
 
 **Mesuré.**
 
@@ -7120,6 +7128,10 @@ pastille d'accent sur l'item courant, 64 dp), et les quatre racines d'onglet dan
   l'onglet qu'**une** fois ; un glissement de **12 %** sans vitesse revient à la page 0 et n'ouvre
   rien ; « Réglages » pousse sa route et ne sélectionne aucun onglet ; à `fontScale = 2` **0** libellé
   et **5** `contentDescription` ; la rangée tactile fait **64 dp** de haut et **72 dp** de large.
+- **Émulateur (job `emulator`, KVM) : 6 portes sur 6 ouvertes** — `doors_opened=6 doors_failed=0`,
+  Serveur, Rechercher, Biblio, Podcasts, Accueil et Réglages (`rust_version=1`, la version lue depuis
+  `nz_version()`). C'est la preuve de comportement de la coquille : les quatre onglets se tapent
+  depuis l'écran Serveur comme depuis n'importe quelle page.
 - Le rendu : **9 PNG** sous `docs/agents/screenshots/mobile/L1/` (360 et 600 dp × Encre/Papier ×
   `fontScale` 1/2, plus la coquille d'un écran de détail), par le backend graphique natif de
   Robolectric. Les PNG des autres lots réécrits par `testDebugUnitTest` sont restaurés, jamais
