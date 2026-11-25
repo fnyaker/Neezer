@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -29,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -47,6 +49,7 @@ import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzMotionLevel
+import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
@@ -93,9 +96,17 @@ private const val MINI_READ_MS = 250L
  * Empty until something plays (« Rien en lecture »), and a tap ANYWHERE on the
  * card opens the full-screen player (the SPA's `cardTap`): the sleeve and the
  * names are one target, and the play/pause button answers for itself.
+ *
+ * The card carries its OWN margins and its own [shape] (L1): the shell mounts it
+ * bare between the « Contrôlé par … » notice and the tab bar, and an empty player
+ * that returns early leaves no strip of air behind it.
  */
 @Composable
-fun MiniPlayer(modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
+fun MiniPlayer(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {},
+    shape: Shape = RoundedCornerShape(NzRadius.card),
+) {
     val model = rememberNowPlaying()
     val state by model.state.collectAsState()
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
@@ -127,51 +138,64 @@ fun MiniPlayer(modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
     } else {
         0f
     }
-    Box(modifier = modifier.fillMaxWidth().background(colors.glassBg)) {
-        Row(
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
+    ) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(NzSpacing.miniPlayer)
-                .clickable(role = Role.Button) { onClick() }
-                .semantics {
-                    contentDescription = "Ouvrir le lecteur plein écran"
-                }
-                .padding(horizontal = NzSpacing.m),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
+                .clip(shape)
+                .background(colors.glassBg),
         ) {
-            CoverImage(url = now?.cover, sizeDp = 44.dp, seed = now?.id)
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = now?.title ?: "Rien en lecture",
-                    style = Sillon.type.body,
-                    color = colors.tx,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = playbackLine(state),
-                    style = Sillon.type.bodySmall,
-                    color = if (state.snapshot?.state == PlayState.BUFFERING) colors.acText else colors.dim,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(NzSpacing.miniPlayer)
+                    .clickable(role = Role.Button) { onClick() }
+                    .semantics {
+                        contentDescription = "Ouvrir le lecteur plein écran"
+                    }
+                    .padding(horizontal = NzSpacing.m),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
+            ) {
+                CoverImage(url = now?.cover, sizeDp = 44.dp, seed = now?.id)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = now?.title ?: "Rien en lecture",
+                        style = Sillon.type.body,
+                        color = colors.tx,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = playbackLine(state),
+                        style = Sillon.type.bodySmall,
+                        color = if (state.snapshot?.state == PlayState.BUFFERING) colors.acText else colors.dim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                NzIconButton(
+                    glyph = if (state.playing) NzGlyph.Pause else NzGlyph.Play,
+                    contentDescription = if (state.playing) "Pause" else "Lecture",
+                    onClick = { model.toggle() },
                 )
             }
-            NzIconButton(
-                glyph = if (state.playing) NzGlyph.Pause else NzGlyph.Play,
-                contentDescription = if (state.playing) "Pause" else "Lecture",
-                onClick = { model.toggle() },
+            // The card's own 2 dp line along its bottom edge: played on the
+            // accent, the rest on the hairline — the SPA's `.mini-progress`. It
+            // is INSIDE the clipped card, so the line follows the corner.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth(progress)
+                    .height(2.dp)
+                    .background(colors.acMark),
             )
         }
-        // The card's own 2 dp line along its bottom edge: played on the accent,
-        // the rest on the hairline — the SPA's `.mini-progress`.
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .fillMaxWidth(progress)
-                .height(2.dp)
-                .background(colors.acMark),
-        )
     }
 }
 

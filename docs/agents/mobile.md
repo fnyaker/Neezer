@@ -7054,6 +7054,102 @@ lecteur dont le noyau ou la route de soirée manque n'envoie rien du tout : les 
 
 **Hors portée.** `TrackRowView` (`Media.kt`, P1), la rangée de la file (`QueueSheet.kt`), les rangées du SPA (W1), tout redessin visuel de la rangée.
 
+### L1 — La coquille : plus de bandeau, une barre d'onglets, le glissement entre onglets (delivered 2026-11-25)
+
+**Le besoin.** Sur le téléphone, chaque écran payait un `TopAppBar` de 64 dp — un titre, une
+flèche, « Réglages » — et il n'y avait AUCUNE barre d'onglets en bas, alors que le SPA en a une.
+Ce lot livre la coquille de Sillon : pas de bandeau, la barre à cinq items (glyphe au-dessus du mot,
+pastille d'accent sur l'item courant, 64 dp), et les quatre racines d'onglet dans UN
+`HorizontalPager` qui suit le doigt et se pose sur la vitesse.
+
+**Ce qui a changé.**
+
+- `designsystem/NavBar.kt` (**nouveau**) — `NzTabItem` et `NzTabBar`. Le SPA, pas `NavigationBar` de
+  Material : celle de Material apporte son propre 80 dp, son indicateur et son ripple, trois choses
+  que Sillon n'a pas. Cinq items en `weight(1f)` (72 dp chacun sur 360 dp), pastille 46 × 26 sur
+  `NzRadius.chip`, glyphe 22 dp, mot en `Sillon.type.tab` (mono 11 / 600 / 0.01em, jamais en
+  capitales), `indication = null`, `role = Tab`, et `selected` + `contentDescription` dans les
+  sémantiques — la sélection n'est jamais portée par la couleur seule (l'encre du mot change aussi).
+  À `fontScale > 1.3` le mot disparaît, le glyphe reste, la description reste (TalkBack ne perd pas
+  le mot).
+- `Type.kt` — `NzTypography.tab` (+ son entrée dans la table). `Sillon.kt` — `pageY` passe de 32 à
+  **20 dp** (la marge de page du SPA, `app.css:1185-1186`) et `pageBottom` (40 dp) apparaît : c'est
+  le contrat que S2 dépense.
+- `app/Shell.kt` (**nouveau**) — l'`enum Tab` (`page` = la place dans le pager), `TAB_ITEMS` (les
+  quatre + Réglages), `TabPage` (page → entrée, `when` exhaustif sur l'enum : un cinquième onglet ne
+  compilerait pas), `TabPager`, `TabPagerSync`, `TabBarHost`, `DetailBackRow`, `selectedIndexOf`,
+  `isOn`.
+- `app/NavGraph.kt` — plus de `topBar` ; `Scaffold(contentWindowInsets = ScaffoldDefaults…)` avec
+  `bottomBar = RemoteHostNotice + MiniPlayer + TabBarHost`, et le contenu en une `Column` :
+  `DetailBackRow` (56 dp) seulement sur une route qui n'est ni un onglet ni Réglages **et** quand il
+  y a quelque part où revenir, puis le `NavHost`. Les quatre liaisons d'onglet dessinent `TabPager` ;
+  `NavHost` reçoit `enter/exitTransition = None` (chaque écran possède son mouvement : rejouer une
+  transition sur un onglet qui se pose est exactement ce que la personne sent comme « ça se
+  réinitialise après le geste »). Le pager est hissé dans `NzApp`, donc la barre et le routeur lisent
+  le MÊME état.
+- `feature/nowplaying/NowPlaying.kt` — `MiniPlayer` prend `shape` et porte ses propres marges
+  (8 / 8 / 4 / 8), et la ligne de 2 dp passe DANS la carte arrondie : la coquille le monte nu, et un
+  lecteur vide ne laisse pas de trou.
+
+**Ce que le lot a appris, et qui n'était pas dans le plan.**
+
+1. **Une barre qui « anime le pager » ne peut pas naviguer partout.** Sur Setup, Login, un écran de
+   détail, il n'y a pas de page à animer : `TabBarHost` choisit donc — un onglet depuis une route qui
+   n'est pas une page ⇒ `nav.open(tab)` (une route ; `TabPagerSync` recale la page ensuite), depuis
+   une page ⇒ `animateScrollToPage`. Sans cette distinction, « Accueil » depuis l'écran Serveur ne
+   faisait RIEN (le pager est déjà page 0, aucun settle ne change) : c'est
+   `ShellSmokeTest.theHomeTabOpensFromTheSetupScreen` qui l'a dit avant le merge.
+2. **Un settle n'est une décision que sur une page.** `TabPagerSync` ignore `pager.settledPage` tant
+   que la route courante n'est pas une racine d'onglet — sinon le premier effet d'une installation
+   neuve ouvrait Accueil par-dessus l'écran Serveur (`settledPage` vaut 0 avant tout geste).
+3. **`NavDestination(route)` ne pose pas `route`.** Le constructeur public prend le *navigatorName* :
+   une destination fabriquée à la main rend `route = null`, donc `-1` partout. Un test qui a besoin
+   d'une destination monte un VRAI `NavHost` (`ShellTabsTest` le fait) ; c'est aussi ce qui prouve la
+   forme réelle de la route (`fr.neezer.mobile.app.Routes.Search?q={q}`).
+4. **`NzNavigator` n'a pas de porte vers `Routes.Settings`** — son contrat est celui des ÉCRANS, et
+   Réglages est un item de coquille. `TabBarHost` prend donc `onOpenSettings` plutôt que d'appeler un
+   `nav.navigate(Routes.Settings())` que le plan lui prêtait ; `NavGraph.kt` garde le seul appel
+   (`openSettings()`, `launchSingleTop`). `RoutesHaveADoorTest` reste vert : la route garde sa porte.
+
+**Mesuré.**
+
+- `gradle -p mobile/android testDebugUnitTest -PskipRust` sur l'arbre complet : **1 061 tests,
+  0 échec, 0 ignoré, 6 min 11 s** (1 046 avant ce lot : +6 `ShellTabsTest`, +9 captures).
+  `ShellTabsTest` (Robolectric, vrai `NavHost`, vrai `PagerDefaults`) : 6 cas, 0 échec — quatre pages
+  et page 0 = Accueil ; un glissement de **60 %** de la largeur se pose sur la page 1 et n'ouvre
+  l'onglet qu'**une** fois ; un glissement de **12 %** sans vitesse revient à la page 0 et n'ouvre
+  rien ; « Réglages » pousse sa route et ne sélectionne aucun onglet ; à `fontScale = 2` **0** libellé
+  et **5** `contentDescription` ; la rangée tactile fait **64 dp** de haut et **72 dp** de large.
+- Le rendu : **9 PNG** sous `docs/agents/screenshots/mobile/L1/` (360 et 600 dp × Encre/Papier ×
+  `fontScale` 1/2, plus la coquille d'un écran de détail), par le backend graphique natif de
+  Robolectric. Les PNG des autres lots réécrits par `testDebugUnitTest` sont restaurés, jamais
+  commités.
+- **Ce que le bandeau coûtait, et ce que la rangée coûte** : la rangée de retour fait **56 dp** là où
+  le bandeau en faisait **64** — et elle n'existe QUE sur un écran de détail ; les quatre racines
+  d'onglet n'ont plus rien au-dessus du contenu. `pageY` 32 → 20 dp rend **12 dp** de haut à chaque
+  page.
+- **Requêtes : 0 depuis la coquille.** `grep -n "NzCore\|core\." Shell.kt NavBar.kt` : vide — la
+  barre et le pager ne lisent rien. `beyondViewportPageCount = 1` **pendant le doigt seulement** ne
+  fait que composer le voisin dès le premier pixel ; sa lecture est la sienne, sur la voie `User`,
+  une fois, et un second passage ne coûte rien (MQ2 : « un écran chaud coûte 0 »). Les deux nombres
+  que le plan exige ici — `NzCore::stats()` d'un balayage des quatre onglets (≤ 4 requêtes) et le
+  `FrameTimingMetric` d'un swipe — restent **DUS sur l'émulateur** : cette image n'a ni `/dev/kvm` ni
+  image système (`.android/avd` vide), donc `mobile/tools/emu.sh` ne démarre pas. Même limite que G1,
+  et `mobile.yaml` (job `emulator`, KVM) est la preuve de comportement à la place.
+- **Le risque 1 (les étagères), PAS essayé sur l'appareil** : un glissement commencé sur une étagère
+  horizontale (Accueil, bandeau de feuilles de la Bibliothèque, puces de Recherche) est le seul
+  comportement qu'un test JVM ne voit pas, et personne ne l'a essayé au doigt ici. Ce qui est vérifié
+  à la place : la couture est le nested scroll standard (une étagère consomme jusqu'à SON bord, puis
+  le pager prend le relais) et `SwipeRow` ne consomme plus un glissement vers la gauche (G1,
+  `SwipeRowTest` cas 4). Si le doigt trouve ça faux sur le téléphone, le repli est UNE ligne,
+  écrite ici pour ne pas être cachée : `userScrollEnabled = false` sur le `HorizontalPager`
+  (`Shell.kt`) — la barre continue de marcher et les taps animent encore la page, seul le glissement
+  disparaît.
+
+**Hors portée.** Le geste de fermeture du lecteur (P2), les pochettes (P1), la mise en page interne
+des écrans (S2), le SPA, les panneaux en feuille (file/paroles/à propos gardent `NzSheet`), les
+colonnes de lecture du shell large.
+
 ### M13 — Notifications demandées en contexte, mode voiture dans Réglages (delivered 2026-11-24)
 
 **La règle.** `POST_NOTIFICATIONS` est déclarée depuis MB0 et n'était jamais DEMANDÉE : la
