@@ -338,6 +338,21 @@ alternative. `settings.load` merges defaults < config file < UI, while `paths()`
 only. `transcribe_settings` being `NEVER` also hides the card from an admin remote controller
 (deliberate; change to `{"GET": "admin", "PUT": NEVER}` if that is wanted).
 
+**Exporting the text** is three more read routes in the same blueprint:
+`GET /api/podcast/episode/<eid>/transcript/export?format=txt|srt|vtt|md` (one file),
+`GET /api/podcast/<pid>/transcripts/seasons` (the derived seasons with `episodes`/`transcribed`
+counts, **3 statements** whatever the show's size: channel, episode list, ready ids — never one
+query per season) and `GET /api/podcast/<pid>/transcripts/export?season=<key|all>&format=…`
+(a streamed ZIP, one file per READY transcript numbered by its reading position, plus
+`MANQUANTS.txt` naming each episode that is not ready and its state). The text is rendered one
+episode at a time while streaming (`neezer/transcribe/export.py`), the ZIP reuses
+`webui/export.py`'s `_Sink`/`_safe`/`_claim_export` (one export per user, **429** when busy), and
+nothing is transcribed, queued or fetched from a provider: a pure DB read. **Deezer has no season
+field**, so `neezer/transcribe/seasons.py` derives them: a season number read from the title
+(`Saison 2`, `S2E5`) when at least half the show's titles carry one, the publication year
+otherwise; groups are newest first, `Hors saison` / `Sans date` last, and the episode inside a
+group is oldest first.
+
 The **worker protocol** is `webui/transcribe_worker.py` (blueprint `transcribe_worker_api`) and is
 how the sidecar transcribes without a database or an archive mount. An admin creates a worker with
 `POST /api/transcribe/workers` (`name`, `kind=server|client`); the response shows the token

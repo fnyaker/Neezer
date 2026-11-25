@@ -23,6 +23,13 @@
 - ``GET /api/podcast/<pid>/transcript/search`` and ``/api/transcripts/search``
   answer bounded excerpts with a timecode; the library route says how much of
   the library it actually read.
+- ``GET /api/podcast/episode/<eid>/transcript/export`` and
+  ``GET /api/podcast/<pid>/transcripts/export`` hand the text over as a file —
+  TXT, SRT, WebVTT or Markdown, one episode or a whole season, streamed as a
+  ZIP. ``GET /api/podcast/<pid>/transcripts/seasons`` lists the derived seasons
+  with their ready counts. Deezer has no season field: the number is read from
+  the episode titles, or the publication year when too few titles carry one
+  (``neezer/transcribe/seasons.py``).
 
 Only the queue, the settings and read-only text live here: no provider is
 called, no engine process is started in a request, and no payload ever names a
@@ -33,9 +40,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid
+import zipfile
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, stream_with_context
 from peewee import fn
 
 from ..db import (
@@ -47,8 +56,9 @@ from ..db import (
     db,
 )
 from ..ratelimit import WindowLimiter
-from ..transcribe import engine, job, settings
+from ..transcribe import engine, export as transcripts, job, seasons, settings
 from . import _image, admin_required, login_required, same_origin_guard
+from .export import _Sink, _claim_export, _quote, _release_export, _safe
 from .remote import NEVER, POLICY
 
 logger = logging.getLogger(__name__)
@@ -99,6 +109,9 @@ TRANSCRIBE_POLICY = {
     "stop_episode_transcript": NEVER,
     "delete_episode_transcript": NEVER,
     "episode_transcript": "read",
+    "episode_transcript_export": "read",
+    "show_transcript_seasons": "read",
+    "show_transcripts_export": "read",
     "show_transcript_search": "read",
     "podcast_search": "read",
 }
@@ -1152,3 +1165,272 @@ def podcast_search():
             },
         }
     )
+
+
+# -- exporting the text ------------------------------------------------------
+
+
+class _SeasonEpisode:
+    """What ``neezer/transcribe/seasons`` needs from an episode, and no more."""
+
+    __slots__ = ("id", "title", "publish_date")
+
+    def __init__(self, ident, title, publish_date):
+        self.id = ident
+        self.title = title
+        self.publish_date = publish_date
+
+
+def _episodes_for_seasons(channel):
+    return [
+        _SeasonEpisode(ident, title, published)
+        for ident, title, published in PodcastEpisode.select(
+            PodcastEpisode.id, PodcastEpisode.title, PodcastEpisode.publish_date
+        )
+        .where(PodcastEpisode.channel == channel.id)
+        .tuples()
+    ]
+
+
+def _ready_ids(channel):
+    """The channel's episodes whose transcript is READY — one query."""
+    return {
+        str(ident)
+        for (ident,) in PodcastTranscript.select(PodcastTranscript.episode)
+        .join(PodcastEpisode, on=(PodcastEpisode.id == PodcastTranscript.episode))
+        .where(
+            (PodcastEpisode.channel == channel.id)
+            & (PodcastTranscript.status == "ready")
+        )
+        .tuples()
+    }
+
+
+def _export_format():
+    fmt = str(request.args.get("format") or "").lower()
+    if fmt not in transcripts.MIME:
+        raise _Rejected("format inconnu", code="format", status=400)
+    return fmt
+
+
+def _disposition(name):
+    """RFC 5987 so accented titles survive; the ASCII fallback is for old clients."""
+    ascii_name = re.sub(r"[^A-Za-z0-9._ -]", "_", name) or "transcription.txt"
+    return 'attachment; filename="%s"; filename*=UTF-8\'\'%s' % (
+        ascii_name,
+        _quote(name),
+    )
+
+
+def _segments_of(eid):
+    return [
+        {"start_ms": start, "end_ms": end, "text": text}
+        for start, end, text in PodcastTranscriptSegment.select(
+            PodcastTranscriptSegment.start_ms,
+            PodcastTranscriptSegment.end_ms,
+            PodcastTranscriptSegment.text,
+        )
+        .where(PodcastTranscriptSegment.transcript == eid)
+        .order_by(PodcastTranscriptSegment.idx)
+        .tuples()
+    ]
+
+
+def _transcript_states(channel):
+    """{str(episode id): (status, error_code)} of a whole channel, one query.
+
+    One query for the show, never one per episode and never an ``IN`` list of
+    every episode id: a long-running show can carry thousands, above what a
+    single statement accepts as parameters.
+    """
+    rows = (
+        PodcastTranscript.select(
+            PodcastTranscript.episode,
+            PodcastTranscript.status,
+            PodcastTranscript.error_code,
+        )
+        .join(PodcastEpisode, on=(PodcastEpisode.id == PodcastTranscript.episode))
+        .where(PodcastEpisode.channel == channel.id)
+        .tuples()
+    )
+    return {str(ident): (status, code) for ident, status, code in rows}
+
+
+def _missing_state(state):
+    """How MANQUANTS.txt names an episode that has no ready text."""
+    if state is None:
+        return "en attente"
+    status, code = state
+    if status in ("queued", "leased"):
+        return "en attente"
+    if status == "running":
+        return "en cours"
+    if status == "error":
+        return "échec : " + (code or "erreur")
+    if status == "stopped":
+        return "arrêtée"
+    return status
+
+
+@transcribe_api.route("/podcast/episode/<eid>/transcript/export")
+@login_required
+def episode_transcript_export(eid):
+    """One episode's text as a file the browser saves."""
+    fmt = _export_format()
+    _rate(read_limiter)
+    ident = _uuid(eid)
+    if ident is None:
+        raise _Rejected("épisode inconnu", code="not_found", status=404)
+    eid = str(ident)
+    episode = _episode_or_none(eid)
+    if episode is None:
+        raise _Rejected("épisode inconnu", code="not_found", status=404)
+    row = PodcastTranscript.get_or_none(PodcastTranscript.episode == eid)
+    if row is None or row.status != "ready":
+        raise _Rejected("pas encore de transcription", code="not_ready", status=409)
+    channel = PodcastChannel.get_or_none(PodcastChannel.id == episode.channel_id)
+    body = transcripts.render(fmt, episode, channel, _segments_of(eid))
+    resp = current_app.response_class(body, mimetype=transcripts.MIME[fmt])
+    resp.headers["Content-Disposition"] = _disposition(
+        _safe(episode.title, "episode") + "." + fmt
+    )
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@transcribe_api.route("/podcast/<pid>/transcripts/seasons")
+@login_required
+def show_transcript_seasons(pid):
+    """The show's derived seasons, each with its ready count.
+
+    Three reads whatever the number of episodes — the channel, its episode
+    list, then the ready transcript ids, never one query per season (four
+    statements with the session's own user read).
+    """
+    _rate(read_limiter)
+    channel = _channel_or_none(pid)
+    if channel is None:
+        raise _Rejected("émission inconnue", code="not_found", status=404)
+    episodes = _episodes_for_seasons(channel)
+    ready = _ready_ids(channel)
+    groups = [
+        {
+            "key": group["key"],
+            "label": group["label"],
+            "episodes": len(group["episode_ids"]),
+            "transcribed": sum(1 for eid in group["episode_ids"] if eid in ready),
+        }
+        for group in seasons.season_groups(episodes)
+    ]
+    return jsonify(
+        {
+            "seasons": groups,
+            "all": {"episodes": len(episodes), "transcribed": len(ready)},
+        }
+    )
+
+
+@transcribe_api.route("/podcast/<pid>/transcripts/export")
+@login_required
+def show_transcripts_export(pid):
+    """A season (or the whole show) as one ZIP of transcript files.
+
+    A pure read: no provider call, no transcription started. The ZIP is
+    streamed and the text is rendered one episode at a time, so a 200-episode
+    show costs a ZIP buffer rather than every transcript in memory.
+    """
+    fmt = _export_format()
+    _rate(read_limiter)
+    channel = _channel_or_none(pid)
+    if channel is None:
+        raise _Rejected("émission inconnue", code="not_found", status=404)
+    wanted = str(request.args.get("season") or "").strip()
+    if not wanted:
+        raise _Rejected("saison manquante", code="season", status=400)
+    episodes = _episodes_for_seasons(channel)
+    by_id = {str(episode.id): episode for episode in episodes}
+    if wanted == "all":
+        label = "Intégrale"
+        chosen = list(enumerate(seasons.reading_order(episodes), 1))
+    else:
+        group = next(
+            (item for item in seasons.season_groups(episodes) if item["key"] == wanted),
+            None,
+        )
+        if group is None:
+            raise _Rejected("saison inconnue", code="not_found", status=404)
+        label = group["label"]
+        chosen = [
+            (position, by_id[eid])
+            for position, eid in enumerate(group["episode_ids"], 1)
+            if eid in by_id
+        ]
+
+    states = _transcript_states(channel)
+    ready = [
+        (position, episode)
+        for position, episode in chosen
+        if states.get(str(episode.id), (None, None))[0] == "ready"
+    ]
+    if not ready:
+        raise _Rejected(
+            "aucune transcription prête", code="not_ready", status=409
+        )
+    missing = [
+        (position, episode, _missing_state(states.get(str(episode.id))))
+        for position, episode in chosen
+        if states.get(str(episode.id), (None, None))[0] != "ready"
+    ]
+
+    uid = str(getattr(request.webuser, "id", "") or "")
+    if not _claim_export(uid):
+        raise _Rejected(
+            "un export est déjà en cours",
+            code="export_running",
+            status=429,
+            extra={"retry_in": 1},
+        )
+    zip_name = "%s - %s.zip" % (
+        _safe(channel.title, "podcast"),
+        _safe(label, "transcriptions"),
+    )
+
+    def generate():
+        sink = _Sink()
+        try:
+            with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
+                for position, episode in ready:
+                    body = transcripts.render(
+                        fmt, episode, channel, _segments_of(str(episode.id))
+                    )
+                    archive.writestr(
+                        "%03d - %s.%s"
+                        % (position, _safe(episode.title, "episode"), fmt),
+                        body,
+                    )
+                    yield sink.drain()
+                if missing:
+                    archive.writestr(
+                        "MANQUANTS.txt",
+                        "Ces épisodes n'ont pas encore de transcription prête :\n\n"
+                        + "\n".join(
+                            "%03d - %s — %s"
+                            % (position, _safe(episode.title, "episode"), state)
+                            for position, episode, state in missing
+                        )
+                        + "\n",
+                    )
+            # After close(): the central directory lives in the sink too.
+            yield sink.drain()
+        finally:
+            # Runs on a client disconnect too (GeneratorExit), so an abandoned
+            # download never wedges the user's one export slot.
+            _release_export(uid)
+
+    resp = current_app.response_class(
+        stream_with_context(generate()), mimetype="application/zip"
+    )
+    resp.headers["Content-Disposition"] = _disposition(zip_name)
+    resp.headers["X-Accel-Buffering"] = "no"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp

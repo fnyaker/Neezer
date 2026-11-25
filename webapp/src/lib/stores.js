@@ -628,6 +628,19 @@ export function closeExport() {
   exportSheet.set(null);
 }
 
+// -- transcript export sheet -------------------------------------------------
+// { id, title } | null — pick a season (or the whole show) and a text format,
+// then download one ZIP. Mounted once in App.svelte; the sheet reads the season
+// list itself when it opens, one request.
+
+export const transcriptExportSheet = writable(null);
+export function openTranscriptExport(id, title = "") {
+  if (id) transcriptExportSheet.set({ id: String(id), title });
+}
+export function closeTranscriptExport() {
+  transcriptExportSheet.set(null);
+}
+
 // -- context menu -----------------------------------------------------------
 // { x, y, items: [{label, icon, action, danger, sub:[...]}, "divider"] } | null
 

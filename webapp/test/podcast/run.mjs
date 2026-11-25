@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer, silence, checker } from "../harness.mjs";
@@ -66,6 +66,9 @@ function track(page, show) {
     showSearch: 0,
     showPost: 0,
     startPost: 0,
+    seasons: 0,
+    showExports: [],
+    episodeExports: [],
     api: [],
   };
   page.on("request", (request) => {
@@ -77,6 +80,9 @@ function track(page, show) {
     if (/^\/api\/podcast\/episode\/[^/]+\/chapters$/.test(path)) st.chapters.push(path);
     if (/^\/api\/podcast\/episode\/[^/]+\/transcript$/.test(path) && method === "GET") st.transcripts.push(path);
     if (path === "/api/podcast/" + show + "/transcript/search") st.showSearch += 1;
+    if (path === "/api/podcast/" + show + "/transcripts/seasons") st.seasons += 1;
+    if (path === "/api/podcast/" + show + "/transcripts/export") st.showExports.push(url.search);
+    if (/^\/api\/podcast\/episode\/[^/]+\/transcript\/export$/.test(path)) st.episodeExports.push(url.search);
     if (path === "/api/podcast/" + show + "/transcribe" && method === "POST") st.showPost += 1;
     if (/^\/api\/podcast\/episode\/[^/]+\/transcribe$/.test(path) && method === "POST") st.startPost += 1;
   });
@@ -510,6 +516,103 @@ console.log("\n-- 1440x900: the show page stays whole at the chapter seams");
   await ctx.close();
 }
 
+console.log("\n-- 1440x900: the transcript export sheet asks once and downloads a season");
+{
+  const ctx = await newContext({ width: 1440, height: 900 }, false);
+  await loginVia(ctx);
+  const page = await ctx.newPage();
+  const st = track(page, seed.show);
+  await openShow(page);
+  await page.waitForSelector(".tr-switch", { timeout: 15000 });
+  const button = page.locator("section.tr-card .tr-btn", { hasText: "Exporter les transcriptions" });
+  check((await button.count()) === 1, "export: the transcript card offers the export button");
+  await button.click();
+  const dialog = page.locator('[role="dialog"][aria-label="Exporter les transcriptions"]');
+  await dialog.waitFor({ timeout: 15000 });
+  await dialog.locator(".choices .fmt").first().waitFor({ timeout: 15000 });
+  check(st.seasons === 1, `export: opening the sheet asks the season list once (measured ${st.seasons})`);
+  check(st.showExports.length === 0, `export: opening the sheet downloads nothing (measured ${st.showExports.length})`);
+  const rows = dialog.locator(".choices .fmt");
+  check((await rows.count()) === 2, `export: the sheet lists the whole show and its one year (measured ${await rows.count()})`);
+  const whole = (await rows.first().innerText()).replace(/\s+/g, " ").trim();
+  check(whole.includes("1/8 transcrits"), `export: the whole show reads 1/8 transcribed (read « ${whole} »)`);
+  check(!(await rows.first().isDisabled()), "export: the whole show is downloadable");
+  const year = (await rows.nth(1).innerText()).replace(/\s+/g, " ").trim();
+  check(year.includes("1/8 transcrits"), `export: the year row carries the same count (read « ${year} »)`);
+  await dialog.locator(".formats .fmt", { hasText: "Markdown" }).click();
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30000 }),
+    dialog.locator("footer .pill").click(),
+  ]);
+  const bytes = readFileSync(await download.path());
+  check(st.showExports.length === 1, `export: one GET builds the whole ZIP (measured ${st.showExports.length})`);
+  check(/season=all/.test(st.showExports[0]), `export: the ZIP is asked for the whole show (${st.showExports[0]})`);
+  check(/format=md/.test(st.showExports[0]), `export: the chosen format is passed (${st.showExports[0]})`);
+  check(bytes.length > 0 && bytes[0] === 0x50 && bytes[1] === 0x4b, `export: the download is a ZIP (measured ${bytes.length} B)`);
+  check(bytes.includes(Buffer.from("MANQUANTS.txt")), "export: the ZIP carries the missing-episodes list");
+  check(bytes.includes(Buffer.from("001 - ")) && bytes.includes(Buffer.from("003 - ")), "export: the ready episodes keep their reading position (001, 003)");
+  note("export: whole-show Markdown ZIP", `${bytes.length} B from 1 request ${st.showExports[0]}`);
+  await page.waitForTimeout(1500);
+  check(
+    (await page.locator('[role="dialog"][aria-label="Exporter les transcriptions"]').count()) === 0,
+    "export: the sheet closes once the download starts"
+  );
+  await ctx.close();
+}
+
+console.log("\n-- 1440x900: the transcript panel exports the current episode");
+{
+  const ctx = await newContext({ width: 1440, height: 900 }, false);
+  await loginVia(ctx);
+  const page = await ctx.newPage();
+  const st = track(page, seed.show);
+  await openShow(page);
+  await page.locator(".episodes li .pl").first().click();
+  await page.waitForSelector("footer.player .now", { timeout: 15000 });
+  await openPlayer(page, false);
+  await page.locator(".d .tabs button", { hasText: "À propos" }).click();
+  await page.locator(".side .seg-tabs button", { hasText: "Transcription" }).click();
+  await page.waitForSelector(".side .seg", { timeout: 15000 });
+  const trigger = page.locator(".side .tools .btn", { hasText: "Exporter" });
+  check((await trigger.count()) === 1, "panel export: a ready transcript offers the Exporter button");
+  await trigger.click();
+  const items = page.locator(".side .tools .menu [role=menuitem]");
+  check((await items.count()) === 4, `panel export: the menu lists the 4 formats (measured ${await items.count()})`);
+  const heights = await rowHeights(page, ".side .tools .menu [role=menuitem]");
+  check(heights.every((value) => value >= 31.5), `panel export: every menu row is at least 32 px (measured ${JSON.stringify(heights.map((v) => Math.round(v)))})`);
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30000 }),
+    page.locator(".side .tools .menu [role=menuitem]", { hasText: "Sous-titres" }).click(),
+  ]);
+  const bytes = readFileSync(await download.path());
+  check(st.episodeExports.length === 1, `panel export: one GET builds the file (measured ${st.episodeExports.length})`);
+  check(/format=srt/.test(st.episodeExports[0]), `panel export: the chosen format is passed (${st.episodeExports[0]})`);
+  check(
+    bytes.toString("utf8").startsWith("1\n00:00:00,000 --> 00:00:15,000\n"),
+    `panel export: the SRT starts at the first timed line (read « ${bytes.toString("utf8").slice(0, 40).replace(/\n/g, "\\n")} »)`
+  );
+  note("panel export: one-episode SRT", `${bytes.length} B from 1 request ${st.episodeExports[0]}`);
+  await ctx.close();
+}
+
+console.log("\n-- 390x844: the export sheet fits a phone");
+{
+  const ctx = await newContext({ width: 390, height: 844 }, true);
+  await loginVia(ctx);
+  const page = await ctx.newPage();
+  await openShow(page);
+  await page.locator("section.tr-card .tr-btn", { hasText: "Exporter les transcriptions" }).click();
+  const dialog = page.locator('[role="dialog"][aria-label="Exporter les transcriptions"]');
+  await dialog.locator(".choices .fmt").first().waitFor({ timeout: 15000 });
+  const ov = await overflow(page);
+  check(ov.doc <= ov.width + 1, `390: the export sheet does not overflow (${ov.doc}/${ov.width})`);
+  const heights = await rowHeights(page, '[role="dialog"] .fmt');
+  check(heights.every((value) => value >= 44), `390: every choice is a 44 px target (measured ${JSON.stringify(heights.map((v) => Math.round(v)))})`);
+  const box = await dialog.boundingBox();
+  check(box && box.width <= 390 && box.height <= 844, `390: the sheet stays on screen (${box && Math.round(box.width)}x${box && Math.round(box.height)})`);
+  await ctx.close();
+}
+
 await browser.close();
 server.stop();
 console.log("");
@@ -517,4 +620,4 @@ if (state.failed) {
   console.log(`FAIL: ${state.failed} check(s) failed`);
   process.exit(1);
 }
-console.log("ok — show chapters, under/about panels, transcript current segment, search and the running poll");
+console.log("ok — show chapters, under/about panels, transcript current segment, search, the running poll and the transcript export");

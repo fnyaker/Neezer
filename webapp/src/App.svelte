@@ -45,6 +45,7 @@
   import GenreTagSheet from "./components/GenreTagSheet.svelte";
   import CreditsSheet from "./components/CreditsSheet.svelte";
   import ExportSheet from "./components/ExportSheet.svelte";
+  import TranscriptExportSheet from "./components/TranscriptExportSheet.svelte";
   import { maybeResumeHosting } from "./lib/party/hostbridge.js";
   import { partySheet, genreBulkSheet, remoteSheet, immersiveOpen, current, ecoMode } from "./lib/stores.js";
   import { REMOTE, atLeast, claimToken, rememberRemote, forgetRemote, reloadHome } from "./lib/remote/mode.js";
@@ -630,6 +631,7 @@
 <CreditsSheet />
 {#if GenreBulkSheet}<svelte:component this={GenreBulkSheet} />{/if}
 <ExportSheet />
+<TranscriptExportSheet />
 {#if !partyId && !inviteToken && !onboardingRequired}
   {#if PartySheet}<svelte:component this={PartySheet} />{/if}
   {#if RemoteSheet && !REMOTE}<svelte:component this={RemoteSheet} />{/if}

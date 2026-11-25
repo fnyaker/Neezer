@@ -626,6 +626,25 @@ export const api = {
     if (limit != null) qs.set("limit", String(limit));
     return req("/transcripts/search?" + qs.toString());
   },
+  // Exporting the text: one episode as a file, or a season / the whole show as
+  // one ZIP. Both are plain downloads (window.location), never a blob — the
+  // archive is built as it streams server-side.
+  transcriptSeasons: (id) =>
+    req("/podcast/" + encodeURIComponent(id) + "/transcripts/seasons"),
+  transcriptExportUrl: (id, fmt) =>
+    BASE +
+    "/podcast/episode/" +
+    encodeURIComponent(id) +
+    "/transcript/export?format=" +
+    encodeURIComponent(fmt),
+  showTranscriptsExportUrl: (id, season, fmt) =>
+    BASE +
+    "/podcast/" +
+    encodeURIComponent(id) +
+    "/transcripts/export?season=" +
+    encodeURIComponent(season) +
+    "&format=" +
+    encodeURIComponent(fmt),
 
   // podcasts — per-user progress & markers (server-side, follow you anywhere).
   // Saves are fire-and-forget (keepalive survives a page unload) — losing one
