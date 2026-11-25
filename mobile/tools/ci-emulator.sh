@@ -343,9 +343,11 @@ fi
 check_door "Rechercher" "Recherche Neezer"
 # Bibliothèque draws a STABLE marker too (`LibraryScreen.kt`'s `LIBRARY_MARKER`,
 # « Bibliothèque Neezer », a contentDescription on its root): the MB0 stub's text
-# is gone now the lot paints the real screen, and the bottom bar's own
-# « Bibliothèque » would open this door from any tab.
-check_door "Bibliothèque" "Bibliothèque Neezer"
+# is gone now the lot paints the real screen, and the bottom bar's own item would
+# open this door from any tab. The bar's WORD is « Biblio » since L1 (the SPA's
+# own label, 72 dp on a 360 dp bar — « Bibliothèque » does not fit); the screen's
+# marker keeps its full name.
+check_door "Biblio" "Bibliothèque Neezer"
 # M4 a supprimé le stub MB0 ; le marqueur est celui de l'écran, comme Accueil et
 # Bibliothèque (`PodcastsEntry.kt`'s `PODCASTS_MARKER`).
 check_door "Podcasts" "Podcasts Neezer"
