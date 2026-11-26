@@ -110,6 +110,11 @@ COUNTER = re.compile(r"·\s*\d+")
 # what it costs to read the ANR buffer: only a slow or crashed tap pays it.
 FREEZE_MS = 3000
 ANR_CHECK_MS = 1200
+# §4.1: `nothing` is « nothing for 3 000 ms (2 dumps) », never one read. A paint
+# slower than the first dump reads as `nothing` on one pass and `state-changed`
+# on the next (B1 measured five such lines at 1 200 ms alone), and a `nothing`
+# on a verb-named control is a `bloquant` bug: an honest silence costs this wait.
+NOTHING_WAIT_S = 2.0
 
 TEXT_CLASSES = ("TextView", "Button", "ImageButton", "EditText",
                 "CheckBox", "Switch", "RadioButton")
@@ -873,6 +878,14 @@ class Walker:
                 self.dump()
         else:
             outcome, detail, _ = classify(before, after, fresh, pid, forced=None)
+            if outcome == "nothing":
+                time.sleep(NOTHING_WAIT_S)
+                confirmed = self.dump().view()
+                outcome, detail, _ = classify(before, confirmed, fresh, pid)
+                ms = int((time.monotonic() - started) * 1000)
+                after = confirmed
+                if outcome == "nothing":
+                    detail = f"aucun changement sur 2 dumps en {ms} ms"
         self.clicked += 1
         evidence = None
         if outcome in ("exception", "blank", "freeze", "nothing", "console-error"):
@@ -1348,6 +1361,8 @@ def summary(run: dict) -> dict:
         "coverage": percent(clicked, max(found - skipped, 0)),
         "duplicates": run.get("duplicates", 0),
         "nothing": sum(1 for row in rows if row["outcome"] == "nothing"),
+        "named_nothing": sum(1 for row in rows if row["outcome"] == "nothing"
+                             and starts_with_verb(row["element"]["name"])),
         "blank": sum(1 for row in rows if row["outcome"] == "blank"),
         "exceptions": sum(1 for row in rows if row["outcome"] == "exception"),
         "freezes": sum(1 for row in rows if row["outcome"] == "freeze"),
@@ -1359,9 +1374,15 @@ def summary(run: dict) -> dict:
 
 def summary_line(run: dict) -> str:
     totals = summary(run)
+    # §4.4: the percentage AND the raw count, in the shape the web harness
+    # prints (`coverage=100.0% (13/13)`), so the judge reads one vocabulary.
+    counted = max(totals["elements"] - sum(
+        1 for row in run.get("rows", []) if row["outcome"] == "skipped-session"), 0)
     line = (f"bughunt: screens={totals['screens']} elements={totals['elements']} "
-            f"clicked={totals['clicked']} coverage={totals['coverage']}% "
+            f"clicked={totals['clicked']} "
+            f"coverage={totals['coverage']}% ({totals['clicked']}/{counted}) "
             f"duplicates={totals['duplicates']} nothing={totals['nothing']} "
+            f"named_nothing={totals['named_nothing']} "
             f"blank={totals['blank']} exceptions={totals['exceptions']} "
             f"freezes={totals['freezes']} seconds={totals['seconds']}")
     if totals["stopped"]:
@@ -1569,6 +1590,13 @@ def self_test() -> int:
         return 1
     if destructive_of("Mettre à jour") != ("jamais", False):
         print("self_test: classify=FAIL destructive Mettre à jour")
+        return 1
+    # §4.4: the summary line the judge reads: percentage AND raw count.
+    line = summary_line({"screens": [{"name": "x", "hash": "a", "elements": 1}], "elements": 1,
+                         "rows": [{"outcome": "state-changed",
+                                   "element": {"name": "Lire"}}]})
+    if "coverage=100.0% (1/1)" not in line or "named_nothing=0" not in line:
+        print(f"self_test: cover=FAIL {line}")
         return 1
     found, declared = check_routes(quiet=True)
     print(f"self_test: routes={found}/{declared} parse=ok dedupe=ok classify=ok")

@@ -719,7 +719,12 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
 - **une action destructive est cliquée jusqu'à sa confirmation, jamais au-delà** : `explore.py` porte
   l'unique liste (`DESTRUCTIVE`) — `Déconnexion` s'arrête devant `Confirmer`, `Changer de serveur`
   est `skipped-session` dans la passe, `Mettre à jour` s'arrête à sa feuille. Une confirmation qui
-  n'apparaît pas est un bug `bloquant` (`confirm=no-confirm`), pas un accident du harnais.
+  n'apparaît pas est un bug `bloquant` (`confirm=no-confirm`), pas un accident du harnais ;
+- **un `nothing` se prouve sur deux dumps, à ~3 s** : un seul dump lit toute peinture plus lente que
+  lui comme « rien ne se passe », or un `nothing` sur un nom qui commence par un verbe est un bug
+  `bloquant` (§4.6). Le prix mesuré est de ~2 s par silence confirmé — sur l'arbre factice, la passe
+  est passée de 7 s à 22 s, et les deux harnais (web et natif) impriment le même
+  `nothing=<n> named_nothing=<k>`.
 
 La **passe** part de l'accueil, explore en largeur les écrans par ordre de découverte, et se restaure
 par `BACK` (une fois après une navigation, jusqu'à 3 fois sinon) puis, en dernier recours, par
