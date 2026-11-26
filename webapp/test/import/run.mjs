@@ -106,12 +106,21 @@ check(polls >= 4, "it polled until the job was done", `${polls} polls`);
 const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 check(overflow <= 0, "no horizontal scroll", `${overflow}px`);
 const boxes = await page.evaluate(() =>
-  [...document.querySelectorAll(".actions > *, .chip")].map((e) => {
-    const r = e.getBoundingClientRect();
-    return { right: r.right, w: r.width };
-  })
+  [...document.querySelectorAll(".actions > *, .chip")]
+    // A chip the layout keeps but does not show has no box at all — the narrow
+    // TopBar hides its Flow level chip below ~430 px — and the assertion is
+    // about the boxes a person sees: `display: none` cannot stick out.
+    .filter((e) => e.getClientRects().length > 0)
+    .map((e) => {
+      const r = e.getBoundingClientRect();
+      return { right: r.right, w: r.width };
+    })
 );
-check(boxes.every((b) => b.right <= window_w() && b.w > 0), "every action and chip is on screen");
+check(
+  boxes.every((b) => b.right <= window_w() && b.w > 0),
+  "every action and chip is on screen",
+  `widest right ${Math.round(Math.max(...boxes.map((b) => b.right)))} px in ${window_w()}`
+);
 function window_w() {
   return PHONE ? 412 : 1280;
 }

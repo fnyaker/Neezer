@@ -22,6 +22,7 @@
   import { atLeast } from "../lib/remote/mode.js";
   import { duration as fmtDuration, artistLine } from "../lib/format.js";
   import { animate, fadeIn, DUR, EASE_CSS } from "../lib/motion.js";
+  import { claimDrag, releaseDrag } from "../lib/gesture.js";
   import Cover from "./Cover.svelte";
   import Icon from "./Icon.svelte";
   import VirtualList from "./VirtualList.svelte";
@@ -39,6 +40,9 @@
   let vl;
   let root;
   let drag = null; // { from, to, y, left, width, item }
+  // A cancelled drag (Escape) must not be committed by the `pointerup` that
+  // follows it: the finger is still down, so the release arrives AFTER the key.
+  let cancelled = false;
   let raf = 0;
   let lastY = 0;
   // The row an explicit edit just inserted: its key, so ITS intro plays and
@@ -162,12 +166,16 @@
       /* not captured */
     }
     const box = root.getBoundingClientRect();
+    cancelled = false;
     drag = { from, to: from, y: e.clientY, left: box.left, width: box.width, item: items[from] };
     lastY = e.clientY;
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", onKey);
+    // The row being carried owns Escape: a key press puts it back instead of
+    // closing the player it is drawn over (lib/gesture.js).
+    claimDrag(cancelReorder);
     raf = requestAnimationFrame(loop);
     buzz(10);
   }
@@ -205,22 +213,33 @@
     window.removeEventListener("pointercancel", cancel);
     window.removeEventListener("keydown", onKey);
     drag = null;
+    releaseDrag();
   }
 
   function onUp() {
     const d = drag;
+    // Read the flag before `stop()`; a cancel that already happened means the
+    // rows went back and this release decides nothing.
+    const wasCancelled = cancelled;
     stop();
-    if (d && d.to !== d.from) player.move(d.from, d.to);
+    if (d && d.to !== d.from && !wasCancelled) player.move(d.from, d.to);
   }
 
   function cancel() {
     stop();
   }
 
+  // Escape's owner while a row is carried: put the rows back, drop the copy,
+  // and leave the release that follows inert. A cancel never moves anything.
+  function cancelReorder() {
+    cancelled = true;
+    stop();
+  }
+
   function onKey(e) {
     if (e.key === "Escape") {
       e.preventDefault();
-      stop();
+      cancelReorder();
     }
   }
 

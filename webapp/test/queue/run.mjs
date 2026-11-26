@@ -151,7 +151,15 @@ check(/4\s?0\d\d|39\d\d/.test(await counting()) || (await counting()).includes("
   const g = await grab(1);
   const sb = await box(scrollerSel);
   await ptr.move(g.x, sb.y + sb.height - 6, 6);
-  await page.waitForTimeout(1800);
+  // Hold at the edge until the drop line is past #30: the wait is the list's own
+  // progress, not a stopwatch. A fixed 1 800 ms carried an idle machine ~2 400 px
+  // (target #45, landed) and a contended one 848 px (target #28, FAIL): the
+  // assertion below is where the row LANDS, never how fast the scroll was.
+  await page.waitForFunction(
+    () => Number(document.querySelector(".qitem.after")?.dataset.qi) > 30,
+    null,
+    { timeout: 20000 }
+  );
   const seen = (await rows()).filter((r) => r.i > 30).length;
   check(seen > 0, "holding at the edge scrolls the list", `${seen} rows past #30 mounted`);
   check((await page.locator(".ghost").count()) === 1, "the copy is still there though the row is not");
