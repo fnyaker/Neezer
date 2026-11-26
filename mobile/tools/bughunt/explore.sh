@@ -89,8 +89,12 @@ PY
 note() { printf 'explore.sh: %s\n' "$*" >&2; }
 step() { printf '\n=== %s\n' "$*"; }
 
+# `mobile/tools/bughunt/out`, the path `bughunt.yaml`'s `native` job uploads as
+# the `bughunt-native` artifact and `.gitignore` already covers (plan §4.7). A
+# `mktemp` default would leave the job with nothing to upload, and
+# `if-no-files-found: warn` would hide it.
 if [[ -z "$out" ]]; then
-    out="$(mktemp -d "${TMPDIR:-/tmp}/neezer-bughunt.XXXXXX")"
+    out="$here/out"
 fi
 mkdir -p "$out"
 note "preuves: $out"
