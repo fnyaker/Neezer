@@ -161,6 +161,15 @@ cd webapp && node test/podcast/run.mjs               # a show with chapters and 
                                                      # 0 per segment, 200 lines, a hit seek, 1 poll per 10 s, the 100-chapter sheet,
                                                      # 390/641/1440 and the admin mark/progress card
 
+cd webapp && npm run build && node test/bughunt/run.mjs   # LA CHASSE (plan-bughunt, B1): every screen, every element the
+                                                     # accessibility tree names, classified; report in test/bughunt/out/
+                                                     # (~20 min, 32 écrans ; exit 1 s'il reste un bug bloquant)
+cd webapp && node test/bughunt/run.mjs --only '#/settings/apparence' --out /tmp/bh   # one screen, throwaway report
+cd webapp && node test/bughunt/run.mjs --max-minutes 5 --max-clicks 100   # a smoke pass (80 % de couverture, `stopped=budget`)
+cd webapp && node test/bughunt/stress.mjs             # the owner's three scenarios alone (burst, settings, session)
+mobile/tools/bughunt/explore.sh --serial emulator-5580   # the NATIVE hunt (B2): boot, sign-in, the walk, the report — GitHub
+                                                     # Actions only (this worker has no /dev/kvm), `bughunt.yaml` native job
+
 # Desktop app (GPUI, desktop/): Omarchy Linux only, its own Cargo workspace
 cd desktop && cargo run -p neezer-desktop            # the window (debug); Ctrl+Q quits
 cd desktop && cargo build --release                  # -> target/release/{neezer-desktop,neezer-transcribe}
