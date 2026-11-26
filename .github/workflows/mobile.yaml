@@ -853,6 +853,8 @@ jobs:
       # (`NoSuchMethodError`), and the sign-in the script runs first is exactly
       # where; the run must exit 1 and name it.
       - name: Proof it catches v1.6.6's crash (temporary evidence step)
+        env:
+          NEEZER_MONKEY_EVIDENCE_DIR: ${{ runner.temp }}/monkey-evidence
         run: |
           set -euo pipefail
           apk="$RUNNER_TEMP/neezer-native-1.6.6.apk"

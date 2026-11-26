@@ -188,6 +188,15 @@ collect_evidence() {
 # crash records and monkey's report of the same events: either source missing
 # one is exactly why both are read.
 analyse() {
+    # The sign-in path has no crawl yet, so `monkey.log` may not exist: every
+    # read below sees a file, and every pipeline ends in `|| true` — under
+    # `pipefail` a `sed` on a missing file is a failing pipeline, and a
+    # summariser that dies before its summary hides the crash it found (measured
+    # on this lot's first v1.6.6 run).
+    local f
+    for f in app-crash.log monkey.log logcat.log; do
+        [[ -f "$evidence/$f" ]] || : >"$evidence/$f"
+    done
     crashes="$(grep -cE 'FATAL EXCEPTION|Fatal signal|UnsatisfiedLinkError|dlopen failed' \
         "$evidence/app-crash.log" 2>/dev/null || true)"
     local monkey_crashes
@@ -200,7 +209,7 @@ analyse() {
     if (( monkey_crashes > crashes )); then
         crashes=$monkey_crashes
     fi
-    injected="$(sed -n 's/^Events injected: *\([0-9][0-9]*\).*/\1/p' "$evidence/monkey.log" 2>/dev/null | tail -1)"
+    injected="$(sed -n 's/^Events injected: *\([0-9][0-9]*\).*/\1/p' "$evidence/monkey.log" 2>/dev/null | tail -1 || true)"
     [[ -n "$injected" ]] || injected="$events"
 }
 
