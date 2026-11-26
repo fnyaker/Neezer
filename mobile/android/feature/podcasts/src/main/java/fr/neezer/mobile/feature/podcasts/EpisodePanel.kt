@@ -47,6 +47,7 @@ import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSegmented
 import fr.neezer.mobile.designsystem.NzSheet
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -196,30 +197,34 @@ private fun EpisodePanelBody(
             )
         }
 
-        if (segment.intValue == 0) {
-            ChapterBlock(
-                chapters = chapters,
-                busy = chaptersBusy,
-                failure = chaptersFailure,
-                isCurrent = isCurrent,
-                positionS = positionS,
-                onSeek = onSeek,
-                onRetry = onLoadChapters,
-            )
-        } else if (canTranscript) {
-            TranscriptBlock(
-                episode = episode,
-                model = model,
-                state = transcriptState,
-                admin = admin,
-                isCurrent = isCurrent,
-                positionS = positionS,
-                onSeek = onSeek,
-                onStart = onStartTranscript,
-                onStop = onStopTranscript,
-                onRestart = onRestartTranscript,
-                onDelete = onDeleteTranscript,
-            )
+        // The panel's two segments replace in place (M7): a 140 ms fade and 4 dp,
+        // an exit of None so the flow below never jumps. At eco, nothing.
+        NzSwap(targetState = segment.intValue, label = "episode-panel-segment") { tab ->
+            if (tab == 0) {
+                ChapterBlock(
+                    chapters = chapters,
+                    busy = chaptersBusy,
+                    failure = chaptersFailure,
+                    isCurrent = isCurrent,
+                    positionS = positionS,
+                    onSeek = onSeek,
+                    onRetry = onLoadChapters,
+                )
+            } else if (canTranscript) {
+                TranscriptBlock(
+                    episode = episode,
+                    model = model,
+                    state = transcriptState,
+                    admin = admin,
+                    isCurrent = isCurrent,
+                    positionS = positionS,
+                    onSeek = onSeek,
+                    onStart = onStartTranscript,
+                    onStop = onStopTranscript,
+                    onRestart = onRestartTranscript,
+                    onDelete = onDeleteTranscript,
+                )
+            }
         }
 
         if (markers.isNotEmpty()) {

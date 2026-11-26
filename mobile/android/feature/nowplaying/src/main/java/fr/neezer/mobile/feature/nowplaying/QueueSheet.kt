@@ -177,18 +177,26 @@ internal fun QueueEditor(
             return@Column
         }
 
+        // A row's insert / remove / reorder plays the design system's own specs
+        // (X0's `itemSpecs()`): no mount fade (M4), a 200 ms placement, a 140 ms
+        // fade-out — and nothing at all at eco, no displacement at reduced.
+        val specs = Sillon.motion.itemSpecs()
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             items(
                 count = window.len,
-                key = { index -> "${index}:${window.rowAt(index)?.key ?: index}" },
+                // The identity, never the index: the remove case the person does
+                // most is the one `animateItem` can only move if the rows below it
+                // keep their key (see [itemKey]).
+                key = { index -> window.itemKey(index) },
             ) { index ->
                 val row = window.rowAt(index)
                 val shift = rowShift(index, dragFrom, dragTo)
+                val motion = Modifier.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
                 if (row == null) {
                     // A page still in flight: a skeleton row the height of a real
                     // one, never a blank (rule 3).
                     Box(
-                        Modifier
+                        motion
                             .fillMaxWidth()
                             .height(QUEUE_ROW_HEIGHT)
                             .padding(vertical = NzSpacing.xxs)
@@ -197,6 +205,7 @@ internal fun QueueEditor(
                     )
                 } else {
                     QueueRow(
+                        modifier = motion,
                         row = row,
                         index = index,
                         playing = index == state.index,
@@ -244,6 +253,25 @@ internal fun QueueEditor(
 private const val VISIBLE_ROWS = 12
 
 /**
+ * A row's `LazyColumn` key, stable across a removal.
+ *
+ * The key this list used to carry was `"<index>:<track key>"`, which is a NEW
+ * item after every removal: the rows below shift by one, so each of them was
+ * torn down and rebuilt instead of moving, and `animateItem` had nothing to
+ * animate — the 4 000-row case the owner asked for moved in 0 frames. The
+ * identity is the track's own key; the rank only disambiguates a queue that
+ * holds the same title twice (the SPA's `VirtualList` does the same), and it is
+ * counted over the window's LOADED rows, so it costs no request and no whole
+ * list: a page that is not loaded draws a skeleton, which has its own key.
+ */
+private fun ListWindow.itemKey(index: Int): String {
+    val row = rowAt(index) ?: return "skeleton:$index"
+    var rank = 0
+    for ((other, value) in rows) if (other < index && value.key == row.key) rank += 1
+    return if (rank == 0) row.key else "${row.key}#$rank"
+}
+
+/**
  * The SPA's `rowShift`: the rows between the dragged origin and the target slide
  * one row out of the way, so the list MAKES ROOM instead of drawing a line.
  */
@@ -272,12 +300,13 @@ private fun QueueRow(
     onDragStart: () -> Unit,
     onDrag: (Float) -> Unit,
     onDragEnd: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
     val density = LocalDensity.current
     var dragY by remember { mutableStateOf(0f) }
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(QUEUE_ROW_HEIGHT)
             .graphicsLayer {

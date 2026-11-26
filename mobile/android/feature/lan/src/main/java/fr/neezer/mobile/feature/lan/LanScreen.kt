@@ -46,8 +46,10 @@ import fr.neezer.mobile.designsystem.NzButton
 import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzCard
 import fr.neezer.mobile.designsystem.NzChip
+import fr.neezer.mobile.designsystem.NzAppear
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.Sillon
 import kotlinx.coroutines.launch
@@ -201,6 +203,9 @@ private fun SeenCard(state: LanModel.State) {
     val snapshot = state.snapshot
     val peers = snapshot?.peers.orEmpty()
     val transfers = snapshot?.transfers.orEmpty()
+    // S7's rule, on the phone: a peer that ARRIVES gets one 140 ms appearance
+    // (M6 — a status); the peers the card opened with animate nothing (M4).
+    val openingIds = remember { peers.map { it.devicePub }.toSet() }
     LanCard(
         title = "Appareils vus maintenant",
         subtitle = when {
@@ -221,7 +226,11 @@ private fun SeenCard(state: LanModel.State) {
                 modifier = Modifier.testTag("lan-no-peer"),
             )
         }
-        peers.forEach { peer -> PeerRow(peer) }
+        peers.forEach { peer ->
+            var shown by remember(peer.devicePub) { mutableStateOf(peer.devicePub in openingIds) }
+            LaunchedEffect(peer.devicePub) { shown = true }
+            NzAppear(visible = shown) { PeerRow(peer) }
+        }
         transfers.forEach { transfer ->
             Text(text = transferText(transfer), style = Sillon.type.bodySmall, color = Sillon.colors.dim)
         }
@@ -233,6 +242,15 @@ private fun SeenCard(state: LanModel.State) {
             )
         }
     }
+}
+
+/** Which of a card's three phases is drawn: the phase names the swap (M15). */
+private enum class CardPhase { Loading, Failed, Ready }
+
+private fun phaseOf(state: ScreenState<*>): CardPhase = when (state) {
+    is ScreenState.Loading -> CardPhase.Loading
+    is ScreenState.Failed -> CardPhase.Failed
+    is ScreenState.Ready -> CardPhase.Ready
 }
 
 @Composable
@@ -269,18 +287,24 @@ private fun MyDevicesCard(host: LanModel, devices: ScreenState<List<LanDeviceFfi
         title = "Mes appareils",
         subtitle = "Les appareils inscrits sur votre compte. « Révoquer » les coupe du LAN au prochain contact.",
     ) {
-        when (devices) {
-            is ScreenState.Loading -> Text("Chargement…", style = Sillon.type.bodySmall, color = Sillon.colors.dim)
-            is ScreenState.Failed -> CauseLine(cause = devices.cause, onRetry = devices.retry)
-            is ScreenState.Ready -> {
-                if (devices.data.isEmpty()) {
-                    Text(
-                        text = "Aucun appareil inscrit pour l'instant.",
-                        style = Sillon.type.bodySmall,
-                        color = Sillon.colors.dim,
-                    )
+        // The three phases replace in place (M7): the list fades in over 140 ms
+        // with 4 dp of rise, and a failure arrives the same way — no pop, no exit.
+        // The swap's key is the PHASE, so a refresh of the same phase draws
+        // without animating (M6).
+        NzSwap(targetState = phaseOf(devices), label = "lan-devices") { _ ->
+            when (devices) {
+                is ScreenState.Loading -> Text("Chargement…", style = Sillon.type.bodySmall, color = Sillon.colors.dim)
+                is ScreenState.Failed -> CauseLine(cause = devices.cause, onRetry = devices.retry)
+                is ScreenState.Ready -> {
+                    if (devices.data.isEmpty()) {
+                        Text(
+                            text = "Aucun appareil inscrit pour l'instant.",
+                            style = Sillon.type.bodySmall,
+                            color = Sillon.colors.dim,
+                        )
+                    }
+                    devices.data.forEach { device -> DeviceRow(host, device) }
                 }
-                devices.data.forEach { device -> DeviceRow(host, device) }
             }
         }
     }
@@ -383,28 +407,30 @@ private fun FriendsCard(host: LanModel, state: LanModel.State) {
             )
         }
         val friends = state.friends
-        when (friends) {
-            is ScreenState.Loading -> Text("Chargement…", style = Sillon.type.bodySmall, color = Sillon.colors.dim)
-            is ScreenState.Failed -> CauseLine(cause = friends.cause, onRetry = friends.retry)
-            is ScreenState.Ready -> {
-                if (friends.data.sharesTo.isEmpty() && friends.data.trustedBy.isEmpty()) {
-                    Text(
-                        text = "Personne pour l'instant : vos propres appareils suffisent à l'échange.",
-                        style = Sillon.type.bodySmall,
-                        color = Sillon.colors.dim,
-                    )
-                }
-                friends.data.sharesTo.forEach { friend ->
-                    FriendRow(host, friend, state, sharing = true)
-                }
-                if (friends.data.trustedBy.isNotEmpty()) {
-                    Text(text = "Qui partage avec vous", style = Sillon.type.label, color = Sillon.colors.tx)
-                    friends.data.trustedBy.forEach { friend ->
+        NzSwap(targetState = phaseOf(friends), label = "lan-friends") { _ ->
+            when (friends) {
+                is ScreenState.Loading -> Text("Chargement…", style = Sillon.type.bodySmall, color = Sillon.colors.dim)
+                is ScreenState.Failed -> CauseLine(cause = friends.cause, onRetry = friends.retry)
+                is ScreenState.Ready -> {
+                    if (friends.data.sharesTo.isEmpty() && friends.data.trustedBy.isEmpty()) {
                         Text(
-                            text = friend.name.ifBlank { "Un ami" },
+                            text = "Personne pour l'instant : vos propres appareils suffisent à l'échange.",
                             style = Sillon.type.bodySmall,
                             color = Sillon.colors.dim,
                         )
+                    }
+                    friends.data.sharesTo.forEach { friend ->
+                        FriendRow(host, friend, state, sharing = true)
+                    }
+                    if (friends.data.trustedBy.isNotEmpty()) {
+                        Text(text = "Qui partage avec vous", style = Sillon.type.label, color = Sillon.colors.tx)
+                        friends.data.trustedBy.forEach { friend ->
+                            Text(
+                                text = friend.name.ifBlank { "Un ami" },
+                                style = Sillon.type.bodySmall,
+                                color = Sillon.colors.dim,
+                            )
+                        }
                     }
                 }
             }
