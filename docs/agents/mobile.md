@@ -860,10 +860,20 @@ recorded on** (`device.fingerprint`, plus the host's `cpuName` for information);
 image is reported `perf_gate=incomparable`, not red, because a different runner is not a regression —
 and the host CPU is printed when it differs, since part of any delta is then the host's. The benches
 need a signed-in account (`Journey.restart` skips with its cause otherwise), so the job installs the
-`benchmark` APK, signs it in to `perf-server.sh --favorites 8000 --big-playlist 4000 --archived`
+`benchmark` APK, signs it in to `perf-server.sh --favorites 8000 --big-playlist 4000 --audio-all`
 through `ui.sh` — the same screens `release-signin.sh` taps — and runs Gradle over it: `install -r`
-keeps the session. `--self-test` proves the decision without a device (a 9 % p95 regression passes,
-11 % and 15 % fail, a bench that measured nothing fails, another device is incomparable).
+keeps the session, and `--audio-all` puts a real file behind every track so « Lire » streams instead of
+waiting on a transcode (`--archived` would need numpy, which the project does not depend on: measured,
+`ModuleNotFoundError`, run 45776273805). `--self-test` proves the decision without a device (a 9 % p95
+regression passes, 11 % and 15 % fail, a bench that measured nothing fails, another device is
+incomparable). Recorded on run **45797531420** (GitHub runner, API 35 x86_64, the job's own AVD):
+**startup p95 2 258,2 ms, favourites 133,8, playlist 111,7, player open 829,3** (p50 1 959,3 / 107,0 /
+86,7 / 89,5) — a shared runner is ~3,5× slower than MQ2's quiet laptop emulator (633 ms p50), which is
+exactly why the file is compared with itself and never with a phone budget. **The spread between two runs of
+the same image is the size of the threshold**: run 45805384105 measured startup p95 1 859,3 and favourites
+117,1 against the baseline's 2 258,2 and 133,8 (−17,7 % and −12,5 %), so a red night is re-run once before
+anyone bisects, and the 10 % number is the plan's, not a measured one (`--threshold` exists to revisit it
+with evidence).
 
 ## Worker rules (mandatory in every lot; each prompt repeats them)
 
