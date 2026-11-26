@@ -246,8 +246,12 @@ object Journey {
             // find and the tap (measured on the playlists' filter): re-find it and
             // tap again instead of failing a journey that is working.
             val field = firstField(device)
+            // BOTH clicks are guarded: the fallback's own handle goes stale the
+            // same way the first one does, and an unguarded `.click()` there is
+            // exactly the `StaleObjectException` that killed `playerOpen` before
+            // its first frame (run 45782321113).
             runCatching { field.click() }
-                .onFailure { firstField(device).click() }
+                .onFailure { runCatching { firstField(device).click() } }
             device.waitForIdle()
             // A Compose field drops injected keys until it owns the focus; the
             // IME connection can be a few frames behind the tap.
@@ -266,7 +270,9 @@ object Journey {
             // poll it, then judge (a single read called a working query empty).
             val until = SystemClock.uptimeMillis() + 3_000
             while (SystemClock.uptimeMillis() < until) {
-                typed = firstField(device).text ?: ""
+                // A read on a node the screen recomposed under throws; an empty
+                // read is what the loop already handles.
+                typed = runCatching { firstField(device).text ?: "" }.getOrDefault("")
                 if (typed.contains(text, ignoreCase = true)) return
                 device.waitForIdle()
             }
@@ -274,10 +280,30 @@ object Journey {
             // the key stream is dropped.
             runCatching { firstField(device).setText(text) }
             device.waitForIdle()
-            typed = firstField(device).text ?: ""
+            typed = runCatching { firstField(device).text ?: "" }.getOrDefault("")
             if (typed.contains(text, ignoreCase = true)) return
         }
         error("the field holds « $typed » and not « $text »: the query never reached the app")
+    }
+
+    /**
+     * Hides the keyboard when — and only when — it is shown.
+     *
+     * `mobile/tools/ui.sh`'s `hide_keyboard`, for the same measured reason: a
+     * Compose field can take its text through the semantics action without ever
+     * opening the IME, and a BACK pressed over a closed keyboard LEAVES the
+     * screen — the next wait then names a card that is on the previous page
+     * (measured on `playlistScroll4000`, run 45782321113: « no card titled
+     * « Playlist 0 » »).
+     */
+    fun hideKeyboard(device: UiDevice) {
+        val shown = runCatching {
+            device.executeShellCommand("dumpsys input_method").contains("mInputShown=true")
+        }.getOrDefault(false)
+        if (shown) {
+            device.pressBack()
+            device.waitForIdle()
+        }
     }
 
     // -- the steps ----------------------------------------------------------
@@ -446,22 +472,36 @@ object Journey {
         // looked like an empty list. The CHEVRON is the toggle (the label's own
         // centre does nothing — measured); the count beside the label is the
         // account's total, not the filter's, so the filter is no proof either.
-        if (device.findObject(By.textStartsWith("Playlist ")) == null) {
-            val head = awaitText(device, "Sans dossier")
-            val b = head.visibleBounds
-            device.click((b.left - 60).coerceAtLeast(8), b.centerY())
-            device.waitForIdle()
-        }
         type(device, name)
-        // The query narrows the section to the one card; the keyboard covers the
-        // lower half of the screen, so back dismisses it and leaves the screen.
-        device.pressBack()
-        device.waitForIdle()
+        hideKeyboard(device)
+        // The query narrows the section to the one card — but ONLY once the
+        // section is unfolded, and a fold has no text to read: the chevron's
+        // state is not in the tree. So the card is looked for first, and the
+        // heading toggled ONCE when it is not there. (The old order toggled
+        // before filtering, on "no card yet", which could also CLOSE a section
+        // that was already open — measured on run 45782321113.)
+        var found: UiObject2? = runCatching { awaitCard(device, name, 12_000) }.getOrNull()
+        if (found == null) {
+            // The CHEVRON is the toggle (the label's own centre does nothing —
+            // measured); the count beside the label is the account's total.
+            // `scrollToText`, not `awaitText`: the first look for the card flung
+            // the list, so the heading may be above the fold.
+            val head = scrollToText(device, "Sans dossier")
+            val b = runCatching { head.visibleBounds }.getOrNull()
+            if (b != null) {
+                device.click((b.left - 60).coerceAtLeast(8), b.centerY())
+                device.waitForIdle()
+            }
+            found = awaitCard(device, name)
+        }
         // NOT `awaitContains`: the filter field holds the very query, and its
         // node comes first in the tree — clicking it taps nothing (measured: the
-        // run then waited for « Lire » on a screen that never changed).
-        val card = awaitCard(device, name)
-        card.click()
+        // run then waited for « Lire » on a screen that never changed). The tap
+        // is retried on a fresh handle: the list recomposes while the filter's
+        // results land.
+        val card = checkNotNull(found) { "no card titled « $name »" }
+        runCatching { card.click() }
+            .onFailure { runCatching { awaitCard(device, name).click() } }
         device.waitForIdle()
         awaitText(device, "Lire", 30_000)
     }

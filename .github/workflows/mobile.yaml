@@ -1057,7 +1057,9 @@ jobs:
           fi
 
       # The reports themselves: a baseline is re-recordable from a run, and a
-      # regression's own numbers are in the file, not only in this log.
+      # regression's own numbers are in the file, not only in this log. The
+      # instrumented report is kept too: a bench that FAILED prints two frames
+      # in the job log, and its own XML is where the stack and the screen are.
       - name: Keep the reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -1065,6 +1067,8 @@ jobs:
           name: perf-reports
           path: |
             mobile/android/baselineprofile/build/outputs/**/*-benchmarkData.json
+            mobile/android/baselineprofile/build/outputs/androidTest-results/**
+            mobile/android/baselineprofile/build/reports/androidTests/**
             ${{ runner.temp }}/perf-baseline-candidate.json
           if-no-files-found: warn
           retention-days: 14
