@@ -702,9 +702,11 @@ once and kept alive for the whole run: the app pins the leaf it accepted), opens
 - `signers_equal=1` — the certificate's SHA-256 digest from `apksigner` on BOTH
   files, not the DN (two keys can share a CN);
 - `session_kept=1` — the home paints `Accueil Neezer`, neither « Adresse du
-  serveur » nor « Ton compte » is anywhere, and the home asks the server for a
-  NEW cover (`/api/cover` counted on the bench's access log) — a request made
-  with the session stored BEFORE the install;
+  serveur » nor « Ton compte » is anywhere, and a NEW `GET /api/me` is answered
+  200 — the request a cold `restore()` makes with the cookie stored BEFORE the
+  install. `/api/me` and not a cover: `cover_path` answers a disk hit with ZERO
+  requests, so after an upgrade the home draws the same cached sleeves and a
+  cover count would prove nothing;
 - `data_kept=1` — the album still says « Téléchargé », and the data directory
   holds at least as many files and KiB as before (`adb root`; the emulator image
   is userdebug, and the script fails loudly on an image that refuses root instead

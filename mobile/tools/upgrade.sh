@@ -28,9 +28,11 @@
 #                       has to refuse it;
 #   session_kept=1      after the install the app opens on the HOME —
 #                       « Accueil Neezer » painted, neither « Adresse du
-#                       serveur » nor « Ton compte » anywhere — and the home asks
-#                       the bench server for a NEW cover, which is a request made
-#                       with the session stored BEFORE the upgrade;
+#                       serveur » nor « Ton compte » anywhere — and a NEW
+#                       `GET /api/me` is answered 200, which is the request a
+#                       cold `restore()` makes with the cookie stored BEFORE the
+#                       upgrade (`/api/me` is not disk-cached; a cover is, so
+#                       counting covers would prove nothing here);
 #   data_kept=1         the album downloaded before the upgrade still says
 #                       « Téléchargé » (the offline store's own answer, drawn by
 #                       the `DownloadButton`), and the app's data directory holds
@@ -257,8 +259,16 @@ printf 'bench_album=%s\n' "$album_id"
 
 # A cover request, counted on the SERVER: a request exists only once the home's
 # cover composable ran and Coil asked the core. This is the fact v1.6.6's crash
-# and a lost session both fail.
+# fails. It proves the SIGN-IN (empty cache), NOT the upgrade: `cover_path`
+# answers a disk hit with ZERO requests, so after an install the home draws the
+# same sleeves from the cache — see `me_now` below for the session's own proof.
 covers_now() { grep -cE '"GET /api/cover/[^ ]+ HTTP/[0-9.]+" 200' "$access_log" || true; }
+
+# An AUTHENTICATED request, and the one a cold start always makes: `restore()`
+# asks `GET /api/me` with the cookie the device kept (nz-core's session.rs).
+# Nothing caches it on disk, so a count that grew AFTER the install can only be
+# a session that survived it — a 401 is not counted (the pattern demands 200).
+me_now() { grep -cE '"GET /api/me HTTP/[0-9.]+" 200' "$access_log" || true; }
 
 # Installs, signs in, and waits for the home AND its covers. `pm clear` first:
 # what a person who just installed the release meets, no session, no pin.
@@ -371,6 +381,7 @@ printf 'version_code_up=1 previous=%s current=%s\n' "$previous_code" "$current_i
 
 step "the session, after the install"
 before_covers="$(covers_now)"
+before_me="$(me_now)"
 adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
 await_text "Accueil Neezer" 30 || fail_screen "the home never painted after the upgrade: the session did not survive"
 # Neither setup screen may be anywhere: the address form means no server, the
@@ -381,15 +392,16 @@ for forbidden in "Adresse du serveur" "Ton compte"; do
     fi
 done
 started=$SECONDS
-after_covers="$before_covers"
+after_me="$before_me"
 while (( SECONDS - started < 60 )); do
     [[ -n "$(app_pid)" ]] || fail_screen "the app died after the upgrade"
-    after_covers="$(covers_now)"
-    (( after_covers > before_covers )) && break
+    after_me="$(me_now)"
+    (( after_me > before_me )) && break
 done
-(( after_covers > before_covers )) ||
-    fail_screen "the home painted, but asked the server for no new cover in 60 s: the stored session is not working (covers before=$before_covers after=$after_covers)"
-printf 'session_kept=1 covers_before=%s covers_after=%s\n' "$before_covers" "$after_covers"
+(( after_me > before_me )) ||
+    fail_screen "the home painted, but no authenticated request was served in 60 s (GET /api/me 200: before=$before_me after=$after_me): the stored session is not working"
+printf 'session_kept=1 me_before=%s me_after=%s covers_before=%s covers_after=%s\n' \
+    "$before_me" "$after_me" "$before_covers" "$(covers_now)"
 check_alive "the home after the upgrade"
 
 # --- the downloaded title survived ------------------------------------------
