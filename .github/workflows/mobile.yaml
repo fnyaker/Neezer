@@ -881,7 +881,7 @@ jobs:
     name: Release upgrade in place (previous tag → this build)
     runs-on: ubuntu-latest
     # Bounded in time: apk's p90 24.9 min, then the upgrade itself — measured on
-    # the dispatch run that proved this lot: <fill: HH:MM:SS>.
+    # the dispatch run that proved this lot: 4 min 35 s wall (run 45765680655).
     timeout-minutes: 45
     needs: apk
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

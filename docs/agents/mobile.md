@@ -720,14 +720,42 @@ answers `INSTALL_FAILED_VERSION_DOWNGRADE` first and the signature is never
 compared — the job therefore builds the debug APK with the release's code.)
 
 CI: `mobile.yaml`'s `upgrade` job runs `if: schedule || workflow_dispatch` (a pull
-request has no published tag to install), needs `apk`, and takes **<fill>**.
+request has no published tag to install), needs `apk`, and takes **4 min 35 s**
+on a `workflow_dispatch` (the script itself: **1 min 15 s**, of which the 180 s
+download ceiling is never reached: the album lands in **10 s**).
 
-Measured (dispatch run <fill>, emulator-5580, API 35 x86_64, KVM):
-`previous=v<fill> (<fill> B, versionCode <n>) → current=2.0.<n> (<fill> B)`,
-`signers_equal=1 sha256=<fill>`, `session_kept=1 covers_before=<n>
-covers_after=<n>`, `data_kept=1 data_files_before=<n> data_files_after=<n>
-data_kib_before=<n> data_kib_after=<n>`,
-`negative_control=INSTALL_FAILED_UPDATE_INCOMPATIBLE expected=1`.
+Measured (dispatch run **45765680655**, emulator-5580, API 35 x86_64, KVM):
+`previous=v1.6.7 (54 914 697 B, versionCode 453) → current=2.0.510 (54 377 941 B,
+versionCode 510)`, `signers_equal=1
+sha256=5a373ce6e82cbbbd9e776739bc578767745aced7de4fd973a4558f1353bd400a`,
+`session_kept=1 me_before=0 me_after=1 covers_before=10 covers_after=10`,
+`data_kept=1 data_files_before=27 data_files_after=27 data_kib_before=1796
+data_kib_after=1924`, `offline_kept=1`,
+`negative_control=INSTALL_FAILED_UPDATE_INCOMPATIBLE expected=1` — and the run's
+own verdict: `upgrade=ok previous=v1.6.7 current=2.0.510 data_kept=1
+session_kept=1 version_code_up=1`. The covers count is the number that did NOT
+move (10 → 10) and it is why the session is proved by `/api/me`, not by sleeves:
+they are disk-cached, so an upgrade cannot add one.
+
+Three things the bench itself taught, on the way to that green run (each one a
+dispatch):
+
+- **The bench server TRANSCODES, so the job installs `ffmpeg`.** A download asks
+  `q=OPUS_320` and the answer is ffmpeg's; without it the route answers `500`
+  and the app stores `erreur du serveur (HTTP 500 …)` for every title. The
+  runner image is not a contract — `mobile.yaml`'s `upgrade` job installs it
+  through `.github/actions/cached-apt` (`line: mobile`), the same binary
+  desktop.yaml's D5 tests name for the same reason.
+- **`pm clear` drops the installer's `-g` grants.** The first « Télécharger »
+  then asks for `POST_NOTIFICATIONS` (M13), and the system dialog covers the
+  album page: the download runs behind it and the tree never says
+  « Téléchargé ». The script re-grants the permission right after `pm clear`,
+  and a scripted `input text` gets ONE token — `bench` / `Bench1` from
+  `perf_api.py`'s fixture, `secret` as `type_into`'s third argument.
+- **A failed download's cause is in the store, not on the screen** (this build's
+  card draws the count and the note but no cause line): `downloads.error` in
+  `files/neezer/desktop.sqlite`, and the rows live in the **`-wal`** — the main
+  file is 4 KiB and answers `no such table: downloads` on its own.
 
 Never a rule without its number: the versionCode rule is `github.run_number`, so
 it only grows (`mobile.yaml`'s `VERSION_CODE`), and the signer rule is the
