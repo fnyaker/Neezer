@@ -262,12 +262,11 @@ object Journey {
             // A node goes STALE when the screen behind it recomposes between the
             // find and the tap (measured on the playlists' filter): re-find it and
             // tap again instead of failing a journey that is working.
-            val field = firstField(device)
             // BOTH clicks are guarded: the fallback's own handle goes stale the
             // same way the first one does, and an unguarded `.click()` there is
             // exactly the `StaleObjectException` that killed `playerOpen` before
             // its first frame (run 45782321113).
-            runCatching { field.click() }
+            runCatching { firstField(device).click() }
                 .onFailure { runCatching { firstField(device).click() } }
             device.waitForIdle()
             // A Compose field drops injected keys until it owns the focus; the
@@ -277,7 +276,11 @@ object Journey {
                 if (runCatching { firstField(device).isFocused }.getOrDefault(false)) break
                 device.waitForIdle()
             }
-            if (!(field.text ?: "").isNullOrBlank()) {
+            // `field` itself goes stale across the focus wait above (measured:
+            // run 45791166929 died HERE on `UiObject2.getText`, the one read
+            // that still held an old handle). Read through a fresh find, guarded.
+            val before = runCatching { firstField(device).text ?: "" }.getOrDefault("")
+            if (before.isNotBlank()) {
                 device.executeShellCommand("input keyevent KEYCODE_MOVE_END")
                 repeat(48) { device.executeShellCommand("input keyevent KEYCODE_DEL") }
                 device.waitForIdle()
