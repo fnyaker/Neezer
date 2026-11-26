@@ -50,7 +50,16 @@ from __future__ import annotations
 
 import re
 import sys
-import xml.etree.ElementTree as ET
+# Stdlib only, on purpose (the lot's contract): the judge's task must run on any
+# worker with no install step, and `defusedxml` would be a dependency.
+#
+# The XML this parses is the repository's OWN artifact — `uiautomator dump` of
+# the app, produced by the CI emulator — and Semgrep's XXE finding is answered
+# by shutting the two doors instead of trusting the file: `parse_tree` REFUSES a
+# document that declares a DOCTYPE or an ENTITY (so no DTD, no entity expansion,
+# no billion laughs), and ElementTree never resolves an external entity. The
+# inline markers are that justification, per the repo's `nosemgrep` rule.
+import xml.etree.ElementTree as ET  # noqa: S405  # nosemgrep: python.lang.security.use-defused-xml
 from pathlib import Path
 
 # The eleven captures of `release-journey.sh --evidence`, in walk order. The
@@ -118,8 +127,17 @@ class Node:
 
 
 def parse_tree(path: Path) -> tuple[Node, list[Node]]:
-    """The dumped hierarchy → (root, every node in document order)."""
-    tree = ET.parse(path)
+    """The dumped hierarchy → (root, every node in document order).
+
+    A dump is `<hierarchy rotation="0"><node …>` and nothing else: a document
+    that declares a DTD or an entity is not one, and it is refused before the
+    parser sees it (that is what keeps `xml.etree` safe here — see the import's
+    note; the task's contract is the standard library only).
+    """
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    if "<!DOCTYPE" in raw or "<!ENTITY" in raw:
+        raise ET.ParseError("a DOCTYPE/ENTITY declaration is not a uiautomator dump")
+    tree = ET.fromstring(raw)  # nosec B314  # nosemgrep: python.lang.security.use-defused-xml-parse
     nodes: list[Node] = []
 
     def walk(element: ET.Element, parent: Node | None) -> Node | None:
@@ -132,7 +150,7 @@ def parse_tree(path: Path) -> tuple[Node, list[Node]]:
         return node
 
     root = None
-    for element in tree.getroot():
+    for element in tree:
         found = walk(element, None)
         if root is None:
             root = found
