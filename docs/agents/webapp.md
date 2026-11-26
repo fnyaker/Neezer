@@ -633,6 +633,16 @@ measured numbers are in [transitions.md](transitions.md)'s inventory (P1, P5, L8
 after a committed swipe, moves `scrollLeft` by exactly the distance the SAME cover node moved —
 so the strip no longer jumps by a whole cover when the queue advances.
 
+**The drag that is live owns Escape** (`lib/gesture.js`: `claimDrag(cancel)`, `releaseDrag()`,
+`cancelDragIfAny()`). Two drags can be live inside the full-screen player — the phone sheet's
+dismissal and the queue's reorder, one inside the other — so the last claim wins (the row drag is
+the topmost layer) and `ImmersivePlayer` asks before it closes: a key press during a drag cancels
+that drag and closes NOTHING (a cancel never decides), and a key press with no drag closes the
+player as before. `QueueList#cancelReorder` also marks the gesture cancelled, so the `pointerup` a
+finger still down sends after the key commits nothing. Before this, Escape closed the player
+under a finger, the release landed nowhere and the drag stayed half-applied
+(`node test/queue/run.mjs --phone`, « Escape cancels the drag », red on master until W2).
+
 **Swipe a track row right to queue it next** (`components/TrackRow.svelte`, touch only). Same
 gesture language as the now-playing sheet: arm on touchstart, commit to an axis after ~10px, and
 leave a gesture that locks to "y" entirely to the scroller. The row slides and the strip it vacates

@@ -18,6 +18,7 @@
   // The snap-back after a cancelled drag is the host's own CSS transition.
   import { onMount } from "svelte";
   import { immersiveOpen, immersiveShown, current, contextMenu } from "../lib/stores.js";
+  import { cancelDragIfAny } from "../lib/gesture.js";
   import { screen } from "../lib/motion.js";
   import MobileNowPlaying from "./MobileNowPlaying.svelte";
   import DesktopNowPlaying from "./DesktopNowPlaying.svelte";
@@ -54,8 +55,16 @@
     // it closes THAT (and gives the focus back to its row), never the player
     // underneath it. The menu marks the key handled; the store covers the case
     // where this listener happens to run before the menu's own window handler.
-    if (e.key === "Escape" && $immersiveOpen && !e.defaultPrevented && !$contextMenu)
+    //
+    // A finger still down inside the player owns Escape too (lib/gesture.js):
+    // the phone sheet's dismissal or the queue's reorder is cancelled and
+    // NOTHING closes. Without this the player left while the drag was still
+    // armed, its `pointerup` landed nowhere and the gesture stayed half-applied
+    // (transitions.md T3/T4/T7; test/queue/run.mjs --phone).
+    if (e.key === "Escape" && $immersiveOpen && !e.defaultPrevented && !$contextMenu) {
+      if (cancelDragIfAny()) return;
       immersiveOpen.set(false);
+    }
   }
 </script>
 

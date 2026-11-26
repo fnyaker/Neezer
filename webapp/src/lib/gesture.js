@@ -174,6 +174,36 @@ export function spring(from, to, velocityPxPerS, { response = 0.32, damping = 0.
   };
 }
 
+// -- who owns Escape ---------------------------------------------------------
+
+// Two drags can be live at once (the phone sheet's dismissal and the queue's
+// reorder, one inside the other), but there is ONE Escape: the finger that is
+// down owns it. A claim replaces the previous owner (the row drag inside the
+// sheet is the topmost layer), and a cancel never decides: it only puts the
+// gesture back (S8, docs/agents/transitions.md).
+let owner = null;
+
+/** Make `cancel` the drag Escape answers to (the last claim wins). */
+export function claimDrag(cancel) {
+  owner = cancel;
+}
+
+/** The finger left (or the drag ended on its own): Escape has no owner again. */
+export function releaseDrag() {
+  owner = null;
+}
+
+/** Cancel whatever holds Escape; true when something was actually cancelled. */
+export function cancelDragIfAny() {
+  const c = owner;
+  owner = null;
+  if (c) {
+    c();
+    return true;
+  }
+  return false;
+}
+
 // -- settle ------------------------------------------------------------------
 
 /** Hard stop: a spring that has not landed by then lands anyway. */

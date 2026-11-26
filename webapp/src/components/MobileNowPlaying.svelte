@@ -9,7 +9,7 @@
   import { REMOTE, CAN_KEEP, CAN_BROWSE } from "../lib/remote/mode.js";
   import { push } from "svelte-spa-router";
   import { sheet, swap, motionLevel } from "../lib/motion.js";
-  import { tracker, projected, settle, eventTime } from "../lib/gesture.js";
+  import { tracker, projected, settle, eventTime, claimDrag, releaseDrag } from "../lib/gesture.js";
   import {
     player,
     current,
@@ -564,6 +564,9 @@
     // A finger landing mid-settle takes the movement back from it.
     stopSettle();
     dragArmed = true;
+    // …and takes Escape with it: while this finger is down, the key cancels the
+    // sheet's drag instead of closing the player (lib/gesture.js).
+    claimDrag(resetDrag);
     dragAxis = null;
     dragStartX = e.touches[0].clientX;
     // Measured from where the sheet actually is, so re-grabbing a settling
@@ -594,10 +597,12 @@
     if (!dragArmed) return;
     dragArmed = false;
     dragAxis = null;
+    releaseDrag();
     dismissEnd();
     revealEnd();
   }
   function onTouchCancel() {
+    releaseDrag();
     resetDrag();
   }
 
