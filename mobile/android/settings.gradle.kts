@@ -37,6 +37,8 @@ include(":designsystem")
 include(":playback")
 include(":car")
 include(":baselineprofile")
+// T3: the one JUnit rule every verifying golden wraps (ScreenGoldenRule).
+include(":testkit")
 
 // One Gradle module per feature lot (docs/agents/mobile.md, "Module and file
 // ownership"): disjoint files, so two lots never edit the same module.

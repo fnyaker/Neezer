@@ -77,11 +77,10 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// The screenshot test writes the PNGs the lot commits under
-// `docs/agents/screenshots/mobile/MB19/` (the acceptance asks for them there).
+// T3: the goldens live in `mobile/android/screenshots`; `nz.repoRoot` stays
+// for the tests that read the SPA's own files.
 val repoRoot = rootProject.layout.projectDirectory.dir("../..")
 
 tasks.withType<Test>().configureEach {
     systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
-    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/mobile/MB19").asFile.absolutePath)
 }

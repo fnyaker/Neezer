@@ -11,6 +11,9 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    // T3: verifying goldens. The plugin is what reads
+    // `-Proborazzi.test.verify=true`; without it a capture is a silent no-op.
+    id("io.github.takahirom.roborazzi")
 }
 
 android {
@@ -99,6 +102,10 @@ dependencies {
     // Robolectric 4.18 + the Compose test rule runs both the semantics
     // assertions and the screenshots, with no change to the shared files.
     testImplementation(libs.junit)
+    // T3: the one golden rule (compare + ATF), and the capture entry point the
+    // tests call through it.
+    testImplementation(project(":testkit"))
+    testImplementation(libs.roborazzi)
     // --- instrumented tests (the device) -------------------------------------
     // One test, `RowSourceTest`: `rememberListWindow`'s adapter over a REAL
     // `ListHandle`, which only exists on a device (JNA + `libnz_ffi.so`).
@@ -115,14 +122,23 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// The screenshot test writes the PNGs the lot commits under
-// `docs/agents/screenshots/mobile/MB1/` (the acceptance asks for them there),
+// T3: the goldens live in `mobile/android/screenshots`; `nz.repoRoot` stays
+// for the tests that read the SPA's own files.
 // and the token test reads `webapp/src/app.css` to prove the Compose table has
 // not drifted from the SPA's. Both paths are handed to the test as absolute
 // system properties: no test carries `../../..` arithmetic.
 val repoRoot = rootProject.layout.projectDirectory.dir("../..")
 
+// T3: the ONE committed golden root. The rule compares against it by absolute
+// path, and `inputs.dir` makes a golden change rerun this module's tests. The
+// plugin keeps its OWN output directory (`build/outputs/roborazzi`): its finalize
+// task copies the verify input back, and a shared directory raced between the
+// modules Gradle runs in parallel (measured: a truncated PNG and an IIOException
+// in `:feature:entity`).
+val goldenRoot = rootProject.layout.projectDirectory.dir("screenshots")
+
 tasks.withType<Test>().configureEach {
     systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
-    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/mobile/MB1").asFile.absolutePath)
+    systemProperty("nz.goldens", goldenRoot.asFile.absolutePath)
+    inputs.dir(goldenRoot)
 }

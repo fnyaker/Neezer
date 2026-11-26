@@ -368,6 +368,12 @@ jobs:
       # `lintDebug` is still asked for explicitly, and a red test or lint error
       # still stops the job before an APK exists.
       #
+      # T3: `-Proborazzi.test.verify=true` makes every committed golden in
+      # `mobile/android/screenshots` an INPUT of this job — a 1 dp change fails
+      # the suite, and the diff image lands in `build/outputs/roborazzi`
+      # (`mobile/android/<module>/build/outputs/roborazzi`); the HTML report is
+      # under `build/reports/roborazzi`.
+      #
       # The versionName is the TAG (Gradle strips its `v`), which is what the
       # server declares in `android.native.version`; a master build names its run.
       - name: The JVM suite, the lint and the release APK
@@ -385,7 +391,7 @@ jobs:
             attempts=$((attempts + 1))
             log="$RUNNER_TEMP/gradle-mobile-$attempts.log"
             if gradle -p mobile/android testDebugUnitTest lintDebug assembleRelease \
-                -PskipRust --no-daemon 2>&1 | tee "$log"; then
+                -Proborazzi.test.verify=true -PskipRust --no-daemon 2>&1 | tee "$log"; then
               break
             fi
             if (( attempts >= 3 )) || ! grep -q "status code 429" "$log"; then

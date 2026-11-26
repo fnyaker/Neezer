@@ -8,6 +8,8 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    // T3: verifying goldens (see :testkit).
+    id("io.github.takahirom.roborazzi")
 }
 
 android {
@@ -88,6 +90,8 @@ dependencies {
     // recipe MB1 measured and MB5/MB6/MB7 reused): no emulator, no window on the
     // person's display (worker rule 7).
     testImplementation(libs.junit)
+    testImplementation(project(":testkit"))
+    testImplementation(libs.roborazzi)
     testImplementation("org.robolectric:robolectric:4.18")
     testImplementation("androidx.test:core:1.7.0")
     testImplementation("androidx.test.ext:junit:1.3.0")
@@ -99,11 +103,20 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// The screenshot test writes the PNGs the lot commits under
-// `docs/agents/screenshots/mobile/MB16/` (the acceptance asks for them there).
+// T3: the goldens live in `mobile/android/screenshots`; `nz.repoRoot` stays
+// for the tests that read the SPA's own files.
 val repoRoot = rootProject.layout.projectDirectory.dir("../..")
+
+// T3: the ONE committed golden root. The rule compares against it by absolute
+// path, and `inputs.dir` makes a golden change rerun this module's tests. The
+// plugin keeps its OWN output directory (`build/outputs/roborazzi`): its finalize
+// task copies the verify input back, and a shared directory raced between the
+// modules Gradle runs in parallel (measured: a truncated PNG and an IIOException
+// in `:feature:entity`).
+val goldenRoot = rootProject.layout.projectDirectory.dir("screenshots")
 
 tasks.withType<Test>().configureEach {
     systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
-    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/mobile/MB16").asFile.absolutePath)
+    systemProperty("nz.goldens", goldenRoot.asFile.absolutePath)
+    inputs.dir(goldenRoot)
 }
