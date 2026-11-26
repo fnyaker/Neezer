@@ -237,11 +237,23 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=neezer-upgrade" \
     -keyout "$key" -out "$cert" >/dev/null 2>&1
 server_out="$(NEEZER_PERF_STATE="$perf_state" "$here/perf-server.sh" start \
     --port "$port" --tracks 200 --playlists 2 --favorites 20 --big-playlist 3 \
-    --releases 12 --covers "$(nz_repo_root)/tests/assets/cover.jpg" \
+    --releases 12 --audio-all --covers "$(nz_repo_root)/tests/assets/cover.jpg" \
     --tls-cert "$cert" --tls-key "$key")"
 access_log="$perf_state/last.log"
 [[ -f "$access_log" ]] || die "the bench server printed no access log at $access_log: $server_out"
 printf 'bench_port=%s\n' "$port"
+
+# THE ALBUM THE BENCH REPORTS, not a hard-coded "album 1": the library's albums
+# are ordinary neezer rows keyed by their PROVIDER id (`2000000`, `2000001`, …),
+# so `/api/album/1` is no album at all and the page would never paint its
+# button. `perf-server.sh` keeps the seed's READY JSON (`… "<album>": "…" …`)
+# in `$state_dir/<port>.json` and prints its path as `ids=`, which is the one
+# id both sides of the install agree on.
+seed_json="$(sed -n 's/.*[[:space:]]ids=\([^[:space:]]*\).*/\1/p' <<<"$server_out" | tail -1)"
+[[ -n "$seed_json" && -f "$seed_json" ]] || die "the bench server printed no seed json (ids=…) in: $server_out"
+album_id="$(sed -n 's/.*"album":[[:space:]]*"\([^"]*\)".*/\1/p' "$seed_json" | head -1)"
+[[ -n "$album_id" ]] || die "the bench server's seed json names no album: $(cat "$seed_json")"
+printf 'bench_album=%s\n' "$album_id"
 
 # A cover request, counted on the SERVER: a request exists only once the home's
 # cover composable ran and Coil asked the core. This is the fact v1.6.6's crash
@@ -294,17 +306,17 @@ check_alive "the previous release's sign-in"
 
 # --- one downloaded title, so "data kept" has something to keep -------------
 #
-# The album page is opened by the app's OWN link (`neezer://album/1`, MB2's
+# The album page is opened by the app's OWN link (`neezer://album/<id>`, MB2's
 # route table): one intent instead of a walk through the library's leaf strip,
 # whose chips are horizontally scrolled and whose playlist names are random.
-# Album 1 of the bench library has its titles, so the page draws the same
-# `DownloadButton` a person taps.
+# The album is the bench's own (`bench_album` above) and has titles, so the page
+# draws the same `DownloadButton` a person taps.
 step "one title downloaded, before the upgrade"
-adb_dev shell am start -W -a android.intent.action.VIEW -d "neezer://album/1" >/dev/null
+adb_dev shell am start -W -a android.intent.action.VIEW -d "neezer://album/$album_id" >/dev/null
 await_text "Télécharger" 30 || fail_screen "the album page did not paint its « Télécharger » action"
 tap_text "Télécharger" || fail_screen "the « Télécharger » action is not tappable"
-await_text "Téléchargé" 180 || fail_screen "the download of album 1 did not finish in 180 s (the button never said « Téléchargé »)"
-printf 'downloaded=1 album=1\n'
+await_text "Téléchargé" 180 || fail_screen "the download of album $album_id did not finish in 180 s (the button never said « Téléchargé »)"
+printf 'downloaded=1 album=%s\n' "$album_id"
 check_alive "the download"
 
 # The app's own data directory, read as root. The emulator image is a userdebug
@@ -383,9 +395,9 @@ check_alive "the home after the upgrade"
 # --- the downloaded title survived ------------------------------------------
 
 step "the downloaded title, after the install"
-adb_dev shell am start -W -a android.intent.action.VIEW -d "neezer://album/1" >/dev/null
-await_text "Téléchargé" 30 || fail_screen "album 1 no longer says « Téléchargé » after the upgrade: the offline store did not survive"
-printf 'offline_kept=1 album=1\n'
+adb_dev shell am start -W -a android.intent.action.VIEW -d "neezer://album/$album_id" >/dev/null
+await_text "Téléchargé" 30 || fail_screen "album $album_id no longer says « Téléchargé » after the upgrade: the offline store did not survive"
+printf 'offline_kept=1 album=%s\n' "$album_id"
 
 read -r current_bytes_kib current_files <<<"$(data_measure)"
 printf 'after_upgrade data_kib=%s data_files=%s\n' "$current_bytes_kib" "$current_files"

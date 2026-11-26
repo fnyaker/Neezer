@@ -1177,6 +1177,14 @@ def main():
         "serves them from disk with real byte ranges",
     )
     ap.add_argument(
+        "--audio-all",
+        action="store_true",
+        help="point EVERY track at one silent WAV, so a client can DOWNLOAD a whole "
+        "album, playlist or show offline and each of its titles really answers bytes "
+        "(mobile/tools/upgrade.sh proves a download survives an upgrade; without it the "
+        "set it taps never completes, every title being unarchived)",
+    )
+    ap.add_argument(
         "--archived",
         action="store_true",
         help="mark the whole library archived, played, measured and given vectors, "
@@ -1326,6 +1334,16 @@ def main():
                 "artist": first.artist.name,
                 "duration": first.duration,
             }
+    if args.audio_all:
+        from neezer.db import Track
+
+        with app.app_context():
+            shared = _silent_wav(
+                os.path.join(app.config["DEEZER"]["archive_dir"], "bench-audio", "all.wav")
+            )
+            # ONE file for every row: the measure is "the download's set completes
+            # and its bytes survive the install", not a per-title stream.
+            Track.update(path=shared, last_modification=1700000000).execute()
     if args.archived:
         make_archived(app)
     if args.onboarding:

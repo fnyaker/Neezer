@@ -694,7 +694,7 @@ gone. `mobile/tools/upgrade.sh --serial <s> --from <tag|apk> --to <apk>` proves
 all of it on one device, in this order: it installs the previous tag's universal
 `neezer-native.apk`, signs in to `perf-server.sh` (with a certificate generated
 once and kept alive for the whole run: the app pins the leaf it accepted), opens
-`neezer://album/1` and taps « Télécharger », records `dumpsys package`
+`neezer://album/<id>` (the album the bench's seed reports) and taps « Télécharger », records `dumpsys package`
 (`versionCode`, `lastUpdateTime`) and the app data directory's file count, then
 `adb install -r` OVER it, and asserts:
 

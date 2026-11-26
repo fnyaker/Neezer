@@ -885,6 +885,9 @@ jobs:
     timeout-minutes: 45
     needs: apk
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # `gh release list` / `gh release download` read the release page.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -940,7 +943,14 @@ jobs:
       - name: The debug APK — the control's other signer
         env:
           VERSION_CODE: ${{ github.run_number }}
-        run: gradle -p mobile/android :app:assembleDebug -PskipRust --no-daemon
+        run: |
+          set -euo pipefail
+          gradle -p mobile/android :app:assembleDebug -PskipRust --no-daemon
+          # `splits.abi` is on for EVERY variant: the file is the universal one.
+          # The assertion is here so a renamed output fails in two minutes, not
+          # after the emulator has booted.
+          ls -l mobile/android/app/build/outputs/apk/debug
+          test -f mobile/android/app/build/outputs/apk/debug/app-universal-debug.apk
 
       - name: The previous release tag
         id: previous
