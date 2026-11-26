@@ -66,10 +66,25 @@ object Journey {
 
     // -- waits, on events ---------------------------------------------------
 
+    /**
+     * The accessibility tree, bounded, for a failure that must name its screen.
+     *
+     * `uiautomator dump` is the same read every other step uses; a bench that
+     * fails without it prints a literal a person then hunts by hand (measured:
+     * two dispatch runs spent on « Réduire le lecteur » before the tree said
+     * which screen was open).
+     */
+    fun screenTree(device: UiDevice): String = runCatching {
+        device.executeShellCommand("uiautomator dump /sdcard/nz-bench.xml >/dev/null 2>&1")
+        device.executeShellCommand("cat /sdcard/nz-bench.xml").take(2_000)
+    }.getOrDefault("(tree unavailable)")
+
     /** Waits for a node with exactly [text]; fails naming it, never silently. */
     fun awaitText(device: UiDevice, text: String, timeoutMs: Long = SCREEN_TIMEOUT_MS): UiObject2 {
         val found = device.wait(Until.findObject(By.text(text)), timeoutMs)
-        check(found != null) { "the screen never showed « $text » within ${timeoutMs}ms" }
+        check(found != null) {
+            "the screen never showed « $text » within ${timeoutMs}ms; screen: ${screenTree(device)}"
+        }
         return found
     }
 
@@ -83,7 +98,9 @@ object Journey {
     /** Waits for a node whose content description is exactly [desc]. */
     fun awaitDesc(device: UiDevice, desc: String, timeoutMs: Long = SCREEN_TIMEOUT_MS): UiObject2 {
         val found = device.wait(Until.findObject(By.desc(desc)), timeoutMs)
-        check(found != null) { "no node with the description « $desc » within ${timeoutMs}ms" }
+        check(found != null) {
+            "no node with the description « $desc » within ${timeoutMs}ms; screen: ${screenTree(device)}"
+        }
         return found
     }
 
@@ -94,18 +111,38 @@ object Journey {
      * action lives on a merged parent whose child Text reports
      * `clickable=false`, so a search for `isClickable` finds nothing while this
      * lands on the control.
+     *
+     * The handle is RE-FOUND when it goes stale: a screen that recomposes between
+     * the find and the click (a search's results landing, a chip row arriving)
+     * kills the run with `StaleObjectException` — measured on this lot's dispatch
+     * (run 45778420506) in `searchToAlbum`, which killed `playerOpen` before it
+     * measured a frame. Three attempts, each a fresh find: the tap is the event,
+     * the handle is never the contract.
      */
     fun tapText(device: UiDevice, text: String, timeoutMs: Long = SCREEN_TIMEOUT_MS) {
-        val node = awaitText(device, text, timeoutMs)
-        node.click()
-        device.waitForIdle()
+        tapAndWait(device, timeoutMs) { awaitText(device, text, timeoutMs) }
     }
 
     /** Taps a node by its content description, the same way. */
     fun tapDesc(device: UiDevice, desc: String, timeoutMs: Long = SCREEN_TIMEOUT_MS) {
-        val node = awaitDesc(device, desc, timeoutMs)
-        node.click()
-        device.waitForIdle()
+        tapAndWait(device, timeoutMs) { awaitDesc(device, desc, timeoutMs) }
+    }
+
+    private fun tapAndWait(device: UiDevice, timeoutMs: Long, find: () -> UiObject2) {
+        var last: Throwable? = null
+        repeat(3) {
+            // `find` throws when the node is simply not there yet (its own message
+            // names the label); a stale handle is the retryable one.
+            val node = find()
+            val clicked = runCatching { node.click() }
+            if (clicked.isSuccess) {
+                device.waitForIdle()
+                return
+            }
+            last = clicked.exceptionOrNull()
+            device.waitForIdle()
+        }
+        throw checkNotNull(last) { "the tap on the node never happened ($timeoutMs ms)" }
     }
 
     /**
@@ -185,7 +222,7 @@ object Journey {
             if (card != null) return card
             fling(device, up = true)
         }
-        error("no card titled « $title » within ${timeoutMs}ms")
+        error("no card titled « $title » within ${timeoutMs}ms; screen: ${screenTree(device)}")
     }
 
     /**
@@ -225,9 +262,12 @@ object Journey {
             // A node goes STALE when the screen behind it recomposes between the
             // find and the tap (measured on the playlists' filter): re-find it and
             // tap again instead of failing a journey that is working.
-            val field = firstField(device)
-            runCatching { field.click() }
-                .onFailure { firstField(device).click() }
+            // BOTH clicks are guarded: the fallback's own handle goes stale the
+            // same way the first one does, and an unguarded `.click()` there is
+            // exactly the `StaleObjectException` that killed `playerOpen` before
+            // its first frame (run 45782321113).
+            runCatching { firstField(device).click() }
+                .onFailure { runCatching { firstField(device).click() } }
             device.waitForIdle()
             // A Compose field drops injected keys until it owns the focus; the
             // IME connection can be a few frames behind the tap.
@@ -236,7 +276,11 @@ object Journey {
                 if (runCatching { firstField(device).isFocused }.getOrDefault(false)) break
                 device.waitForIdle()
             }
-            if (!(field.text ?: "").isNullOrBlank()) {
+            // `field` itself goes stale across the focus wait above (measured:
+            // run 45791166929 died HERE on `UiObject2.getText`, the one read
+            // that still held an old handle). Read through a fresh find, guarded.
+            val before = runCatching { firstField(device).text ?: "" }.getOrDefault("")
+            if (before.isNotBlank()) {
                 device.executeShellCommand("input keyevent KEYCODE_MOVE_END")
                 repeat(48) { device.executeShellCommand("input keyevent KEYCODE_DEL") }
                 device.waitForIdle()
@@ -246,7 +290,9 @@ object Journey {
             // poll it, then judge (a single read called a working query empty).
             val until = SystemClock.uptimeMillis() + 3_000
             while (SystemClock.uptimeMillis() < until) {
-                typed = firstField(device).text ?: ""
+                // A read on a node the screen recomposed under throws; an empty
+                // read is what the loop already handles.
+                typed = runCatching { firstField(device).text ?: "" }.getOrDefault("")
                 if (typed.contains(text, ignoreCase = true)) return
                 device.waitForIdle()
             }
@@ -254,10 +300,30 @@ object Journey {
             // the key stream is dropped.
             runCatching { firstField(device).setText(text) }
             device.waitForIdle()
-            typed = firstField(device).text ?: ""
+            typed = runCatching { firstField(device).text ?: "" }.getOrDefault("")
             if (typed.contains(text, ignoreCase = true)) return
         }
         error("the field holds « $typed » and not « $text »: the query never reached the app")
+    }
+
+    /**
+     * Hides the keyboard when — and only when — it is shown.
+     *
+     * `mobile/tools/ui.sh`'s `hide_keyboard`, for the same measured reason: a
+     * Compose field can take its text through the semantics action without ever
+     * opening the IME, and a BACK pressed over a closed keyboard LEAVES the
+     * screen — the next wait then names a card that is on the previous page
+     * (measured on `playlistScroll4000`, run 45782321113: « no card titled
+     * « Playlist 0 » »).
+     */
+    fun hideKeyboard(device: UiDevice) {
+        val shown = runCatching {
+            device.executeShellCommand("dumpsys input_method").contains("mInputShown=true")
+        }.getOrDefault(false)
+        if (shown) {
+            device.pressBack()
+            device.waitForIdle()
+        }
     }
 
     // -- the steps ----------------------------------------------------------
@@ -426,22 +492,36 @@ object Journey {
         // looked like an empty list. The CHEVRON is the toggle (the label's own
         // centre does nothing — measured); the count beside the label is the
         // account's total, not the filter's, so the filter is no proof either.
-        if (device.findObject(By.textStartsWith("Playlist ")) == null) {
-            val head = awaitText(device, "Sans dossier")
-            val b = head.visibleBounds
-            device.click((b.left - 60).coerceAtLeast(8), b.centerY())
-            device.waitForIdle()
-        }
         type(device, name)
-        // The query narrows the section to the one card; the keyboard covers the
-        // lower half of the screen, so back dismisses it and leaves the screen.
-        device.pressBack()
-        device.waitForIdle()
+        hideKeyboard(device)
+        // The query narrows the section to the one card — but ONLY once the
+        // section is unfolded, and a fold has no text to read: the chevron's
+        // state is not in the tree. So the card is looked for first, and the
+        // heading toggled ONCE when it is not there. (The old order toggled
+        // before filtering, on "no card yet", which could also CLOSE a section
+        // that was already open — measured on run 45782321113.)
+        var found: UiObject2? = runCatching { awaitCard(device, name, 12_000) }.getOrNull()
+        if (found == null) {
+            // The CHEVRON is the toggle (the label's own centre does nothing —
+            // measured); the count beside the label is the account's total.
+            // `scrollToText`, not `awaitText`: the first look for the card flung
+            // the list, so the heading may be above the fold.
+            val head = scrollToText(device, "Sans dossier")
+            val b = runCatching { head.visibleBounds }.getOrNull()
+            if (b != null) {
+                device.click((b.left - 60).coerceAtLeast(8), b.centerY())
+                device.waitForIdle()
+            }
+            found = awaitCard(device, name)
+        }
         // NOT `awaitContains`: the filter field holds the very query, and its
         // node comes first in the tree — clicking it taps nothing (measured: the
-        // run then waited for « Lire » on a screen that never changed).
-        val card = awaitCard(device, name)
-        card.click()
+        // run then waited for « Lire » on a screen that never changed). The tap
+        // is retried on a fresh handle: the list recomposes while the filter's
+        // results land.
+        val card = checkNotNull(found) { "no card titled « $name »" }
+        runCatching { card.click() }
+            .onFailure { runCatching { awaitCard(device, name).click() } }
         device.waitForIdle()
         awaitText(device, "Lire", 30_000)
     }
@@ -456,20 +536,20 @@ object Journey {
     }
 
     /**
-     * The full-screen player, through the door the home draws — « Reprendre ».
+     * The full-screen player, through the mini bar — the bar `NowPlaying.kt`
+     * draws over every screen while something plays, whose tap is the same
+     * gesture MQ2's `JourneyCapture#theMiniBarOpensThePlayer` proves opens the
+     * sheet (the shell's wiring, PR #380).
      *
-     * NOT the mini bar before this lot's fix: the bar's model read the player's
-     * snapshot once and never followed `PlayerFeed`, so no bar existed over a
-     * running player (measured 2026-11-23; the fix and its test are PR #380).
-     * Now the bar is there, and this journey still takes the home's card because
-     * it is the door a cold reader finds first.
+     * The home's « Reprendre » card was the old door. Measured on run
+     * 45786062427: it left the screen on the home and the bench waited 20 s for
+     * « Réduire le lecteur » that never came (the card's own state is the home's
+     * business, not this bench's), so the bench takes the bar the person taps
+     * while the album plays.
      */
     fun openPlayer(scope: MacrobenchmarkScope) {
         val device = scope.device
-        tapText(device, BenchTarget.TAB_HOME)
-        awaitDesc(device, HOME)
-        awaitText(device, "REPRENDRE", 30_000)
-        tapFirstCardBelow(device, "REPRENDRE")
+        tapDesc(device, "Ouvrir le lecteur plein écran", 30_000L)
         awaitDesc(device, "Réduire le lecteur")
     }
 

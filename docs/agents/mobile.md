@@ -843,6 +843,38 @@ A server that fails to answer is a red job — a fixture CI owns must never degr
 | Coexistence | `mobile/tools/coexist.sh` on emulator-5620 (API 35 x86_64, `-no-window -no-audio`, boot **10 s**): old APK then native APK on the SAME device; packages, launchers, processes, media services; each channel downloaded from a local server (`/api/android/apk` vs `/api/android/native-apk?abi=`) and updated; uninstall one, check the other; then `NzMediaServiceTest` against `mobile/tools/tone-server.py` | **both installed** (old 7 979 817 B / native universal 54 633 838 B, data dirs `/data/user/0/{org.nsupysonic.app,fr.neezer.mobile}`), **both launched** (pids 2031 / 2067 alive together), **both media services declared**; channels: old **7 979 816 B** `org.nsupysonic.app`, native **54 633 848 B** `fr.neezer.mobile`, both byte-identical to the files served, `X-NS-Version 9.0.0 / 9.1.0`; updates **9001 → 9002** on each, the other app's `versionCode` and `lastUpdateTime` unchanged; uninstall old → native stays, uninstall native → old stays; final state both installed. **Playback: 7/7 `NzMediaServiceTest` pass** on the rebased tree (clock moved, AAudio 48 000 Hz / 500 ms, **0 underrun**, queue advanced through 4 titles, notification title/artist/artwork, headset keys, focus/noisy). Native splits: arm64-v8a **21 489 457 B**, armeabi-v7a **16 587 250 B**, x86_64 **25 861 732 B**. |
 | Worlds | — | **non livré — MB22/MB23 en pause à la demande de l'utilisateur (2026-11-23)**. |
 
+**The nightly gate.** The four *Smoothness* and *Cold start* numbers above are also a regression
+gate: `mobile.yaml`'s `perf` job runs `StartupBenchmark#startupColdWithoutProfile` and
+`JourneyListsBenchmark`'s `favoritesScroll8000`, `playlistScroll4000` and `playerOpen` once a night
+(never on a pull request — a timing bound on an emulator is skipped, never widened) and
+`mobile/tools/perf-gate.py` compares each metric's pooled p95 with `mobile/tools/baselines/perf.json`.
+**A p95 more than 10 % above the baseline fails the job**, naming the gate, both numbers and the
+percentage (`playerOpen p95 189.5 ms vs baseline 161.4 ms (+17.4 % > 10 %)`); the run also records a
+candidate baseline and keeps the raw `*-benchmarkData.json` as the `perf-reports` artifact, so a
+baseline is re-recordable from a run instead of from someone's laptop. The gate names the plan's
+gates, not the test names: `libraryScroll8000` is measured by `favoritesScroll8000` and
+`queueScroll4000` by `playlistScroll4000` (the MB0 `ScrollBenchmark`'s two same-named tests are the
+inactive skeleton's and are skipped while their tab paints no rows), and `startup` reads the
+no-profile cold start, the one a person gets today. The baseline carries **the emulator image it was
+recorded on** (`device.fingerprint`, plus the host's `cpuName` for information); a run on another
+image is reported `perf_gate=incomparable`, not red, because a different runner is not a regression —
+and the host CPU is printed when it differs, since part of any delta is then the host's. The benches
+need a signed-in account (`Journey.restart` skips with its cause otherwise), so the job installs the
+`benchmark` APK, signs it in to `perf-server.sh --favorites 8000 --big-playlist 4000 --audio-all`
+through `ui.sh` — the same screens `release-signin.sh` taps — and runs Gradle over it: `install -r`
+keeps the session, and `--audio-all` puts a real file behind every track so « Lire » streams instead of
+waiting on a transcode (`--archived` would need numpy, which the project does not depend on: measured,
+`ModuleNotFoundError`, run 45776273805). `--self-test` proves the decision without a device (a 9 % p95
+regression passes, 11 % and 15 % fail, a bench that measured nothing fails, another device is
+incomparable). Recorded on run **45797531420** (GitHub runner, API 35 x86_64, the job's own AVD):
+**startup p95 2 258,2 ms, favourites 133,8, playlist 111,7, player open 829,3** (p50 1 959,3 / 107,0 /
+86,7 / 89,5) — a shared runner is ~3,5× slower than MQ2's quiet laptop emulator (633 ms p50), which is
+exactly why the file is compared with itself and never with a phone budget. **The spread between two runs of
+the same image is the size of the threshold**: run 45805384105 measured startup p95 1 859,3 and favourites
+117,1 against the baseline's 2 258,2 and 133,8 (−17,7 % and −12,5 %), so a red night is re-run once before
+anyone bisects, and the 10 % number is the plan's, not a measured one (`--threshold` exists to revisit it
+with evidence).
+
 ## Worker rules (mandatory in every lot; each prompt repeats them)
 
 1. **Git, non-interactive only**: `export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true EDITOR=true VISUAL=true`;

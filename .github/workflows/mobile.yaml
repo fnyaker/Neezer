@@ -872,6 +872,217 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  # --- the nightly performance gate ------------------------------------------
+  # The four measures of docs/agents/mobile.md's *Measures* — cold start, the
+  # 8 000-favourite scroll, the 4 000-row queue, the player's first frame — run
+  # ONCE A NIGHT against `mobile/tools/baselines/perf.json`, and
+  # `mobile/tools/perf-gate.py` fails the run on a > 10 % p95 regression, naming
+  # the metric and the percentage (plan-mobile-tests, lot T7).
+  #
+  # NOT ON A PULL REQUEST, and that is the owner's decision, not a shortcut: a
+  # timing bound on an emulator is skipped, never widened (docs/agents/mobile.md,
+  # "A timing bound on the emulator is skipped"). The emulator numbers here are a
+  # regression DETECTOR on one image, never a phone budget.
+  #
+  # `workflow_dispatch` is part of the condition on purpose: recording the
+  # baseline and proving a change to this job need a run on a branch, and T8's
+  # `upgrade` job already does the same. A pull request still does not get it.
+  perf:
+    name: Performance gate (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: apk
+    # Bounded in time: apk's p90 24.9 min, then the emulator and the four
+    # benchmarks — the plan's estimate is 20-30 min of bench (the measured run is
+    # named in the job's log by `perf_gate=` and in docs/agents/mobile.md).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The documented recipe: /dev/kvm must be readable by the runner user.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.7"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: neezer-mobile-apk
+          path: mobile/android/app/build/outputs/apk/release
+
+      # The `libnz_ffi.so` and the UniFFI Kotlin the `apk` job built: the
+      # benchmark variant is a release-shaped build and `-PskipRust` is what stops
+      # this job rebuilding the whole Rust tree (12 min 30 s of run 44368850444).
+      - uses: actions/download-artifact@v4
+        with:
+          name: neezer-mobile-native
+          path: mobile/android/bridge
+
+      - name: Install the SDK, the image and the AVD
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" "system-images;android-35;default;x86_64" \
+            "build-tools;36.0.0"
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n nz35 -k "system-images;android-35;default;x86_64" --device pixel_6 --force
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The bench server TRANSCODES for any title the archive does not hold (the
+      # upgrade job measured the `500` a missing ffmpeg answers), and the benches
+      # play a real album: without it the tap → « Pause » step of the player bench
+      # never lands.
+      - name: The bench server's ffmpeg
+        uses: ./.github/actions/cached-apt
+        with:
+          line: mobile
+          packages: ffmpeg
+
+      # The bench server seeds the worst realistic library for these benches:
+      # 8 000 favourites, the 4 000-row playlist, real sleeves, and — through
+      # `--audio-all` — a real file behind EVERY track, so « Lire » streams
+      # instead of waiting on a transcode (the `playerOpen` bench's setup plays
+      # an album). NOT `--archived`: that seed's `make_archived` imports numpy,
+      # which the project does not depend on, and it answers
+      # `ModuleNotFoundError: No module named 'numpy'` (measured on this lot's
+      # first dispatch, run 45776273805) — and none of the four gates reads the
+      # home's shelves.
+      - name: Install the bench server
+        run: pip install -e .
+
+      # `:app`'s `benchmark` build type is what `:baselineprofile` instruments
+      # (`targetProjectPath`), and its APK is the one the sign-in below drives.
+      # The universal split is the one that installs on the emulator's x86_64.
+      - name: The benchmark APK
+        run: |
+          set -euo pipefail
+          gradle -p mobile/android :app:assembleBenchmark -PskipRust --no-daemon
+          ls -l mobile/android/app/build/outputs/apk/benchmark
+          test -f mobile/android/app/build/outputs/apk/benchmark/app-universal-benchmark.apk
+
+      - name: Start the emulator
+        run: |
+          set -euo pipefail
+          mobile/tools/emu.sh create
+          mobile/tools/emu.sh start --port 5580
+          mobile/tools/emu.sh wait --port 5580
+
+      # THE FIXTURE, THEN THE MEASURES. `Journey.restart` skips every bench —
+      # honestly, with its cause — when the app has no bench account, so a nightly
+      # that only ran Gradle would measure nothing and the gate would (rightly)
+      # fail on a missing metric. The app is therefore installed, signed in to
+      # `perf-server.sh` (8 000 favourites, the 4 000-row playlist) and the bench
+      # task runs OVER it: `adb install -r` keeps the app's data, which is the
+      # session, so the measured app is a person's app, not a fresh one.
+      #
+      # The sign-in is `release-signin.sh`'s phase 2, by the same helpers
+      # (`ui.sh`), against the same bench server: the objects it taps are the
+      # screens', never coordinates.
+      - name: The bench account, then the four measures
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          set -euo pipefail
+          serial=emulator-5580
+          work="$RUNNER_TEMP/perf"
+          mkdir -p "$work"
+          . mobile/tools/env.sh
+          . mobile/tools/ui.sh
+
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=neezer-perf-nightly" \
+            -addext "subjectAltName=IP:10.0.2.2,IP:127.0.0.1" \
+            -keyout "$work/key.pem" -out "$work/cert.pem" >/dev/null 2>&1
+          server_out="$(NEEZER_PERF_STATE="$work/perf-state" mobile/tools/perf-server.sh start \
+            --favorites 8000 --big-playlist 4000 --audio-all \
+            --covers tests/assets/cover.jpg \
+            --tls-cert "$work/cert.pem" --tls-key "$work/key.pem")"
+          echo "$server_out"
+          port="$(sed -n 's/^port=\([0-9]*\) .*/\1/p' <<< "$server_out")"
+          [[ -n "$port" ]] || { echo "::error::the bench server printed no port"; exit 1; }
+          trap 'NEEZER_PERF_STATE="$work/perf-state" mobile/tools/perf-server.sh stop >/dev/null 2>&1 || true' EXIT
+
+          adb_dev install -r -g mobile/android/app/build/outputs/apk/benchmark/app-universal-benchmark.apk
+          adb_dev shell pm clear "$ui_package" >/dev/null
+          adb_dev logcat -c -b crash >/dev/null 2>&1 || true
+          adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
+          await_text "Adresse du serveur" 30 || { fail_screen "the setup screen never painted"; exit 1; }
+          type_into 1 "10.0.2.2:$port"
+          tap_text "Vérifier le certificat" || { fail_screen "no « Vérifier le certificat » switch"; exit 1; }
+          tap_text "Vérifier le serveur" || { fail_screen "no « Vérifier le serveur » button"; exit 1; }
+          await_text "Certificat auto-signé" 30 || { fail_screen "no certificate card for the bench server"; exit 1; }
+          tap_text "Accepter ce certificat" || { fail_screen "no « Accepter ce certificat » button"; exit 1; }
+          await_text "Ton compte" 30 || { fail_screen "the account form never opened"; exit 1; }
+          type_into 1 bench
+          type_into 2 Bench1 secret
+          tap_text "Se connecter" || { fail_screen "no « Se connecter » button"; exit 1; }
+          await_text "Accueil Neezer" 60 || { fail_screen "the home never painted after signing in"; exit 1; }
+          printf 'perf_account=1 server=%s\n' "$port"
+
+          # ONLY the four benches: the module also carries the 30-minute
+          # screen-off soak (`JourneyLongTest`), the profile generators and the
+          # whole-journey capture, none of which is a nightly gate.
+          benches=fr.neezer.mobile.baselineprofile.StartupBenchmark,fr.neezer.mobile.baselineprofile.JourneyListsBenchmark
+          ANDROID_SERIAL="$serial" nz_gradle_android \
+            :baselineprofile:connectedBenchmarkReleaseAndroidTest \
+            -PskipRust --no-daemon \
+            "-Pandroid.testInstrumentationRunnerArguments.class=$benches"
+
+      # THE GATE. Every run records a candidate first (it fails here when a bench
+      # measured nothing — a sign-in that broke, an emulator that painted no
+      # frame — instead of comparing a zero), then compares with the committed
+      # baseline. A tree that has none says so with a warning annotation: the
+      # nightly of a fresh fork must not be red for a file that was never recorded.
+      - name: The gate
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python mobile/tools/perf-gate.py --record --commit "$GITHUB_SHA" \
+            --device "emulator-5580 (GitHub runner)" \
+            --baseline "$RUNNER_TEMP/perf-baseline-candidate.json"
+          if [[ -f mobile/tools/baselines/perf.json ]]; then
+            python mobile/tools/perf-gate.py --commit "$GITHUB_SHA"
+          else
+            echo "::warning title=Perf gate::no committed mobile/tools/baselines/perf.json: this run was recorded, not compared"
+          fi
+
+      # The reports themselves: a baseline is re-recordable from a run, and a
+      # regression's own numbers are in the file, not only in this log. The
+      # instrumented report is kept too: a bench that FAILED prints two frames
+      # in the job log, and its own XML is where the stack and the screen are.
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-reports
+          path: |
+            mobile/android/baselineprofile/build/outputs/**/*-benchmarkData.json
+            mobile/android/baselineprofile/build/outputs/androidTest-results/**
+            mobile/android/baselineprofile/build/reports/androidTests/**
+            ${{ runner.temp }}/perf-baseline-candidate.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop the emulator
+        if: always()
+        run: mobile/tools/emu.sh stop --port 5580 || true
+
   # --- the previous release, installed over (nightly, and on demand) ---------
   # The release page is the delivery channel: a person installs THIS build over
   # the one they already have, and Android only allows that with the same
