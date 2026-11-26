@@ -233,21 +233,25 @@ async fn the_snapshot_is_one_clone_and_the_listener_only_hears_changes() {
     // then the server's answer), so wait for a short SILENT window on the node's
     // own event channel before freezing the clock: what the assertion below
     // measures must be a timer, not a change already on its way. A node with a
-    // timer would keep waking the channel and fail the assertion anyway.
+    // timer would keep waking the channel and fail the assertion anyway. The
+    // window counts as silent only when the channel stayed quiet AND the counter
+    // did not move during it (a listener can land after the channel wakes).
     until("l'inscription a été annoncée", &b.lan, || {
         seen.load(Ordering::SeqCst) >= 1
     })
     .await;
     let mut events = b.lan.events();
     let mut quiet = seen.load(Ordering::SeqCst);
-    for _ in 0..20 {
-        if tokio::time::timeout(Duration::from_millis(250), events.changed())
+    for _ in 0..40 {
+        let before = seen.load(Ordering::SeqCst);
+        let timed_out = tokio::time::timeout(Duration::from_millis(250), events.changed())
             .await
-            .is_err()
-        {
+            .is_err();
+        let after = seen.load(Ordering::SeqCst);
+        quiet = after;
+        if timed_out && before == after {
             break;
         }
-        quiet = seen.load(Ordering::SeqCst);
     }
 
     // 10 minutes of a PAUSED clock: no event, because nothing changed.
