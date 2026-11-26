@@ -94,18 +94,38 @@ object Journey {
      * action lives on a merged parent whose child Text reports
      * `clickable=false`, so a search for `isClickable` finds nothing while this
      * lands on the control.
+     *
+     * The handle is RE-FOUND when it goes stale: a screen that recomposes between
+     * the find and the click (a search's results landing, a chip row arriving)
+     * kills the run with `StaleObjectException` — measured on this lot's dispatch
+     * (run 45778420506) in `searchToAlbum`, which killed `playerOpen` before it
+     * measured a frame. Three attempts, each a fresh find: the tap is the event,
+     * the handle is never the contract.
      */
     fun tapText(device: UiDevice, text: String, timeoutMs: Long = SCREEN_TIMEOUT_MS) {
-        val node = awaitText(device, text, timeoutMs)
-        node.click()
-        device.waitForIdle()
+        tapAndWait(device, timeoutMs) { awaitText(device, text, timeoutMs) }
     }
 
     /** Taps a node by its content description, the same way. */
     fun tapDesc(device: UiDevice, desc: String, timeoutMs: Long = SCREEN_TIMEOUT_MS) {
-        val node = awaitDesc(device, desc, timeoutMs)
-        node.click()
-        device.waitForIdle()
+        tapAndWait(device, timeoutMs) { awaitDesc(device, desc, timeoutMs) }
+    }
+
+    private fun tapAndWait(device: UiDevice, timeoutMs: Long, find: () -> UiObject2) {
+        var last: Throwable? = null
+        repeat(3) {
+            // `find` throws when the node is simply not there yet (its own message
+            // names the label); a stale handle is the retryable one.
+            val node = find()
+            val clicked = runCatching { node.click() }
+            if (clicked.isSuccess) {
+                device.waitForIdle()
+                return
+            }
+            last = clicked.exceptionOrNull()
+            device.waitForIdle()
+        }
+        throw checkNotNull(last) { "the tap on the node never happened ($timeoutMs ms)" }
     }
 
     /**
