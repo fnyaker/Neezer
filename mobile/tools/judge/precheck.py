@@ -42,24 +42,18 @@ Exit status is 0 whatever the checks say: the judge reads the lines, and a
 non-zero exit would look like a crash of the tool rather than a finding. Only a
 missing or unreadable directory is a usage error (exit 2, no verdict line).
 
-Python 3.12 standard library only (`xml.etree`, `pathlib`, `re`): the judge's
-task must be runnable on any worker with no install step.
+Python 3.12 standard library only (`re`, `pathlib`): the judge's task must be
+runnable on any worker with no install step. The dump is read by a small,
+explicit scanner (`parse_tree`) rather than an XML library: the one attribute
+per tag, one `node` per element shape of a `uiautomator dump` is all this file
+needs, it keeps the parser free of DTD/entity expansion by construction, and it
+adds no dependency to a task the judge runs anywhere.
 """
 
 from __future__ import annotations
 
 import re
 import sys
-# Stdlib only, on purpose (the lot's contract): the judge's task must run on any
-# worker with no install step, and `defusedxml` would be a dependency.
-#
-# The XML this parses is the repository's OWN artifact — `uiautomator dump` of
-# the app, produced by the CI emulator — and Semgrep's XXE finding is answered
-# by shutting the two doors instead of trusting the file: `parse_tree` REFUSES a
-# document that declares a DOCTYPE or an ENTITY (so no DTD, no entity expansion,
-# no billion laughs), and ElementTree never resolves an external entity. The
-# inline suppression markers below carry that justification, as the repo requires.
-import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 from pathlib import Path
 
 # The eleven captures of `release-journey.sh --evidence`, in walk order. The
@@ -126,37 +120,57 @@ class Node:
         return f'{self.cls}:"{word[:40]}"' if word else self.cls
 
 
+class DumpError(ValueError):
+    """The file is not a `uiautomator dump`."""
+
+
+# One element per line in a uiautomator dump: `<node …>` opens, `<node … />` is a
+# leaf, `</node>` closes. The attribute part never contains a raw `>` — the tool
+# escapes it — so `[^>]*` is exact.
+TAG = re.compile(r"<node\b([^>]*?)(/?)>|</node\s*>")
+ATTR = re.compile(r'([A-Za-z-]+)="([^"]*)"')
+# uiautomator escapes exactly these five (`&#39;` for a quote) — the same set
+# `mobile/tools/ui.sh` undoes before matching a label.
+ENTITIES = (("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"), ("&amp;", "&"))
+
+
+def decode(value: str) -> str:
+    for entity, char in ENTITIES:
+        value = value.replace(entity, char)
+    return value
+
+
 def parse_tree(path: Path) -> tuple[Node, list[Node]]:
     """The dumped hierarchy → (root, every node in document order).
 
-    A dump is `<hierarchy rotation="0"><node …>` and nothing else: a document
-    that declares a DTD or an entity is not one, and it is refused before the
-    parser sees it (that is what keeps `xml.etree` safe here — see the import's
-    note; the task's contract is the standard library only).
+    NO XML LIBRARY, on purpose. A dump is one `<node>` element per line with a
+    fixed attribute shape, and reading it this way is what keeps the judge's
+    task dependency-free (`defusedxml` would otherwise be needed: a parser that
+    honours a DTD is a parser an artifact can bomb). A `DOCTYPE`/`ENTITY`
+    declaration is refused outright instead of being expanded.
     """
     raw = path.read_text(encoding="utf-8", errors="replace")
     if "<!DOCTYPE" in raw or "<!ENTITY" in raw:
-        raise ET.ParseError("a DOCTYPE/ENTITY declaration is not a uiautomator dump")
-    tree = ET.fromstring(raw)  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml-parse
+        raise DumpError("a DOCTYPE/ENTITY declaration is not a uiautomator dump")
+
     nodes: list[Node] = []
-
-    def walk(element: ET.Element, parent: Node | None) -> Node | None:
-        if element.tag != "node":
-            return None
-        node = Node(element.attrib, parent)
+    stack: list[Node] = []
+    for match in TAG.finditer(raw):
+        if match.group(0).startswith("</"):
+            if not stack:
+                raise DumpError("a closing </node> with nothing open")
+            stack.pop()
+            continue
+        attrs = {name: decode(value) for name, value in ATTR.findall(match.group(1))}
+        node = Node(attrs, stack[-1] if stack else None)
         nodes.append(node)
-        for child in element:
-            walk(child, node)
-        return node
-
-    root = None
-    for element in tree:
-        found = walk(element, None)
-        if root is None:
-            root = found
-    if root is None:
-        root = Node({"bounds": "[0,0][0,0]"}, None)
-    return root, nodes
+        if not match.group(2):
+            stack.append(node)
+    if stack:
+        raise DumpError("a <node> left open at the end of the dump")
+    if not nodes:
+        raise DumpError("no <node> in the dump")
+    return nodes[0], nodes
 
 
 def inside_scrollable(node: Node) -> bool:
@@ -295,7 +309,7 @@ def main(argv: list[str]) -> int:
             try:
                 parse_tree(xml)
                 xml_ok = True
-            except ET.ParseError:
+            except (DumpError, OSError):
                 xml_ok = False
         if png_ok and xml_ok:
             usable.append(name)
