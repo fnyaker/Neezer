@@ -325,6 +325,29 @@ install_and_sign_in "$previous_apk"
 check_alive "the previous release's sign-in"
 [[ -n "$(app_pid)" ]] || fail_screen "the previous release's process is gone after its sign-in"
 
+# The app's own data directory, read as root. The emulator image is a userdebug
+# AOSP build, so `adb root` is allowed; a production phone would refuse, and the
+# script says so instead of pretending the data was measured. `du -sk` (KiB) is
+# what toybox answers everywhere.
+#
+# Defined here, before the download, because the failure path reads the SAME
+# directory: a download that failed before its first byte is a path or a disk.
+ensure_root() {
+    local out
+    out="$(adb_dev root 2>&1 || true)"
+    case "$out" in
+        *"cannot run as root"*) return 1 ;;
+    esac
+    "$(nz_adb)" -s "$serial" wait-for-device >/dev/null 2>&1 || true
+    [[ "$(adb_dev shell id -u 2>/dev/null | tr -d '\r')" == "0" ]]
+}
+data_measure() {
+    local dir=/data/data/$ui_package bytes_kib files
+    bytes_kib="$(adb_dev shell du -sk "$dir" 2>/dev/null | awk '{print $1}' | tr -d '\r')"
+    files="$(adb_dev shell find "$dir" -type f 2>/dev/null | wc -l | tr -d ' \r')"
+    printf '%s %s\n' "${bytes_kib:-0}" "${files:-0}"
+}
+
 # --- one downloaded title, so "data kept" has something to keep -------------
 #
 # The album page is opened by the app's OWN link (`neezer://album/<id>`, MB2's
@@ -361,9 +384,23 @@ diagnose_download() {
     grep -E '"(GET|POST) /' "$access_log" | tail -n 25 >&2 || true
     if tap_text "Réglages" && await_text "Chercher un réglage" 10 &&
         tap_text "Téléchargements" && await_text "Qualité de téléchargement par défaut" 10; then
-        printf 'the downloads section says:\n  %s\n' "$(screen_texts)" >&2
+        # The CAUSE of each failure is a sentence at the bottom of the queue card
+        # (`SetRowView`) — below the fold, and `screen_texts`' 30-node window ends
+        # before it. Scroll to the card's own retry button and print EVERY text.
+        scroll_to_text "Tout réessayer" 5 || true
+        printf 'the downloads section says:\n' >&2
+        ui_text | tr '>' '\n' | sed -n 's/.* text="\([^"]\+\)".*/\1/p' |
+            head -60 | paste -sd '|' - >&2
+        printf '\n' >&2
     else
         printf 'could not open Réglages → Téléchargements (screen: %s)\n' "$(screen_texts)" >&2
+    fi
+    # The reserved `.part` and the published files, as root: a download that
+    # failed before its first byte is a path or a disk, and this names which.
+    if ensure_root; then
+        printf 'the app files dir:\n' >&2
+        adb_dev shell "ls -la /data/data/$ui_package/files 2>&1 | head -20" >&2 || true
+        adb_dev shell "df -k /data | tail -2" >&2 || true
     fi
 }
 
@@ -381,26 +418,6 @@ if (( downloaded == 0 )); then
 fi
 printf 'downloaded=1 album=%s\n' "$album_id"
 check_alive "the download"
-
-# The app's own data directory, read as root. The emulator image is a userdebug
-# AOSP build, so `adb root` is allowed; a production phone would refuse, and the
-# script says so instead of pretending the data was measured. `du -sk` (KiB) is
-# what toybox answers everywhere.
-ensure_root() {
-    local out
-    out="$(adb_dev root 2>&1 || true)"
-    case "$out" in
-        *"cannot run as root"*) return 1 ;;
-    esac
-    "$(nz_adb)" -s "$serial" wait-for-device >/dev/null 2>&1 || true
-    [[ "$(adb_dev shell id -u 2>/dev/null | tr -d '\r')" == "0" ]]
-}
-data_measure() {
-    local dir=/data/data/$ui_package bytes_kib files
-    bytes_kib="$(adb_dev shell du -sk "$dir" 2>/dev/null | awk '{print $1}' | tr -d '\r')"
-    files="$(adb_dev shell find "$dir" -type f 2>/dev/null | wc -l | tr -d ' \r')"
-    printf '%s %s\n' "${bytes_kib:-0}" "${files:-0}"
-}
 
 ensure_root || fail_screen "adb root refused: this image cannot show the app's data directory, so data_kept cannot be measured"
 read -r previous_bytes_kib previous_files <<<"$(data_measure)"
