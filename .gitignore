@@ -131,3 +131,8 @@ bridge/build/generated/
 # of the tree is what stops a local run from dirtying a checkout. The
 # REFERENCES (`mobile/tools/judge/reference/`) are committed, never ignored.
 /mobile/tools/judge/evidence/
+
+# Bughunt output (webapp/test/bughunt/run.mjs, mobile/tools/bughunt/explore.sh):
+# reports and screenshots, regenerated on every run.
+/webapp/test/bughunt/out/
+/mobile/tools/bughunt/out/

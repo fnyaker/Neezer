@@ -1063,3 +1063,13 @@ navigation. The short link is a real HTML page (OG title/description, meta refre
 targets; a 4 000-title page is 50 ms / 5 statements. The list mounts **100 rows at first** and
 « Afficher les N titres suivants » extends it in slices, so the DOM and the cover queue never mount
 4 000 rows on a phone; the queue itself still holds every streamable title.
+
+## La chasse aux bugs (web)
+
+`webapp/test/bughunt/run.mjs` opens every route and every Réglages section (32 screens), clicks
+**every** element the accessibility tree names — 3 samples per list, the rest counted `duplicate` —
+and classifies what each click did (`navigated`, `opened-layer`, `state-changed`, `nothing`,
+`blank`, `exception`, `console-error`, …) into `test/bughunt/out/bughunt-web.{json,md}` plus
+`screens/`. It is a report, not a gate: it needs Chromium and a bench server, like the other
+`test/*/run.mjs` benches, and it is never part of `npm test`. The contract (outcomes, severity,
+deduplication, the report template) is [bughunt.md](bughunt.md).

@@ -92,17 +92,17 @@ And the architecture's own rules, detailed in the area notes:
 - **Same result, cheaper?** Prefer not doing the work (render only what is visible) to throttling it.
 - **Tested for real, logic AND screen.** Run the suites that cover it (below). A change to a
   component is OPENED in headless Chromium (a bench under `webapp/test/*/run.mjs`, or a throwaway
-  Playwright script on `tools/perf_api.py --serve`) and LOOKED at in a desktop window, on a phone,
-  and in the full-screen player's narrow side panel. What a bench can hold (a geometry, a request
-  count, a statement count) gets a check, run once against the old code to see it fail.
+  Playwright script on `tools/perf_api.py --serve`) and LOOKED at on desktop, phone and the
+  player's narrow side panel. What a bench can hold gets a check, run once against the old code
+  to see it fail.
 - **Tests say how it behaves in real conditions**: real ffmpeg, real audio, counts not times, waits
   on events not clocks. → [testing.md](docs/agents/testing.md)
 - **Upgrade path tested** (rule 7) and **background work yields** (rule 1) when relevant.
 
 ## CI and merging
 
-Ten workflows (`tests`, `webapp`, `docker`, `network`, `android`, `desktop`, `mobile`, `release`,
-`judge`, `security`). A `ui`-labelled PR also needs the `Judge gate` check to pass: the visual judge's
+Eleven workflows (`tests`, `webapp`, `docker`, `network`, `android`, `desktop`, `mobile`, `release`,
+`judge`, `bughunt`, `security`). A `ui`-labelled PR also needs the `Judge gate` check to pass: the visual judge's
 verdict, not a build (`docs/agents/mobile.md`, *Le juge*).
 **Fully green means every job of every workflow that ran, including the security scanners.** `security.yaml`
 (CodeQL, Semgrep, Bandit, Trivy, Gitleaks) is `continue-on-error`, so its check can show green with
@@ -135,6 +135,7 @@ per-workflow inventory is [testing.md](docs/agents/testing.md#ci-tests-what-ship
 | listen party, remote control | [party-remote.md](docs/agents/party-remote.md) |
 | LAN nodes: `desktop/crates/nz-lan` (peer exchange between the native apps), `/api/lan/*`, device credentials, trusted friends; its lot plan | [lan-nodes.md](docs/agents/lan-nodes.md) |
 | a task that spans several areas, or you delegate to a subagent | [orchestration.md](docs/agents/orchestration.md) |
+| la chasse aux bugs (web et natif) | [bughunt.md](docs/agents/bughunt.md) |
 
 Documentation map: [docs/README.md](docs/README.md). Delivered architecture references:
 `docs/detachement-deezer.md`, `docs/multi-provider.md`; roadmap: `todo.md`.
@@ -143,7 +144,7 @@ Documentation map: [docs/README.md](docs/README.md). Delivered architecture refe
 
 Onze sous-agents sont définis dans `opencode.json` (prompts dans `.opencode/prompts/`). Invoque-les
 avec `@frontend`, `@api`, `@audio`, `@animation`, `@security`, `@android`, `@android-playback`,
-`@data`, `@qa`, `@devops`, `@batch`, ou laisse l'agent principal déléguer d'après leur description.
+`@data`, `@qa`, `@devops`, `@batch`, ou laisse l'agent principal déléguer.
 
 | Agent | Quand l'appeler |
 |---|---|

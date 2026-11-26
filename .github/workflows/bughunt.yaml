@@ -1,0 +1,182 @@
+name: Bughunt
+
+# La chasse aux bugs (plan-bughunt, lots B1/B2) : deux marcheurs déterministes
+# qui cliquent CHAQUE élément exposé par l'arbre d'accessibilité et écrivent un
+# rapport (JSON + Markdown + captures) par application.
+#
+# Ce n'est pas une porte : jamais sur `pull_request`. Un `workflow_dispatch` à
+# la main, et une passe nocturne (`schedule` ne tourne que sur la branche par
+# défaut, en UTC). La sortie 1 sert au dispatch manuel, pas à un check requis.
+#
+# Le job `web` est le harnais de B1 (`webapp/test/bughunt/run.mjs`) sur la SPA
+# construite et le serveur de banc du dépôt. Le job `native` est celui de B2 :
+# il s'auto-désactive tant que `mobile/tools/bughunt/explore.sh` n'existe pas,
+# avec l'idiome de `mobile.yaml` (un `if:` de job ne peut pas lire un fichier
+# avant le checkout).
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_run_id:
+        description: "Run `mobile.yaml` dont télécharger l'APK (vide = dernier master vert)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "40 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  web:
+    name: Web hunt (SPA + bench server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: webapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install the SPA
+        run: npm ci --no-audit --no-fund
+
+      # The bughunt drives a real Chromium; the version is pinned so two reports
+      # never compare two browsers by accident.
+      - name: Install Playwright
+        run: |
+          npm i --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      # measure.wasm is not committed: the SPA build needs it (webapp.yaml's own
+      # step, copied here so this workflow never depends on another one).
+      - name: Build the measures core (WebAssembly)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          node measure/build.mjs
+
+      - name: Build the SPA
+        run: npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the bench server
+        working-directory: .
+        run: pip install -e .
+
+      # The pass is long by construction (32 screens, every element once). The
+      # harnais bounds itself (`--max-minutes 25`); this step is the outer stop.
+      - name: Walk every screen
+        working-directory: webapp
+        run: node test/bughunt/run.mjs --out "$GITHUB_WORKSPACE/bughunt-web"
+
+      # Uploaded EVEN WHEN THE PASS FOUND A BUG (exit 1) or crashed: the report
+      # is the deliverable, and an artifact that only exists on green hides it.
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bughunt-web
+          path: bughunt-web
+          retention-days: 30
+          if-no-files-found: warn
+
+  native:
+    name: Native hunt (emulator, KVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for the harness
+        id: harness
+        run: |
+          if [ -f mobile/tools/bughunt/explore.sh ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Bughunt::skipped: mobile/tools/bughunt/explore.sh absent (lot B2)"
+          fi
+
+      # The documented recipe: /dev/kvm must be readable by the runner user.
+      - name: Enable KVM
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        if: steps.harness.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install the SDK, the image and the AVD
+        if: steps.harness.outputs.present == 'true'
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" "system-images;android-35;default;x86_64"
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n nz35 -k "system-images;android-35;default;x86_64" --device pixel_6 --force
+
+      - uses: actions/setup-python@v5
+        if: steps.harness.outputs.present == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install the bench server
+        if: steps.harness.outputs.present == 'true'
+        run: pip install -e .
+
+      # The APK the hunt walks is the release one a person installs: the last
+      # green `mobile.yaml` of master (`workflow_dispatch.apk_run_id` forces one
+      # run). Neither `mobile.yaml` nor its artifacts are modified here.
+      - name: Fetch the release APK of the last green master
+        if: steps.harness.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="${{ github.event.inputs.apk_run_id }}"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list --workflow mobile.yaml --branch master --status success \
+              --limit 1 --json databaseId --jq '.[0].databaseId')
+          fi
+          echo "APK du run mobile.yaml $run_id"
+          gh run download "$run_id" -n neezer-mobile-apk -D mobile/android/app/build/outputs/apk/release
+          gh run download "$run_id" -n neezer-mobile-native -D mobile/android/bridge
+
+      - name: Walk the native app
+        if: steps.harness.outputs.present == 'true'
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          mobile/tools/bughunt/explore.sh --serial emulator-5580
+
+      - name: Keep the report
+        if: always() && steps.harness.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bughunt-native
+          path: mobile/tools/bughunt/out
+          retention-days: 30
+          if-no-files-found: warn
