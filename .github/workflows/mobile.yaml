@@ -948,6 +948,15 @@ jobs:
           line: mobile
           packages: ffmpeg
 
+      # The bench server seeds the worst realistic library for these benches:
+      # 8 000 favourites, the 4 000-row playlist, real sleeves, and — through
+      # `--audio-all` — a real file behind EVERY track, so « Lire » streams
+      # instead of waiting on a transcode (the `playerOpen` bench's setup plays
+      # an album). NOT `--archived`: that seed's `make_archived` imports numpy,
+      # which the project does not depend on, and it answers
+      # `ModuleNotFoundError: No module named 'numpy'` (measured on this lot's
+      # first dispatch, run 45776273805) — and none of the four gates reads the
+      # home's shelves.
       - name: Install the bench server
         run: pip install -e .
 
@@ -994,8 +1003,8 @@ jobs:
             -addext "subjectAltName=IP:10.0.2.2,IP:127.0.0.1" \
             -keyout "$work/key.pem" -out "$work/cert.pem" >/dev/null 2>&1
           server_out="$(NEEZER_PERF_STATE="$work/perf-state" mobile/tools/perf-server.sh start \
-            --favorites 8000 --big-playlist 4000 --archived \
-            --audio tests/assets/issue133.flac --covers tests/assets/cover.jpg \
+            --favorites 8000 --big-playlist 4000 --audio-all \
+            --covers tests/assets/cover.jpg \
             --tls-cert "$work/cert.pem" --tls-key "$work/key.pem")"
           echo "$server_out"
           port="$(sed -n 's/^port=\([0-9]*\) .*/\1/p' <<< "$server_out")"
