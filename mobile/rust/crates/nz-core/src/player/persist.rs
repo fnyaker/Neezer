@@ -30,7 +30,7 @@ use nz_cache::QueueSnapshot;
 use nz_player::{Context, Entry, PlayerState, Repeat, Snapshot};
 use serde::{Deserialize, Serialize};
 
-use super::quality::AudioSettings;
+use super::quality::{AudioSettings, Quality};
 
 /// Where the transport's own scalars live (`kv`).
 pub const KEY_TRANSPORT: &str = "player.transport";
@@ -141,12 +141,38 @@ impl<'a> Store<'a> {
 
     /// The stored settings, clamped: a value written by an older build (or by a
     /// slider that went past its end) never reaches the chain out of range.
+    ///
+    /// **This is also the rule 7 migration.** A device that came from the SPA has
+    /// `player.quality` and no `player.audio`: the first native start adopts the
+    /// SPA's rung instead of playing `Auto` and losing the person's choice. The
+    /// migration writes nothing — it is replayed at every start until the player
+    /// itself saves `player.audio` (a `set_audio`, from Réglages or the badge),
+    /// which is idempotent and asks the network nothing. `OPUS_256`/`OPUS_192`
+    /// step down to 128: `nz_audio::Quality` has no such rung, and playing a rung
+    /// the engine cannot load is the bug (D14a).
     pub fn load_audio(&self) -> AudioSettings {
-        self.cache
+        if let Some(settings) = self.cache.kv().get::<AudioSettings>(AudioSettings::KEY) {
+            return settings.clamped();
+        }
+        let quality = match self
+            .cache
             .kv()
-            .get::<AudioSettings>(AudioSettings::KEY)
+            .get::<String>("player.quality")
             .unwrap_or_default()
-            .clamped()
+            .trim()
+            .to_ascii_uppercase()
+            .as_str()
+        {
+            "FLAC" => Quality::Flac,
+            "OPUS_320" => Quality::Opus320,
+            "OPUS_256" | "OPUS_192" | "OPUS_128" => Quality::Opus128,
+            "OPUS_64" => Quality::Opus64,
+            _ => Quality::Auto,
+        };
+        AudioSettings {
+            quality,
+            ..AudioSettings::default()
+        }
     }
 
     fn save_transport(&self, transport: &Transport) {
@@ -274,5 +300,58 @@ mod tests {
         assert!(clamped.speed <= nz_audio::MAX_SPEED);
         assert_eq!(clamped.crossfade_s, super::super::quality::MAX_CROSSFADE_S);
         assert_eq!(clamped.eq_db.len(), super::super::quality::BANDS);
+    }
+
+    /// Rule 7: a device migrated from the SPA has `player.quality` and no
+    /// `player.audio`, and its choice survives the first native start — today it
+    /// reads as `Auto` and the person's rung is lost. The two rungs the engine
+    /// cannot load step DOWN rather than fail (D14a).
+    #[test]
+    fn an_upgraded_device_keeps_its_spa_quality() {
+        let dir = crate::player::tests::TempDir::new("persist-migrate-quality");
+        let core = dir.core();
+        let store = Store::new(core.cache());
+
+        // What MB4's SPA migration leaves on the device: the SPA's key, nothing else.
+        core.cache()
+            .kv()
+            .set("player.quality", &serde_json::json!("OPUS_64"))
+            .expect("stored");
+        assert_eq!(
+            store.load_audio().quality,
+            Quality::Opus64,
+            "the SPA's rung is adopted, not dropped"
+        );
+
+        core.cache()
+            .kv()
+            .set("player.quality", &serde_json::json!("OPUS_256"))
+            .expect("stored");
+        assert_eq!(
+            store.load_audio().quality,
+            Quality::Opus128,
+            "256 has no rung in the engine: it steps down to the closest one it loads"
+        );
+
+        core.cache()
+            .kv()
+            .set("player.quality", &serde_json::json!("OPUS_192"))
+            .expect("stored");
+        assert_eq!(store.load_audio().quality, Quality::Opus128);
+
+        // A word no rung matches is `Auto`, never a failure to launch.
+        core.cache()
+            .kv()
+            .set("player.quality", &serde_json::json!("MP3"))
+            .expect("stored");
+        assert_eq!(store.load_audio().quality, Quality::Auto);
+
+        // Once the player saved its own settings, they WIN: the migration never
+        // overwrites a real choice made after the upgrade.
+        store.save_audio(&AudioSettings {
+            quality: Quality::Flac,
+            ..AudioSettings::default()
+        });
+        assert_eq!(store.load_audio().quality, Quality::Flac);
     }
 }

@@ -51,11 +51,16 @@ pub const KNOWN: &[&str] = &[
 pub const THEMES: &[&str] = &["encre", "papier", "pochette"];
 /// `lib/theme.js#DEFAULT_THEME`.
 pub const DEFAULT_THEME: &str = "encre";
-/// `Settings.svelte#QUALITIES` — the six rates a download (or the player) may
-/// ask for, in the order the sheet shows them.
+/// `Settings.svelte#QUALITIES` — the six rates a download may ask for, in the
+/// order the sheet shows them.
 pub const QUALITIES: &[&str] = &[
     "FLAC", "OPUS_320", "OPUS_256", "OPUS_192", "OPUS_128", "OPUS_64",
 ];
+/// The five rungs the PLAYER can load, `AUTO` first: `nz_audio::Quality` has no
+/// 256 and no 192, and offering a rung the engine cannot play is the bug
+/// (D14a — the player's own menu already dropped them). `player.quality` is
+/// this list; `offline.quality` keeps [`QUALITIES`], which is the download's.
+pub const PLAYER_QUALITIES: &[&str] = &["AUTO", "FLAC", "OPUS_320", "OPUS_128", "OPUS_64"];
 /// `Settings.svelte#CACHE_LIMITS` — the five caps the cache card offers.
 pub const CACHE_LIMITS: &[u64] = &[
     256 * 1024 * 1024,
@@ -98,7 +103,9 @@ pub struct LocalSettings {
     pub viz_scope_orientation: String,
     /// `viz.scope.colour` — `duo`, `mono`, …
     pub viz_scope_colour: String,
-    /// `player.quality` — what the player asks the server for.
+    /// `player.quality` — what the player asks the server for. It is a MIRROR of
+    /// the player's own `player.audio` (one truth, [`crate::player::AudioSettings`]),
+    /// read here so a card can name the rung; the write path is the player's.
     pub quality: String,
     /// `offline.quality` — what a download asks for (`OPUS_320` by default: it
     /// is the one rate the SPA recommends for offline).
@@ -128,7 +135,7 @@ impl Default for LocalSettings {
             viz_beat: true,
             viz_scope_orientation: "horizontal".to_owned(),
             viz_scope_colour: "duo".to_owned(),
-            quality: "FLAC".to_owned(),
+            quality: "AUTO".to_owned(),
             download_quality: "OPUS_320".to_owned(),
             offline_only: true,
             cache_limit: 1024 * 1024 * 1024,
@@ -177,10 +184,11 @@ impl LocalSettings {
             viz_scope_colour: kv
                 .get::<String>("viz.scope.colour")
                 .unwrap_or(defaults.viz_scope_colour),
-            quality: kv
-                .get::<String>("player.quality")
-                .filter(|q| QUALITIES.contains(&q.as_str()))
-                .unwrap_or(defaults.quality),
+            quality: crate::player::Store::new(core.cache())
+                .load_audio()
+                .quality
+                .setting()
+                .to_owned(),
             download_quality: kv
                 .get::<String>("offline.quality")
                 .filter(|q| QUALITIES.contains(&q.as_str()))
@@ -296,7 +304,21 @@ fn check(key: &str, value: &Value) -> Result<Value, CoreError> {
                 .ok_or_else(|| invalid("une date en millisecondes était attendue"))?;
             Ok(Value::from(stamp))
         }
-        "player.quality" | "offline.quality" => {
+        // `player.quality` is the MIRROR of the player's own rung, so it accepts
+        // `AUTO` and refuses 256/192 (no rung in the engine); a download keeps the
+        // SPA's six, which the server's transcoder really has.
+        "player.quality" => {
+            let rate = value
+                .as_str()
+                .ok_or_else(|| invalid("une qualité était attendue"))?;
+            if !PLAYER_QUALITIES.contains(&rate) {
+                return Err(invalid(
+                    "qualité inconnue (AUTO, FLAC, OPUS_320, OPUS_128, OPUS_64)",
+                ));
+            }
+            Ok(Value::String(rate.to_owned()))
+        }
+        "offline.quality" => {
             let rate = value
                 .as_str()
                 .ok_or_else(|| invalid("une qualité était attendue"))?;
@@ -489,6 +511,75 @@ mod tests {
             .expect("stored");
         let settings = core.local_settings();
         assert_eq!(settings.theme, DEFAULT_THEME);
-        assert_eq!(settings.quality, "FLAC");
+        assert_eq!(
+            settings.quality, "AUTO",
+            "the player's own default, since the card now reads the PLAYER"
+        );
+    }
+
+    /// The card reads the PLAYER (`player.audio`), not the SPA's mirror: a rung
+    /// chosen in the player's badge, or written by Réglages, is the one Réglages
+    /// shows. Today the card reads `player.quality`, which nothing writes any
+    /// more, so it answers the default `FLAC` while the player plays 128.
+    #[test]
+    fn the_settings_report_the_players_quality() {
+        let dir = TempDir::new("local-quality-reads-player");
+        let core = dir.core();
+        assert_eq!(
+            core.local_settings().quality,
+            "AUTO",
+            "a fresh device: the player starts on Auto"
+        );
+
+        core.cache()
+            .kv()
+            .set(
+                crate::player::AudioSettings::KEY,
+                &crate::player::AudioSettings {
+                    quality: crate::player::Quality::Opus128,
+                    ..crate::player::AudioSettings::default()
+                },
+            )
+            .expect("what the player saves");
+        assert_eq!(
+            core.local_settings().quality,
+            "OPUS_128",
+            "today: FLAC, the SPA's default, while the player plays 128"
+        );
+
+        // The player's own setter is the one write path; the mirror follows it.
+        crate::player::Store::new(core.cache()).save_audio(&crate::player::AudioSettings {
+            quality: crate::player::Quality::Flac,
+            ..crate::player::AudioSettings::default()
+        });
+        assert_eq!(core.local_settings().quality, "FLAC");
+    }
+
+    /// `player.quality` accepts `AUTO` (the player's own default) and refuses the
+    /// two rungs the engine cannot load; a download keeps the six.
+    #[test]
+    fn the_players_rungs_are_checked_against_what_the_engine_loads() {
+        let dir = TempDir::new("local-quality-check");
+        let core = dir.core();
+
+        for rung in PLAYER_QUALITIES {
+            core.set_local_setting("player.quality", Value::from(*rung))
+                .unwrap_or_else(|error| panic!("{rung} should be accepted: {error:?}"));
+        }
+        for refused in ["OPUS_256", "OPUS_192", "MP3", ""] {
+            let error = core
+                .set_local_setting("player.quality", Value::from(refused))
+                .expect_err("a rung the engine cannot load");
+            match error {
+                CoreError::Invalid { detail } => assert!(
+                    detail.contains("qualité inconnue"),
+                    "the cause is French and names the rungs: {detail}"
+                ),
+                other => panic!("{other:?}"),
+            }
+        }
+        // The download's own list is untouched: the server's transcoder has 256.
+        core.set_local_setting("offline.quality", Value::from("OPUS_256"))
+            .expect("a download may still ask for 256");
     }
 }

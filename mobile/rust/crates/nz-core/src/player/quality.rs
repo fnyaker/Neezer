@@ -69,6 +69,34 @@ impl Quality {
         }
     }
 
+    /// Le cran tel que `Settings.svelte` l'écrit (`AUTO`, `FLAC`, `OPUS_320`…) :
+    /// le vocabulaire que `player.quality` porte depuis le SPA, et que
+    /// `LocalSettings` lit désormais depuis le lecteur.
+    pub fn setting(self) -> &'static str {
+        match self {
+            Quality::Auto => "AUTO",
+            Quality::Flac => "FLAC",
+            Quality::Opus320 => "OPUS_320",
+            Quality::Opus128 => "OPUS_128",
+            Quality::Opus64 => "OPUS_64",
+        }
+    }
+
+    /// Lit un cran du vocabulaire SPA, **strict** : 256 et 192 n'ont pas de cran
+    /// dans `nz_audio::Quality` et sont refusés — un réglage qui offrirait un
+    /// cran que le lecteur ne sait pas charger est le bug (D14a, le menu du
+    /// lecteur les a déjà retirés).
+    pub fn from_setting(raw: &str) -> Option<Quality> {
+        match raw.trim().to_ascii_uppercase().as_str() {
+            "AUTO" => Some(Quality::Auto),
+            "FLAC" => Some(Quality::Flac),
+            "OPUS_320" | "320" => Some(Quality::Opus320),
+            "OPUS_128" | "128" => Some(Quality::Opus128),
+            "OPUS_64" | "64" => Some(Quality::Opus64),
+            _ => None,
+        }
+    }
+
     /// Where this rung sits, so a ceiling can be applied without a match per
     /// pair: 0 is the smallest body (64), 3 the largest (FLAC).
     fn rung(self) -> u8 {
@@ -466,5 +494,34 @@ mod tests {
             assert_eq!(Normalization::parse(level.as_str()), level);
         }
         assert_eq!(Quality::parse("nonsense"), Quality::Auto);
+    }
+
+    /// The SPA's own spelling round-trips too — `AUTO` included — and the two
+    /// rungs the engine cannot load are REFUSED, never silently mapped
+    /// (`nz_audio::Quality` has five, D14a).
+    #[test]
+    fn every_setting_rung_round_trips() {
+        for quality in [
+            Quality::Auto,
+            Quality::Flac,
+            Quality::Opus320,
+            Quality::Opus128,
+            Quality::Opus64,
+        ] {
+            assert_eq!(
+                Quality::from_setting(quality.setting()),
+                Some(quality),
+                "{:?}",
+                quality
+            );
+        }
+        // Case and padding are the store's tolerance, not a second spelling.
+        assert_eq!(Quality::from_setting(" opus_320 "), Some(Quality::Opus320));
+        assert_eq!(Quality::from_setting("auto"), Some(Quality::Auto));
+
+        assert_eq!(Quality::from_setting("OPUS_256"), None);
+        assert_eq!(Quality::from_setting("OPUS_192"), None);
+        assert_eq!(Quality::from_setting("MP3"), None);
+        assert_eq!(Quality::from_setting(""), None);
     }
 }

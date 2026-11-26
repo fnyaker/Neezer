@@ -85,7 +85,9 @@ internal fun PlaybackSection(model: SettingsModel, state: SettingsModel.State) {
     val settings = state.settings ?: return
     SettingsCard(
         title = "Qualité demandée au serveur",
-        subtitle = "Le flux du titre en cours ; le suivant suit au démarrage.",
+        // Honest in both directions: the engine applies it when the next title
+        // is loaded, and the title already playing keeps its own stream.
+        subtitle = "S'applique au prochain titre ; le titre en cours continue.",
     ) {
         ChoicePills(
             choices = QUALITY_CHOICES.map { it.second },

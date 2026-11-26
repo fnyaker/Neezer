@@ -8,10 +8,12 @@ import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzThemeKind
 import uniffi.nz_ffi.AccessData
 import uniffi.nz_ffi.AccountsData
+import uniffi.nz_ffi.AudioSettings
 import uniffi.nz_ffi.DeezerStatusData
 import uniffi.nz_ffi.GrantData
 import uniffi.nz_ffi.ListHandle
 import uniffi.nz_ffi.PersonData
+import uniffi.nz_ffi.PlayerApi
 import uniffi.nz_ffi.ServerSettingsData
 import uniffi.nz_ffi.ServicesData
 import uniffi.nz_ffi.SettingsApi
@@ -176,6 +178,40 @@ object AppSettings {
     fun api(): SettingsApi? = runCatching { NzBridge.core?.settings() }.getOrNull()
 
     fun service(): SettingsService? = api()?.let { NzSettingsService(it) }
+
+    /**
+     * The player, for a setting that lives in the ENGINE — the quality.
+     *
+     * `player.quality` used to be written here and read by nobody: the player
+     * reads `player.audio` (`nz-core/src/player/quality.rs:195`,
+     * `persist.rs:144`), so the card's choice never reached the sound. One truth,
+     * one writer: this port is that writer, and it is the SAME call the player's
+     * own badge makes (`NowPlayingModel.kt:238`).
+     *
+     * `null` when the core or its player did not start: the screen then says so
+     * instead of pretending it saved.
+     */
+    fun playback(): PlaybackAudio? = runCatching {
+        NzBridge.core?.player()?.let(::NzPlaybackAudio)
+    }.getOrNull()
+}
+
+/**
+ * Le lecteur, pour un réglage qui vit dans le moteur (la qualité).
+ *
+ * An interface, not the generated `PlayerApi`, for the same reason as
+ * [SettingsService]: the rule runs on the JVM in `SettingsModelTest` with a fake,
+ * no JNA, no `.so`, no device.
+ */
+interface PlaybackAudio {
+    fun audio(): AudioSettings
+    fun setAudio(settings: AudioSettings)
+}
+
+/** The one real implementation: the player the core already owns (one per process). */
+class NzPlaybackAudio(private val player: PlayerApi) : PlaybackAudio {
+    override fun audio(): AudioSettings = player.audio()
+    override fun setAudio(settings: AudioSettings) = player.setAudio(settings)
 }
 
 /**

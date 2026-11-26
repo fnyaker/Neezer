@@ -46,6 +46,10 @@ import uniffi.nz_ffi.Versions
  *   `accounts()` brings (never a poll of its own while nothing runs).
  * - **A local write is one `kv` upsert**, and the shell hears it through
  *   [NzAppearance], so a theme change repaints the whole app without a reload.
+ * - **Un réglage qui existe dans deux écrans a UNE clé ; le second écran lit la
+ *   même.** La qualité est la seule qui vit dans le moteur : elle s'écrit par
+ *   [PlaybackAudio] (`player.audio`) et `player.quality` n'en est qu'un miroir,
+ *   lu par `LocalSettings` pour la carte.
  *
  * The numbers this lot is held to: a cold *Sources* is the SPA's three
  * requests, a warm one ZERO (the device's copy), and every card that is only
@@ -58,6 +62,11 @@ class SettingsModel(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val toast: (String) -> Unit = { NzToasts.show(it) },
     private val clock: () -> Long = { System.currentTimeMillis() },
+    /**
+     * The player, for the one setting that lives in the engine. A fake in the
+     * JVM tests; `null` when the core did not start, and the screen says so.
+     */
+    private val playback: PlaybackAudio? = AppSettings.playback(),
 ) {
     /** One card's four states (rule 3): the copy, the fresh answer, the cause. */
     data class Section<T>(
@@ -561,7 +570,31 @@ class SettingsModel(
 
     fun setScopeColour(value: String) = localWrite("viz.scope.colour", "\"$value\"")
 
-    fun setPlaybackQuality(id: String) = localWrite("player.quality", "\"$id\"")
+    /**
+     * La qualité vit dans le LECTEUR (`player.audio`) : c'est lui qui la lit au
+     * prochain titre. Réglages et le badge du lecteur écrivent donc la même
+     * chose, et `player.quality` (le vocabulaire du SPA) n'est plus qu'un miroir
+     * lu par `LocalSettings`, jamais une seconde vérité.
+     *
+     * Le titre en cours continue : `set_audio` s'applique au chargement suivant,
+     * et la carte le dit (sous-titre de `PlaybackSection`).
+     */
+    fun setPlaybackQuality(id: String) {
+        val rung = QUALITY_RUNGS[id] ?: return
+        val player = playback
+        val audio = runCatching { player?.audio() }.getOrNull()
+        if (player == null || audio == null) {
+            toast("Le lecteur n'a pas démarré — la qualité sera réglable après le premier titre.")
+            return
+        }
+        val written = runCatching { player.setAudio(audio.copy(quality = rung)) }
+        if (written.isFailure) {
+            toast(NzErrors.text(written.exceptionOrNull()!!))
+            return
+        }
+        state = state.copy(settings = state.settings?.copy(quality = id))
+        toast("Qualité : ${qualityLabel(id)} · au prochain titre")
+    }
 
     fun setDownloadQuality(id: String) = localWrite("offline.quality", "\"$id\"")
 

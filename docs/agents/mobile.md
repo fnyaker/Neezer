@@ -4410,13 +4410,25 @@ makes a theme a property of the APP instead of a screen.
   never on screen (MQ2's journey could not measure them). The section opens a `scope.launch {
   buildReport() }` now: the text lands off the first frame, the screen DRAWS it, and the share
   sheet reuses it. `SettingsModelTest` holds both halves (built at open; the open returns before it).
+- **Un réglage qui existe dans deux écrans a UNE clé ; le second écran lit la même.** The quality
+  was two truths: Réglages wrote `player.quality` (`SettingsModel.kt:564`) while the player read
+  `player.audio` (`player/quality.rs:195`, `persist.rs:144`), so the tap looked saved and the next
+  title was still asked at the old rung, and the card drew its own default (`FLAC`) while the engine
+  played `Auto`. The card now writes the PLAYER — `PlaybackAudio` → `PlayerApi.setAudio`, exactly
+  what the player's own badge calls — and reads it back through `Store::load_audio()`
+  (`LocalSettings::read`), so both screens name the same rung; `player.quality` survives only as the
+  migration source (`load_audio` adopts it on the first native start, `OPUS_256`/`OPUS_192` step
+  down to 128 because `nz_audio::Quality` has no such rung, and a fresh device is `AUTO`).
+  Measured: `player.quality = "OPUS_64"` with no `player.audio` → `Opus64` where it read `Auto`;
+  a tap on « Opus 64 » → one `setAudio`, zero `player.quality` writes; the card offers five rungs,
+  `Auto` included, and no longer offers 256/192 (`SettingsQualityTest`).
 
 **The checklist against `routes/Settings.svelte`** (every user setting, where it lives now):
 
 | SPA | Mobile |
 |---|---|
 | Listening: `AudioEffects` (EQ, bass, mono/balance, output, volume warning) | `AudioFxSections()` (MB12), hosted under *Lecture & son* |
-| `player.quality` (the player's rate) | *Lecture & son* → chips (`player.quality`) |
+| `player.quality` (the player's rate) | *Lecture & son* → chips; the card reads AND writes the PLAYER (`player.audio`, through `PlaybackAudio` → `PlayerApi.setAudio`, the badge's own call), and `player.quality` is only a mirror `LocalSettings` reads — one truth |
 | `AppearanceSettings`: 3 themes, custom accent (field, reset, correction, preview), Pochette's sleeve | *Apparence*, all of it; the ink correction is `nzAccent`'s, and the sentence names the theme it corrected for |
 | `ui.theme`, `ui.accent`, `ui.coverAc` in `localStorage` | the same three keys in `kv`, read by `NzAppearance` |
 | `VisualizerSettings`: eco, mode, palette, intensity, fps, beat, scope orientation/colour | *Animations*; the 50 worlds and the full-screen visualiser are MB21/MB22 |
