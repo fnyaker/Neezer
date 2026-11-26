@@ -3,6 +3,7 @@ package fr.neezer.mobile.feature.nowplaying
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -28,7 +29,8 @@ import uniffi.nz_ffi.PlayState
 import uniffi.nz_ffi.TrackRow
 
 /**
- * The covers of the player, counted (P1, rule 4: a click is measured).
+ * The covers of the player, counted at BOTH seams (P1 + T4, rule 4: a click is
+ * measured).
  *
  * The player used to ask for **three decodes on every track change**: the strip
  * was a fixed 3-page pager keyed by position and a settle rewrote it to page 1,
@@ -36,17 +38,34 @@ import uniffi.nz_ffi.TrackRow
  * plain class, so even an unchanged neighbour restarted Coil's request on the
  * next recomposition.
  *
- * This test composes the real [PlayerSurface] with a fake [NzCoverLoader] that
- * records every `Image(url, sizePx)` the sleeve asks for. It proves:
+ * This test composes the real [PlayerSurface] with a recording [NzCoverLoader]
+ * and counts two things:
+ *
+ *  * the **draw**, every `Image(url, sizePx)` the sleeve asks for;
+ *  * the **core fetch**, the `coverPath(url, sizePx)` the loader asks the model's
+ *    service for — the file in `nz-cache` that Coil then decodes. It is what
+ *    catches a page that is *retained but re-composed*: the same sleeve drawn
+ *    again is a decode, but a second `coverPath` for the same URL and size is a
+ *    second network/disk ask, and that is the bug.
+ *
+ * It proves:
  *
  *  * opening asks for exactly the three sleeves on screen (previous, current,
  *    next) at the stage's size, plus the backdrop's one small copy of the
  *    current cover (a cache hit, zero network — see `PlayerBackdrop`'s KDoc);
- *  * each `next()` asks for exactly ONE new sleeve — the new neighbour;
- *  * a state re-emit with no track change asks for nothing new.
+ *  * each `next()` asks for exactly ONE new sleeve — the new neighbour — and the
+ *    two sleeves that stay on the strip are **not fetched again** (0 core asks);
+ *  * a state re-emit with no track change asks for nothing new;
+ *  * across the whole run every sleeve the strip showed is fetched from the core
+ *    exactly once (`cover asks: 0=1 1=1 2=1 3=1 4=1`), so a remount or a
+ *    refetch fails.
  *
- * Run against the tree this lot fixes it fails on the second assertion (two new
- * sleeves per change: the rebuilt centre and the neighbour).
+ * Run against the tree this lot gates it fails: `the shared sleeve /api/cover/1
+ * is composited again, not refetched … expected:<0> but was:<1>` (measured on
+ * 25b3551b, before P1).
+ *
+ * No assertion depends on Coil's cache (the JVM has none): both counters read
+ * the app's own seams, which are the contract.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -62,14 +81,24 @@ class PlayerCoverReuseTest {
         override fun openQueue() = Unit
     }
 
-    /** What the composition asked for, in order. */
-    private class Recorder : NzCoverLoader {
+    /**
+     * What the composition asked for, and what the core behind it was asked for.
+     *
+     * Coil fetches a sleeve in a coroutine (`NzCoverFetcher`), so the loader asks
+     * the service from a [LaunchedEffect] keyed exactly as Coil keys its request
+     * (`url` + `sizePx`): a page that is only recomposed keeps its composition
+     * and asks nothing, a page that is rebuilt is a NEW composition, its effect
+     * runs again, and the core is asked a second time for a file it already
+     * served — which is the bug this lot gates.
+     */
+    private class Recorder(private val service: NowPlayingService) : NzCoverLoader {
         val requests = mutableListOf<Pair<String, Int>>()
         val keys: Set<Pair<String, Int>> get() = requests.toSet()
 
         @Composable
         override fun Image(url: String, sizePx: Int) {
             requests += url to sizePx
+            LaunchedEffect(url, sizePx) { service.coverPath(url, sizePx) }
         }
     }
 
@@ -94,10 +123,10 @@ class PlayerCoverReuseTest {
         queueRows = covers(size),
     )
 
-    private fun model(port: FakePlayerPort): NowPlayingModel {
+    private fun model(port: FakePlayerPort, service: NowPlayingService): NowPlayingModel {
         val model = NowPlayingModel(
             player = port,
-            service = FakeService(),
+            service = service,
             scope = CoroutineScope(Dispatchers.Unconfined),
             io = Dispatchers.Unconfined,
         )
@@ -105,9 +134,15 @@ class PlayerCoverReuseTest {
         return model
     }
 
-    /** The stage draws bigger than the backdrop's 120 dp copy. */
+    /**
+     * The size the strip draws at: the one most sleeves share. P1's player draws
+     * the current cover a SECOND time as a small backdrop copy (120 dp, or 900 dp
+     * under API 31), so "the biggest size" would name the backdrop on the pre-P1
+     * tree and the open assertion would fail before the core seam is ever read.
+     */
     private fun Recorder.stageSize(): Int =
-        keys.map { it.second }.distinct().maxOrNull() ?: 0
+        keys.groupingBy { it.second }.eachCount().entries
+            .maxWith(compareBy({ it.value }, { it.key })).key
 
     private fun Recorder.stageCovers(): Set<String> =
         keys.filter { it.second == stageSize() }.map { it.first }.toSet()
@@ -115,8 +150,9 @@ class PlayerCoverReuseTest {
     @Test
     fun aTrackChangeAsksForExactlyTheNewNeighbour() {
         val port = port()
-        val model = model(port)
-        val recorder = Recorder()
+        val service = FakeService()
+        val model = model(port, service)
+        val recorder = Recorder(service)
 
         rule.setContent {
             NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
@@ -136,6 +172,7 @@ class PlayerCoverReuseTest {
         }
         settle()
 
+        val stagePx = recorder.stageSize()
         val opened = recorder.stageCovers()
         println(
             "MEASURE p1 covers open: ${opened.size} distinct stage sleeves " +
@@ -148,7 +185,9 @@ class PlayerCoverReuseTest {
         )
 
         var seen = opened
+        var stageSleeves = opened
         for (target in listOf(2, 3)) {
+            val askedFrom = service.coversAsked.size
             model.next()
             port.snapshot = port.snapshot.copy(
                 index = target.toUInt(),
@@ -158,11 +197,19 @@ class PlayerCoverReuseTest {
             model.onSnapshot(port.snapshot)
             settle()
 
+            // The network/disk asks of THIS change, at the strip's size only:
+            // the backdrop's small copy is a different Coil key and a cache hit.
+            val fetched = service.coversAsked
+                .subList(askedFrom, service.coversAsked.size)
+                .filter { it.second == stagePx }
+
             val now = recorder.stageCovers()
             val added = now - seen
+            val shared = seen intersect now
             println(
                 "MEASURE p1 covers after next() to $target: ${now.size} distinct " +
-                    "(+${added.size}: ${added.joinToString()})",
+                    "(+${added.size}: ${added.joinToString()}), core asks " +
+                    fetched.joinToString { "${it.first}=${it.second}px" },
             )
             assertEquals("one new sleeve per track change (target $target)", 1, added.size)
             assertEquals(
@@ -170,18 +217,57 @@ class PlayerCoverReuseTest {
                 setOf("/api/cover/${target + 1}"),
                 added,
             )
+            for (url in shared) {
+                assertEquals(
+                    "the shared sleeve $url is composited again, not refetched (target $target)",
+                    0,
+                    fetched.count { it.first == url },
+                )
+            }
+            for (url in added) {
+                assertEquals(
+                    "the new neighbour $url is fetched once (target $target)",
+                    1,
+                    fetched.count { it.first == url },
+                )
+            }
             seen = now
+            stageSleeves = stageSleeves + now
         }
 
         // A snapshot re-emit with the same track (a position tick, a pause) is
         // not a track change: the strip must not ask for anything new.
         val before = recorder.keys
+        val askedFrom = service.coversAsked.size
         port.snapshot = port.snapshot.copy(version = port.snapshot.version + 1uL)
         model.onSnapshot(port.snapshot)
         settle()
         val after = recorder.keys
         println("MEASURE p1 covers on a re-emit: ${(after - before).size} new")
         assertTrue("a state re-emit asks for no new sleeve: ${after - before}", after == before)
+        assertEquals(
+            "a state re-emit fetches nothing from the core",
+            askedFrom,
+            service.coversAsked.size,
+        )
+
+        // The whole run, per URL: one ask each. A remount, a refetch, or a page
+        // rebuilt as its neighbour shows up here as a 2.
+        val coreAsks = service.coversAsked
+            .filter { it.second == stagePx }
+            .groupingBy { it.first }
+            .eachCount()
+            .toSortedMap()
+        println(
+            "MEASURE t4 cover asks: " +
+                coreAsks.entries.joinToString(" ") { "${it.key}=${it.value}" } +
+                " (stage ${stagePx}px, ${service.coversAsked.size - coreAsks.values.sum()} backdrop asks)",
+        )
+        assertEquals(
+            "every sleeve the strip showed is fetched from the core exactly once",
+            stageSleeves.associateWith { 1 },
+            coreAsks,
+        )
     }
 
     private fun settle() {
