@@ -402,14 +402,22 @@ diagnose_download() {
         adb_dev shell "ls -la /data/data/$ui_package/files 2>&1 | head -20" >&2 || true
         adb_dev shell "df -k /data | tail -2" >&2 || true
         # The store's OWN record. `downloads.error` is the sentence the worker
-        # wrote when it gave up — and the card draws NOTHING for it (measured:
-        # « 0 / 2 · 2 échec(s) » then the note then « Tout réessayer », with no
-        # cause line between), so the screen cannot answer this one.
-        db="$(adb_dev shell "find /data/data/$ui_package/files -name '*.db' 2>/dev/null | head -1" | tr -d '\r')"
+        # wrote when it gave up — and this release's card draws NOTHING for it
+        # (measured: « 0 / 2 · 2 échec(s) » then the note then « Tout réessayer »,
+        # with no cause line between), so the screen cannot answer this one.
+        #
+        # The file is `nz-cache`'s `desktop.sqlite` under `files/neezer` (its
+        # OWN name, not `*.db`: a `-name '*.db'` search found nothing and cost a
+        # dispatch), so the path is named here and `find` only widens it.
+        printf 'the core data dir:\n' >&2
+        adb_dev shell "ls -la /data/data/$ui_package/files/neezer 2>&1 | head -12" >&2 || true
+        db="/data/data/$ui_package/files/neezer/desktop.sqlite"
+        adb_dev shell "test -f $db" >/dev/null 2>&1 ||
+            db="$(adb_dev shell "find /data/data/$ui_package -name '*.sqlite' 2>/dev/null | head -1" | tr -d '\r')"
         if [[ -n "$db" ]]; then
             printf 'the downloads table (%s):\n' "$db" >&2
-            adb_dev pull "$db" "$work/cache.db" >/dev/null 2>&1 || true
-            python3 - "$work/cache.db" <<'PY' >&2 || true
+            adb_dev pull "$db" "$work/cache.sqlite" >/dev/null 2>&1 || true
+            python3 - "$work/cache.sqlite" <<'PY' >&2 || true
 import sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
 try:
@@ -422,7 +430,7 @@ for track, quality, state, error in rows:
     print(f"  {track} {quality} {state} :: {error}")
 PY
         else
-            printf 'no .db under the app files (find answered nothing)\n' >&2
+            printf 'no .sqlite under /data/data/%s\n' "$ui_package" >&2
         fi
     fi
 }
