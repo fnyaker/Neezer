@@ -416,16 +416,25 @@ diagnose_download() {
             db="$(adb_dev shell "find /data/data/$ui_package -name '*.sqlite' 2>/dev/null | head -1" | tr -d '\r')"
         if [[ -n "$db" ]]; then
             printf 'the downloads table (%s):\n' "$db" >&2
+            # The WAL, not the main file: the app keeps its connection open, so
+            # `desktop.sqlite` is 4 KiB and EVERY row is in `-wal` (601 KiB on
+            # dispatch 45760712206). Pulling the trio is what makes the query
+            # see the data; the main file alone answers "no such table".
             adb_dev pull "$db" "$work/cache.sqlite" >/dev/null 2>&1 || true
+            adb_dev pull "$db-wal" "$work/cache.sqlite-wal" >/dev/null 2>&1 || true
+            adb_dev pull "$db-shm" "$work/cache.sqlite-shm" >/dev/null 2>&1 || true
             python3 - "$work/cache.sqlite" <<'PY' >&2 || true
 import sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
+tables = [row[0] for row in conn.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")]
+print("  tables:", ", ".join(tables) or "(none)")
 try:
     rows = conn.execute("SELECT track, quality, state, error FROM downloads").fetchall()
 except sqlite3.Error as error:
     print(f"  sqlite: {error}")
     raise SystemExit(0)
-print(f"  {len(rows)} row(s)")
+print(f"  {len(rows)} download row(s)")
 for track, quality, state, error in rows:
     print(f"  {track} {quality} {state} :: {error}")
 PY
