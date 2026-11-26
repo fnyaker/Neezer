@@ -33,6 +33,23 @@ timer, and a pause is effective in under 500 ms in every state, measured by
 `docs/repro/e2e_transport_repro.py`. A visible `playbackStatus` says “reprise”, “changement de
 qualité” or “buffering”, so silence never looks like playing.
 
+**A prefetch of the next track steps aside; it never trickles.** The next track's preload
+(`lib/playcache.js#prefetchTrack`, through `lib/offline.js#fetchYielding`) must never take the link
+from the track being played. While a watched element wants it (`lib/netyield.js#playerWantsLink` —
+the prefetch's own hold does not count, since it holds the link itself), no request is started, and
+mid-body the request is ABORTED and resumed with `Range: bytes=<received>-` once the element lets
+go; a body the server cannot resume is restarted from zero, never read at 4 KB/s. The trickle was
+measured and rejected at 16 KB/s (CDP, 150 ms, 40 s tracks): 4 KB/s is 27 % of the link, and it still
+cost the playing track — a next at 1 s took 29.5 s against 20.9 s without the preload, a next at
+14 s took 87.7 s against 25.9 s, with four watchdog reloads. With abort + Range (2026-11-26, median
+of 3): 16 KB/s cold 20.8 s against 20.9 s (0.995 ×), hot 26.7 s against 25.5 s (1.047 ×), no reload,
+blob incomplete at the tap (22 KB of 320 KB in 14 s) so the tap streams as before; 64 KB/s cold
+3.9 s against 3.9 s, hot 0.3 s against 4.2 s with the whole blob on the device and **0** stream
+request at the tap; LAN 0.3 s, 0 request. The preload starts 3 s after a track change
+(`PREFETCH_DELAY`): starting early costs nothing now that it steps aside. The download path keeps
+its own trickle for a live transcode (it cannot restart cheaply), and `fetchYielding`'s defaults are
+that path byte for byte (`node test/download/run.mjs` unchanged).
+
 **Crossfade + silence trimming** (`components/Player.svelte`, `lib/edges.js`,
 `neezer/webui/edges.py`). Two ideas that need each other: masters carry a beat of digital silence
 at each end, and a crossfade that ignores them fades one track's silence into another's — the gap it

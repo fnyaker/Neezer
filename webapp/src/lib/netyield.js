@@ -15,7 +15,9 @@
 //   - the PLAYER says, for each audio element, whether it needs the network
 //     (playing, its source on the network, less than WANT_S buffered ahead of
 //     the playhead; it lets go again at ENOUGH_S or when the file is in);
-//   - the PREFETCH holds the link while it loads the next track;
+//   - the PREFETCH holds the link while it loads the next track, and steps
+//     aside ENTIRELY when an element wants it (abort + Range resume, never a
+//     trickle: 4 KB/s of a 16 KB/s link still cost the playing track 27 %);
 //   - while anything holds it, a download does not start, and one in progress
 //     is read at a trickle (TRICKLE bytes a second): the TCP receive window then
 //     holds the server to that rate, while the connection never sits idle long
@@ -35,6 +37,11 @@ const MAX_PAUSE_MS = 20000; // the longest a trickled web read sleeps
 const elements = new Map(); // element -> wants the link
 const holds = new Set(); // tokens (prefetch)
 let waiters = [];
+// A prefetch read waiting for the PLAYER to let go of the link. It is a
+// separate list from `waiters` because its condition is different: a hold is
+// the prefetch's own (`holding()`), an element is not.
+let linkWaiters = [];
+let elementWant = false; // some watched element wants the link (holds ignored)
 let yielding = false;
 let renewedAt = 0;
 let renewTimer = null;
@@ -49,8 +56,17 @@ function nativeYield(ms) {
 }
 
 function recompute() {
-  let want = holds.size > 0;
-  if (!want) for (const w of elements.values()) if (w) { want = true; break; }
+  let elWant = false;
+  for (const w of elements.values()) if (w) { elWant = true; break; }
+  // The prefetch's own hold must not count as a reason for it to keep waiting:
+  // it reads while holding, so waiting on the hold would be waiting on itself.
+  if (elementWant && !elWant) {
+    const w = linkWaiters;
+    linkWaiters = [];
+    for (const fn of w) fn();
+  }
+  elementWant = elWant;
+  const want = holds.size > 0 || elWant;
   const now = Date.now();
   if (want !== yielding) {
     yielding = want;
@@ -204,6 +220,23 @@ export function trickle(n) {
   });
 }
 
+/** Whether the PLAYER (a watched element) needs the link right now, holds aside. */
+export function playerWantsLink() {
+  for (const w of elements.values()) if (w) return true;
+  return false;
+}
+
+/**
+ * Resolves once no watched element wants the link (at once when none does).
+ * The prefetch waits on THIS, never on `isYielding()`: it holds the link
+ * itself while it reads (`holding()`), so `isYielding()` is always true then
+ * and a wait on it would be a wait on itself.
+ */
+export function whenPlayerFree() {
+  if (!playerWantsLink()) return Promise.resolve();
+  return new Promise((r) => linkWaiters.push(r));
+}
+
 /** For tests: forget every element and hold. */
 export function resetNetYield() {
   elements.clear();
@@ -212,6 +245,10 @@ export function resetNetYield() {
   renewTimer = null;
   const w = waiters;
   waiters = [];
+  const lw = linkWaiters;
+  linkWaiters = [];
+  elementWant = false;
   yielding = false;
   for (const fn of w) fn();
+  for (const fn of lw) fn();
 }
