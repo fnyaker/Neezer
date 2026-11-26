@@ -66,10 +66,25 @@ object Journey {
 
     // -- waits, on events ---------------------------------------------------
 
+    /**
+     * The accessibility tree, bounded, for a failure that must name its screen.
+     *
+     * `uiautomator dump` is the same read every other step uses; a bench that
+     * fails without it prints a literal a person then hunts by hand (measured:
+     * two dispatch runs spent on « Réduire le lecteur » before the tree said
+     * which screen was open).
+     */
+    fun screenTree(device: UiDevice): String = runCatching {
+        device.executeShellCommand("uiautomator dump /sdcard/nz-bench.xml >/dev/null 2>&1")
+        device.executeShellCommand("cat /sdcard/nz-bench.xml").take(2_000)
+    }.getOrDefault("(tree unavailable)")
+
     /** Waits for a node with exactly [text]; fails naming it, never silently. */
     fun awaitText(device: UiDevice, text: String, timeoutMs: Long = SCREEN_TIMEOUT_MS): UiObject2 {
         val found = device.wait(Until.findObject(By.text(text)), timeoutMs)
-        check(found != null) { "the screen never showed « $text » within ${timeoutMs}ms" }
+        check(found != null) {
+            "the screen never showed « $text » within ${timeoutMs}ms; screen: ${screenTree(device)}"
+        }
         return found
     }
 
@@ -83,7 +98,9 @@ object Journey {
     /** Waits for a node whose content description is exactly [desc]. */
     fun awaitDesc(device: UiDevice, desc: String, timeoutMs: Long = SCREEN_TIMEOUT_MS): UiObject2 {
         val found = device.wait(Until.findObject(By.desc(desc)), timeoutMs)
-        check(found != null) { "no node with the description « $desc » within ${timeoutMs}ms" }
+        check(found != null) {
+            "no node with the description « $desc » within ${timeoutMs}ms; screen: ${screenTree(device)}"
+        }
         return found
     }
 
@@ -205,7 +222,7 @@ object Journey {
             if (card != null) return card
             fling(device, up = true)
         }
-        error("no card titled « $title » within ${timeoutMs}ms")
+        error("no card titled « $title » within ${timeoutMs}ms; screen: ${screenTree(device)}")
     }
 
     /**
@@ -516,20 +533,20 @@ object Journey {
     }
 
     /**
-     * The full-screen player, through the door the home draws — « Reprendre ».
+     * The full-screen player, through the mini bar — the bar `NowPlaying.kt`
+     * draws over every screen while something plays, whose tap is the same
+     * gesture MQ2's `JourneyCapture#theMiniBarOpensThePlayer` proves opens the
+     * sheet (the shell's wiring, PR #380).
      *
-     * NOT the mini bar before this lot's fix: the bar's model read the player's
-     * snapshot once and never followed `PlayerFeed`, so no bar existed over a
-     * running player (measured 2026-11-23; the fix and its test are PR #380).
-     * Now the bar is there, and this journey still takes the home's card because
-     * it is the door a cold reader finds first.
+     * The home's « Reprendre » card was the old door. Measured on run
+     * 45786062427: it left the screen on the home and the bench waited 20 s for
+     * « Réduire le lecteur » that never came (the card's own state is the home's
+     * business, not this bench's), so the bench takes the bar the person taps
+     * while the album plays.
      */
     fun openPlayer(scope: MacrobenchmarkScope) {
         val device = scope.device
-        tapText(device, BenchTarget.TAB_HOME)
-        awaitDesc(device, HOME)
-        awaitText(device, "REPRENDRE", 30_000)
-        tapFirstCardBelow(device, "REPRENDRE")
+        tapDesc(device, "Ouvrir le lecteur plein écran", 30_000L)
         awaitDesc(device, "Réduire le lecteur")
     }
 
