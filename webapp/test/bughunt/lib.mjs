@@ -488,7 +488,9 @@ export function summaryLine(report) {
   return "bughunt: " + parts.join(" ");
 }
 
-const esc = (s) => String(s ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ");
+// Backslashes first, then the table's pipes: escaping only `|` would let a
+// literal `\|` in a name break the cell (CodeQL js/incomplete-sanitization).
+const esc = (s) => String(s ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ");
 
 export function writeJson(dir, report) {
   mkdirSync(dir, { recursive: true });

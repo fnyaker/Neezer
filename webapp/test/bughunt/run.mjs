@@ -12,7 +12,7 @@
 //
 // Exit 0: no bloquant bug.  Exit 1: at least one bloquant.  Exit 2: tool error
 // (an undeclared route, a missing id, a sound setup failure).
-import { writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { writeFileSync, mkdirSync, rmSync, mkdtempSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,8 +62,12 @@ try {
 }
 
 // --- the bench -------------------------------------------------------------
-const wavPath = join(tmpdir(), `bughunt-${process.pid}.wav`);
-writeFileSync(wavPath, silence(120));
+// A private 0700 directory, not a predictable name in the shared tmp dir
+// (CodeQL js/insecure-temporary-file): another user could pre-create or
+// symlink `bughunt-<pid>.wav` before the pass writes it.
+const wavDir = mkdtempSync(join(tmpdir(), "bughunt-wav-"));
+const wavPath = join(wavDir, "silence.wav");
+writeFileSync(wavPath, silence(120), { mode: 0o600 });
 const { base, ids, stop } = await startServer([
   "--podcasts",
   "--recap",
@@ -78,7 +82,7 @@ const startedAt = Date.now();
 
 function finish(code) {
   try {
-    unlinkSync(wavPath);
+    rmSync(wavDir, { recursive: true, force: true });
   } catch {
     /* already gone */
   }

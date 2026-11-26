@@ -7,7 +7,7 @@
 // run.mjs les appelle après la passe (état chaud, comme une personne qui a
 // navigué) ; ce fichier les rejoue seuls, avec le même serveur de banc.
 import { pathToFileURL } from "node:url";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadPlaywright, startServer, login, silence, installSessionPrefix, deezerHost } from "../harness.mjs";
@@ -500,8 +500,9 @@ async function main() {
   };
   const ONLY = arg("--only", "");
   const OUT = arg("--out", join(REPO, "webapp/test/bughunt/out"));
-  const wavPath = join(tmpdir(), `bughunt-stress-${process.pid}.wav`);
-  writeFileSync(wavPath, silence(120));
+  const wavDir = mkdtempSync(join(tmpdir(), "bughunt-wav-"));
+  const wavPath = join(wavDir, "silence.wav");
+  writeFileSync(wavPath, silence(120), { mode: 0o600 });
   const { base, ids, stop } = await startServer([
     "--podcasts",
     "--recap",
@@ -586,7 +587,7 @@ async function main() {
   console.log(`stress: verdicts=${verdicts.length} failed=${failed}`);
   await browser.close();
   try {
-    unlinkSync(wavPath);
+    rmSync(wavDir, { recursive: true, force: true });
   } catch {
     /* gone */
   }
