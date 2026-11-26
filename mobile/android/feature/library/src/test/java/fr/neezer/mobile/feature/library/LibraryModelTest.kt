@@ -237,10 +237,29 @@ class LibraryModelTest {
         }
     }
 
+    /** Les deux clés d'interface, en mémoire : ce que l'appareil retiendrait. */
+    private class FakePrefs(
+        initialSort: FavoriteSort = FavoriteSort.Position,
+        initialDescending: Boolean = false,
+    ) : LibraryPrefs {
+        override var favoriteSort: FavoriteSort = initialSort
+            private set
+        override var favoriteDescending: Boolean = initialDescending
+            private set
+        val saved = mutableListOf<Pair<FavoriteSort, Boolean>>()
+
+        override fun saveFavoriteSort(sort: FavoriteSort, descending: Boolean) {
+            saved += sort to descending
+            favoriteSort = sort
+            favoriteDescending = descending
+        }
+    }
+
     private class Harness(
         val service: FakeLibrary = FakeLibrary(),
         val player: FakePlayer = FakePlayer(),
         val leaf: LibraryLeaf = LibraryLeaf.Favorites,
+        prefs: LibraryPrefs = NoLibraryPrefs,
     ) {
         val toasts = mutableListOf<String>()
         val model = LibraryModel(
@@ -249,6 +268,7 @@ class LibraryModelTest {
             scope = CoroutineScope(Dispatchers.Unconfined),
             io = Dispatchers.Unconfined,
             toast = { toasts += it },
+            prefs = prefs,
         )
 
         fun loaded(): Harness {
@@ -369,6 +389,64 @@ class LibraryModelTest {
         assertTrue(harness.state.favoriteDescending)
         assertTrue("inverting the order is a sort of its own", rows.sorts > afterSort)
         assertEquals("Ordre d'origine", FavoriteSort.Position.label)
+    }
+
+    /** Le premier écran s'ouvre déjà dans l'ordre retenu sur l'appareil. */
+    @Test
+    fun theSavedOrderIsAppliedOnTheFirstList() {
+        val rows = FakeRows(LibraryFixtures.rows(40))
+        val prefs = FakePrefs(initialSort = FavoriteSort.Title, initialDescending = true)
+        val harness = Harness(
+            service = FakeLibrary(cachedFavorites = rows, freshFavorites = rows),
+            prefs = prefs,
+        ).loaded()
+
+        assertEquals(FavoriteSort.Title, harness.state.favoriteSort)
+        assertTrue(harness.state.favoriteDescending)
+        val first = harness.state.favoriteRows!!.window(0, 1).single()
+        assertEquals(
+            "the first row is the last title, descending",
+            LibraryFixtures.rows(40).maxOf { it.title.lowercase() },
+            first.title.lowercase(),
+        )
+    }
+
+    /** Un ordre choisi et une direction sont écrits sur l'appareil, ensemble. */
+    @Test
+    fun choosingAnOrderIsRemembered() {
+        val prefs = FakePrefs()
+        val harness = Harness(prefs = prefs).loaded()
+
+        harness.model.sortFavorites(FavoriteSort.Album)
+        harness.model.reverseFavorites()
+
+        assertEquals(
+            "the last write holds both dimensions",
+            FavoriteSort.Album to true,
+            prefs.saved.last(),
+        )
+        assertEquals(FavoriteSort.Album, prefs.favoriteSort)
+        assertTrue(prefs.favoriteDescending)
+    }
+
+    /**
+     * 8 000 favoris, un tri : ONE pass in the core (`filter` then `sort`), and
+     * ZERO request — the service's only read is the list's own.
+     */
+    @Test
+    fun eightThousandFavoritesSortWithoutARequest() {
+        val eightThousand = FakeRows(LibraryFixtures.rows(8_000))
+        val service = FakeLibrary(cachedFavorites = eightThousand, freshFavorites = eightThousand)
+        val harness = Harness(service = service).loaded()
+        val sortsBefore = eightThousand.sorts
+        val filtersBefore = eightThousand.filters
+
+        harness.model.sortFavorites(FavoriteSort.Added)
+
+        assertEquals("one sort for the tap", sortsBefore + 1, eightThousand.sorts)
+        assertEquals("both dimensions go through the handle", filtersBefore + 1, eightThousand.filters)
+        assertEquals("the sort asks nothing", 1, service.favoritesCalls)
+        assertEquals(8_000, harness.state.favoriteRows?.len())
     }
 
     /** The artists' grid filters and sorts locally: no request for a keystroke. */

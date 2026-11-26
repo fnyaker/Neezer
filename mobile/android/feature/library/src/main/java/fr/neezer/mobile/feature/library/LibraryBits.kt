@@ -28,11 +28,13 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
@@ -44,9 +46,11 @@ import fr.neezer.mobile.designsystem.ListWindow
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzItemSpecs
+import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzPaneEnter
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.SwipeRow
 import fr.neezer.mobile.designsystem.asRowSource
@@ -196,6 +200,127 @@ internal fun NzSearchField(
                 glyph = NzGlyph.Close,
                 contentDescription = "Effacer la recherche",
                 onClick = { onValueChange("") },
+            )
+        }
+    }
+}
+
+/**
+ * Le contrôle de tri des favoris : UNE ligne qui nomme l'ordre courant et ouvre
+ * la feuille des six ordres.
+ *
+ * C'est le patron des lecteurs établis (Apple Music, Spotify) plutôt qu'une bande
+ * de sept chips : à 360 dp les deux dernières chips (« Durée », « Date d'ajout »)
+ * étaient hors écran, et une chip Material est faite pour filtrer, pas pour
+ * choisir durablement un ordre parmi plusieurs (`docs/agents/mobile.md`, MB8).
+ *
+ * La direction fait partie du même choix (elle est l'interrupteur de la feuille),
+ * et la description d'accessibilité dit les deux dimensions d'un coup.
+ */
+@Composable
+internal fun SortDoor(
+    sort: FavoriteSort,
+    descending: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = Sillon.colors
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = NzMinTouchTarget)
+            .clip(RoundedCornerShape(NzRadius.field))
+            .background(colors.s1)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics {
+                contentDescription = "Trier les favoris — ${sort.label}, " +
+                    if (descending) "décroissant" else "croissant"
+            }
+            .padding(horizontal = NzSpacing.l),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(glyph = NzGlyph.Sort, size = 18.dp, tint = colors.tx)
+        Spacer(Modifier.width(NzSpacing.s))
+        Text(
+            text = "Trier · ${sort.label}",
+            style = Sillon.type.label,
+            color = colors.tx,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(NzSpacing.s))
+        Icon(glyph = NzGlyph.ChevronDown, size = 16.dp, tint = colors.dim)
+    }
+}
+
+/**
+ * La feuille des six ordres (`FavoriteSort.entries`), plus l'interrupteur de
+ * direction — une seule visite pour les deux dimensions.
+ *
+ * Elle est hébergée par l'écran, au niveau racine ([LibraryOverlay] → `NzSheet`) :
+ * une feuille composée dans la case d'un petit contrôle naît à la taille de cette
+ * case (le bug de la porte de la soirée, MB20).
+ *
+ * Le tap d'un ordre appelle `onPick` **et ferme** ; l'interrupteur reste ouvert,
+ * pour changer l'ordre et la direction dans la même visite.
+ */
+@Composable
+internal fun SortSheet(
+    sort: FavoriteSort,
+    descending: Boolean,
+    onPick: (FavoriteSort) -> Unit,
+    onReverse: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = Sillon.colors
+    LibraryOverlay(title = "Trier les favoris", onDismiss = onDismiss) {
+        FavoriteSort.entries.forEach { option ->
+            val chosen = option == sort
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = NzMinTouchTarget)
+                    .clip(RoundedCornerShape(NzRadius.field))
+                    .background(if (chosen) colors.s1 else Color.Transparent)
+                    .clickable(role = Role.RadioButton) { onPick(option) }
+                    .semantics { selected = chosen }
+                    .padding(horizontal = NzSpacing.m),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = option.label,
+                    style = Sillon.type.label,
+                    color = if (chosen) colors.acText else colors.tx,
+                    modifier = Modifier.weight(1f),
+                )
+                if (chosen) Icon(glyph = NzGlyph.Check, size = 18.dp, tint = colors.acText)
+            }
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(colors.ln),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = NzMinTouchTarget),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Décroissant",
+                style = Sillon.type.label,
+                color = colors.tx,
+                modifier = Modifier.weight(1f),
+            )
+            NzSwitch(
+                checked = descending,
+                onCheckedChange = { onReverse() },
+                // The switch is its own target: without a name TalkBack reads an
+                // unnamed switch beside the label (and the ATF counts it).
+                modifier = Modifier.semantics { contentDescription = "Décroissant" },
             )
         }
     }

@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import fr.neezer.mobile.bridge.LoadWhenShown
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
@@ -48,7 +49,14 @@ fun LibraryEntry(tab: String?, nav: NzNavigator, visible: Boolean = true, modifi
     val historyService = remember(screens) { screens?.let(::NzHistoryService) }
     val player: LibraryPlayer = remember { AppLibraryPlayer.api()?.let(::NzLibraryPlayer) ?: NoLibraryPlayer }
     val scope = rememberCoroutineScope()
-    val model = remember(service, player, scope) { service?.let { LibraryModel(it, player, scope) } }
+    // L'ordre des favoris est retenu sur l'appareil (une trace d'interface, pas
+    // un réglage serveur) : deux clés lues à l'ouverture de l'écran, écrites en
+    // `apply()`.
+    val context = LocalContext.current
+    val prefs = remember(context) { SharedLibraryPrefs(context) }
+    val model = remember(service, player, scope, prefs) {
+        service?.let { LibraryModel(it, player, scope, prefs = prefs) }
+    }
     val historyModel = remember(historyService, player, scope) {
         historyService?.let { HistoryModel(it, player, scope) }
     }
