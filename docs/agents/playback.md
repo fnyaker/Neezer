@@ -50,6 +50,30 @@ request at the tap; LAN 0.3 s, 0 request. The preload starts 3 s after a track c
 its own trickle for a live transcode (it cannot restart cheaply), and `fetchYielding`'s defaults are
 that path byte for byte (`node test/download/run.mjs` unchanged).
 
+**A tap on a track whose head is on the device makes a sound at once** (`playcache.js#prefetchHead`,
+`Player.svelte#startHeadHandover`, `GET /api/stream/<id>/head`). The head is the track's first six
+seconds, Opus 64 kb/s, as ONE FINISHED file — ~48 KB on real music, a length and byte ranges, unlike
+the stream a cold track gets. The preload asks for it FIRST, before the whole file (`runPrefetch`),
+because it is what the next tap costs: 48 KB is 0.75 s of a 64 KB/s link where the whole FLAC is
+20–60 MB and cannot arrive at all. `resolveSource` uses it only when nothing better is on the device
+(a download or a complete blob wins) and not on the app's own player (a blob plays in the page, and
+the native side would see a six-second track); a crossfade's incoming never takes it either — the
+head is for a tap that starts from silence. The player then opens the full stream on the idle
+element at the point the head ends (`?start=5.7`, so its own zero is that moment and `audioOffset`
+carries it) and swaps in the way a quality switch does, before the head runs out: the head's own
+`ended` is never the end of the track. Every way out is covered — no swap in 8 s keeps the head to
+its end and continues on the same offset; a seek past the head leaves it at once; a new track
+cancels it. The element being loaded is declared to `netyield#needLink`, because it is paused until
+the swap and `elementWants` would otherwise say no: a preload must step aside for the person's own
+next sound. Measured (2026-11-26, `node test/prefetch/run.mjs`, median of 3, 40 s noise tracks on a
+FLAC archive, CDP 150 ms): at 16 KB/s the head of the next track lands **33.4 s** into the current
+one — the playing element keeps the link until its own file is comfortably ahead, which rule 1
+demands — and the tap then sounds in **0.2 s** against **4.5 s** streaming, with the hand-over
+opening **20 ms** of no audible element and no `waiting` over 100 ms; at 64 KB/s and on LAN the
+whole-file preload already wins (**0.3 s**, 0 stream request at the tap) and the head is unused. A
+source opened at an offset carries only what is LEFT of the track, so `shownDuration` keeps the
+track's own length on the bar and in the media session.
+
 **Crossfade + silence trimming** (`components/Player.svelte`, `lib/edges.js`,
 `neezer/webui/edges.py`). Two ideas that need each other: masters carry a beat of digital silence
 at each end, and a crossfade that ignores them fades one track's silence into another's — the gap it

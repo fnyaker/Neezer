@@ -32,8 +32,11 @@
   import {
     isCached,
     getCachedAudioURL,
+    getCachedHeadURL,
     prefetchUpcoming,
+    prefetchHead,
     cacheCoverFor,
+    HEAD_SECONDS,
   } from "../lib/playcache.js";
   import { resolveCover, coverKey, baseCover, artistLine } from "../lib/format.js";
   import {
@@ -87,7 +90,7 @@
     watchAudio,
     whenReady,
   } from "../lib/ladder.js";
-  import { watchElement } from "../lib/netyield.js";
+  import { watchElement, needLink } from "../lib/netyield.js";
   import { trackKey, trackRef } from "../lib/trackkey.js";
   import {
     getEpisodeProgress,
@@ -921,6 +924,7 @@
     trackKey($current) === curId &&
     $quality !== curQ &&
     !switching &&
+    !curIsHead && // a head lasts seconds: the hand-over reads the quality itself
     !xfade && // mid-crossfade both elements are in use; apply it on the next load
     !curIsBlob // a downloaded track is a fixed-quality blob; ignore quality changes
   )
@@ -928,7 +932,10 @@
 
   // Prefer an on-device download (instant, plays in airplane mode) over the
   // network. Returns { url, blob } — blob true means a revocable object URL.
-  async function resolveSource(track, q) {
+  // `head: false` refuses the track's head: a crossfade's incoming must be the
+  // real stream, because the head lasts seconds and something else is already
+  // playing.
+  async function resolveSource(track, q, { head = true } = {}) {
     const key = trackKey(track);
     // 1) A permanent download (fixed quality, plays in airplane mode).
     if (isDownloaded(key)) {
@@ -950,8 +957,175 @@
         /* fall back to the network */
       }
     }
-    // 3) Stream from the server.
+    // 3) The HEAD of the track (its first seconds, Opus 64) — enough for the tap
+    //    to make a sound at once where the whole file could never arrive, and
+    //    loadTrackInner hands over to the full stream before it runs out. Not on
+    //    the app's own player: a blob is played in the page, and the native side
+    //    would see a six-second track.
+    if (audio && !isNativeEl(audio) && head) {
+      try {
+        const u = await getCachedHeadURL(key);
+        if (u) return { url: u, blob: true, head: true };
+      } catch {
+        /* fall back to the network */
+      }
+    }
+    // 4) Stream from the server.
     return { url: api.streamUrl(trackRef(track), q), blob: false };
+  }
+
+  // --- the head of a track: onto the full stream before it runs out ----------
+  //
+  // A tap on a track whose HEAD is on the device (lib/playcache.js#prefetchHead)
+  // starts on those first HEAD_SECONDS — Opus 64, one finished file: at 64 KB/s
+  // that is 0.75 s of link, where the whole FLAC cannot arrive at all. The full
+  // stream is opened meanwhile on the IDLE element at the point the head ends
+  // (`?start=`, so its own zero is that moment and `audioOffset` carries it) and
+  // swapped in the way a quality switch is — before the head runs out, so the
+  // sound never stops.
+  //
+  // Every way out is covered: a stream that cannot open in 8 s leaves the head
+  // playing to its end, then continues on the same offset (`finishHead`); a seek
+  // past the head leaves it at once; a new track cancels the lot; and the head's
+  // own `ended` never advances the queue.
+  let curIsHead = false; // the element is playing the head, not the track
+  let headHandover = null;
+  const HEAD_SWITCH_AHEAD = 0.3; // swap this far before the head's own end
+
+  function startHeadHandover(track, token) {
+    const head = audio;
+    if (!head || !curIsHead) return;
+    const incoming = els.find((e) => e !== head);
+    if (!incoming) return; // no idle element: the head's end falls back
+    const at = Math.max(0, HEAD_SECONDS - HEAD_SWITCH_AHEAD);
+    const h = { track, token, head, incoming, at, done: false, timer: null };
+    headHandover = h;
+    const isMine = () => headHandover === h && !h.done;
+    const cleanup = () => {
+      clearTimeout(h.timer);
+      needLink(incoming, false);
+      incoming.removeEventListener("canplay", swap);
+      incoming.removeEventListener("error", onErr);
+    };
+    const park = () => {
+      try {
+        incoming.pause();
+        incoming.removeAttribute("src");
+        incoming.load();
+      } catch {
+        /* ignore */
+      }
+    };
+    const abandon = (why) => {
+      if (!isMine()) return;
+      h.done = true;
+      headHandover = null;
+      cleanup();
+      park();
+      logInfo("audio", `head kept to its end (${why})`, null, { important: true });
+    };
+    const onErr = () => abandon("the full stream failed to load");
+    function swap() {
+      if (!isMine()) return;
+      if (token !== loadToken || !curIsHead || audio !== head) return;
+      if (trackKey(get(current)) !== trackKey(track)) return;
+      // Paused on the head, or not there yet: the head's END does the reload
+      // (`finishHead`), which keeps the position; swapping under a paused person
+      // would move it.
+      if (!get(player).playing || head.currentTime < h.at) return;
+      h.done = true;
+      headHandover = null;
+      cleanup();
+      els = els.map((e) => (e === head ? incoming : e));
+      audio = incoming;
+      curIsHead = false;
+      curIsBlob = false;
+      audioOffset = h.at;
+      head.pause();
+      registerSource(incoming);
+      setElementGain(incoming, gainFor(track));
+      if (detachLadder) {
+        detachLadder();
+        detachLadder = watchAudio(incoming, trackKey(track));
+      }
+      resumeAudio();
+      incoming.play().catch(() => {});
+      try {
+        head.removeAttribute("src");
+        head.load();
+      } catch {
+        /* ignore */
+      }
+      setBlobUrl(null);
+      player.setProgress(trackTime(), shownDuration());
+      pushPositionState();
+      logInfo("audio", `head handed over to the stream at ${h.at.toFixed(2)} s`);
+    }
+    h.swap = swap;
+    incoming.preload = "auto";
+    incoming.volume = head.volume;
+    incoming.muted = head.muted;
+    // Its gain before its first sample, as a quality switch does it.
+    setElementGain(incoming, gainFor(track));
+    // The link is the person's own next sound until the swap: a preload must
+    // step aside for it even though this element is paused (lib/netyield.js).
+    needLink(incoming, true);
+    incoming.src = sourceUrl(track, at);
+    incoming.load();
+    incoming.addEventListener("canplay", swap);
+    incoming.addEventListener("error", onErr);
+    h.timer = setTimeout(() => abandon("the full stream took too long"), 8000);
+  }
+
+  function cancelHeadHandover() {
+    const h = headHandover;
+    if (!h) return;
+    headHandover = null;
+    h.done = true;
+    clearTimeout(h.timer);
+    needLink(h.incoming, false);
+    try {
+      h.incoming.pause();
+      h.incoming.removeAttribute("src");
+      h.incoming.load();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // The head ran to its end with the full stream never becoming playable: go on
+  // with the track from where the head stops, through the server's `?start=`,
+  // whose own zero is that moment.
+  function finishHead() {
+    const cur = get(current);
+    cancelHeadHandover();
+    curIsHead = false;
+    curIsBlob = false;
+    if (!cur || !audio) return;
+    audioOffset = HEAD_SECONDS;
+    lastKnownTime = HEAD_SECONDS;
+    audio.src = sourceUrl(cur, HEAD_SECONDS);
+    audio.load();
+    setBlobUrl(null);
+    player.setProgress(HEAD_SECONDS, cur.duration || 0);
+    if (get(player).playing) startPlayback("head end");
+  }
+
+  // The length of the audio the ELEMENT carries: the trim's bounds and every
+  // "has it ended?" comparison are about this, and a track's metadata is not it.
+  function elementDuration() {
+    const d = audio?.duration;
+    return d && isFinite(d) ? d : $current?.duration || get(player).duration || 0;
+  }
+
+  // The duration the PERSON sees. A source opened at an offset (`?start=`: the
+  // head's hand-over, a chased seek) carries only what is LEFT of the track, so
+  // its own duration would end the bar early — the track's own length is the
+  // truth there.
+  function shownDuration() {
+    const own = $current?.duration || 0;
+    if (audioOffset > 0.05 && own) return own;
+    return elementDuration();
   }
 
   function setBlobUrl(url) {
@@ -993,6 +1167,9 @@
     // given a new source anyway, and the skip ramp below owns it from here.
     cancelCrossfade(false);
     trimmedId = null;
+    // A head belongs to the track that is leaving: its hand-over dies with it.
+    cancelHeadHandover();
+    curIsHead = false;
     logInfo("load", `${track.podcast ? "episode" : "track"} ${trackKey(track)} "${track.title}"`
       + (firstLoad ? " (first load after restore)" : ""), null, { important: firstLoad });
     // Where to (re)start this track:
@@ -1097,6 +1274,7 @@
     }
     setBlobUrl(src.blob ? src.url : null);
     curIsBlob = src.blob;
+    curIsHead = !!src.head;
     curPodcast = !!track.podcast;
     // A track change is where the processed path is tried again after a
     // measured fault, once its retry is due (lib/audio/output.js): the source
@@ -1155,6 +1333,10 @@
     // Seed duration from metadata right away so the seek bar is correct before
     // the first timeupdate (live transcodes report no duration).
     player.setProgress(resumeAt, track.duration || 0);
+    // The head is only the first seconds: open the full stream on the idle
+    // element NOW and move onto it before the head runs out. A paused load does
+    // not (nothing is being heard, and its end falls back on its own).
+    if (src.head && get(player).playing) startHeadHandover(track, token);
     pushRecent(track);
     // Title and artist on the lock screen NOW: it is local, it costs nothing,
     // and a notification that names the previous track is a bug. The artwork is
@@ -1310,6 +1492,23 @@
     trimmedId = null;
     const dur = get(player).duration;
     t = Math.max(0, dur ? Math.min(t, Math.max(0, dur - 0.2)) : t);
+    // The head only holds the first seconds: a seek past it leaves the head for
+    // the full stream AT the target, in one request (`?start=`), no chase.
+    if (curIsHead && t > HEAD_SECONDS - 0.5) {
+      cancelHeadHandover();
+      curIsHead = false;
+      curIsBlob = false;
+      audioOffset = t;
+      lastKnownTime = t;
+      audio.src = sourceUrl($current, t);
+      audio.load();
+      setBlobUrl(null);
+      cancelSeekChase();
+      cancelPendingSeek();
+      player.setProgress(t, dur);
+      if (get(player).playing) startPlayback("head seek");
+      return;
+    }
     cancelSeekChase(); // a new seek supersedes a chase in progress
     cancelPendingSeek(); // ...and a target still waiting for metadata
     // Reflect the intent on the bar right away (also stops the thumb snapping
@@ -1672,8 +1871,9 @@
       return;
     }
     renewWanted = true;
-    // Mid-transition states own the elements; the watchdog tries again.
-    if (switching || recovering || chasing || loadingTrack || xfade) return;
+    // Mid-transition states own the elements; the head's own hand-over owns them
+    // too, and the watchdog tries again later.
+    if (switching || recovering || chasing || loadingTrack || xfade || curIsHead) return;
     // An element playing a slice has its own zero at `audioOffset`: its
     // position is not the source's. The next track's load moves it.
     if (audioOffset > 0.05) return;
@@ -1991,6 +2191,9 @@
     if (e && e.target !== audio) return; // ignore the idle/preloading element
     if (loadingTrack) return; // a track change is mid-flight — position is stale
     if (chasing) return; // chasing a seek — hold the bar at the target
+    // A head reaching the hand-over point moves onto the full stream NOW: the
+    // swap must happen while the head still has audio left, never after.
+    if (headHandover) headHandover.swap();
     checkNativeStep();
     // If the visualizer wired the element through a Web Audio context that the
     // OS later suspended (backgrounded tab), the element "plays" but is silent —
@@ -2006,11 +2209,10 @@
     if (recoverAttempts && trackTime() > Math.max(lastPos, 0)) recoverAttempts = 0;
     // A live, on-the-fly transcoded stream (e.g. Opus/ogg piped from ffmpeg)
     // has no Content-Length, so audio.duration is Infinity/NaN. Fall back to
-    // the duration we already know from the track metadata.
-    const d =
-      audio.duration && isFinite(audio.duration)
-        ? audio.duration
-        : $current?.duration || 0;
+    // the duration we already know from the track metadata. A source opened at
+    // an offset (`?start=`) has a duration — of what is LEFT — so it must not
+    // shorten the track either: `shownDuration` knows the difference.
+    const d = shownDuration();
     if (trackTime() > 0.25) {
       lastKnownTime = trackTime();
       hadProgress = true;
@@ -2021,7 +2223,13 @@
     updateBuffered();
     savePodcastProgress(); // throttled; no-op for non-podcast tracks
     maybeCrossfade();
-    maybeTrimEnding(d);
+    // The TRIM's bounds are measured against the audio the element really
+    // carries, never against the track's metadata: a display duration is not a
+    // file length (and on a `?start=` slice the element holds only the rest).
+    // The TRIM's bounds are measured against the audio the element really
+    // carries, never against the track's metadata: a display duration is not a
+    // file length (and on a `?start=` slice the element holds only the rest).
+    maybeTrimEnding(elementDuration());
   }
 
   // Trailing silence with no crossfade to hide it: end the track where its
@@ -2086,12 +2294,9 @@
   }
   function pushPositionState() {
     if (!audio) return;
-    // Same live-transcode fallback as onTime: no Content-Length → no duration.
-    const d =
-      audio.duration && isFinite(audio.duration)
-        ? audio.duration
-        : get(current)?.duration || 0;
-    updatePositionState(trackTime(), d);
+    // Same rule as onTime: a live transcode has no length, and a source opened
+    // at an offset has only what is left of the track.
+    updatePositionState(trackTime(), shownDuration());
   }
   // Throws if duration <= 0 or position > duration, so clamp + guard.
   function updatePositionState(position, duration) {
@@ -2301,7 +2506,7 @@
     };
     xfade = mine;
 
-    const src = await resolveSource(track, mine.q);
+    const src = await resolveSource(track, mine.q, { head: false });
     if (xfade !== mine) {
       // Cancelled while we were reading the blob out of IndexedDB.
       if (src.blob) {
@@ -2995,6 +3200,12 @@
     // advance it a second time.
     if (xfade && xfade.phase === "fading" && e && e.target === xfade.old) return;
     if (e && e.target !== audio) return; // ignore the idle/preloading element
+    // The head is not the track: its end is the hand-over's backstop, never the
+    // end of the track — six seconds in, it must not advance the queue.
+    if (curIsHead) {
+      finishHead();
+      return;
+    }
     // A track ending while a crossfade is still being prepared means the
     // preload lost the race. Drop it and advance normally.
     if (xfade) cancelCrossfade();
@@ -3273,7 +3484,7 @@
           api.download([nextRef], "prefetch").catch(() => {});
       }, ARCHIVE_DELAY);
       clearTimeout(prefetchTimer);
-      const runPrefetch = () => {
+      const runPrefetch = async () => {
         if (!stillNext(nextId) || !get(online) || !get(prefetchEnabled)) return;
         // The last rung of the ladder. A track that is still buffering has not
         // finished wanting the link, and the NEXT track wanting it too is how
@@ -3284,13 +3495,17 @@
           return;
         }
         const s = get(player);
+        const upcoming = s.queue.slice(s.index + 1, s.index + 1 + prefetchAhead());
+        // The HEAD first — the track's first seconds, a finished ~48 KB file:
+        // that is what makes the next tap sound at once where the whole stream
+        // could not arrive, and it costs a fraction of it. Sequential, never
+        // parallel: one link, one read at a time, and the whole file is worth
+        // more once the head is in hand.
+        await prefetchHead(upcoming[0], get(quality), stillUpcoming).catch(() => {});
+        if (!stillNext(nextId) || !get(online) || !get(prefetchEnabled)) return;
         // The whole configured run, nearest first — prefetchUpcoming walks it
         // one track at a time and gives up as soon as the queue moves on.
-        prefetchUpcoming(
-          s.queue.slice(s.index + 1, s.index + 1 + prefetchAhead()),
-          get(quality),
-          stillUpcoming
-        ).catch(() => {});
+        await prefetchUpcoming(upcoming, get(quality), stillUpcoming).catch(() => {});
       };
       prefetchTimer = setTimeout(runPrefetch, PREFETCH_DELAY);
     }

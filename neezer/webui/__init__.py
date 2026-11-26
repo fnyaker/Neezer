@@ -593,6 +593,8 @@ DEEZER_FEATURE = {
     # not gated
     "login": None,
     "me": None,
+    # the head reads an archived file and never calls Deezer
+    "stream_head": None,
     "get_settings": None,
     "set_settings": None,
     "deezer_status": None,
@@ -5167,6 +5169,15 @@ def _gone(track, deezer_id):
 # Opus transcode bitrates (kbps) the web player may request: q=OPUS_320 etc.
 _OPUS_BITRATES = {320, 256, 192, 128, 64}
 
+#: The head of a track: its first seconds, Opus-encoded, as a FINISHED file.
+#: The web player prefetches it and starts a tapped track on it, then hands over
+#: to the full stream before it runs out: 6 s at 64 kbit/s is 48 KB, which is a
+#: tap's worth of link at 64 KB/s (0.75 s) where the whole FLAC is 20-60 MB and
+#: cannot arrive at all. One shape on purpose — the client's hand-over reads
+#: exactly this length, and one cache entry serves every play.
+HEAD_SECONDS = 6
+HEAD_KBPS = 64
+
 #: libopus caps its rate PER CHANNEL, so the ceiling is 256 kbit/s x channels.
 #: Asking 320 kbit/s of a MONO source is refused outright — ffmpeg exits 234
 #: with "The bit rate 320000 bps is unsupported. Please choose a value between
@@ -5442,7 +5453,7 @@ def _then(first, rest):
         rest.close()
 
 
-def _opus_generator(flac_path, bitrate):
+def _opus_generator(flac_path, bitrate, seconds=None):
     """ffmpeg: decode the archived FLAC and (re)encode to Opus-in-Ogg.
 
     Raises when ffmpeg did not finish: the cache publishes what the generator
@@ -5452,11 +5463,16 @@ def _opus_generator(flac_path, bitrate):
     The rate is held to libopus's 256 kbit/s per channel (``_opus_args``): this
     used to pass ``OPUS_320`` straight through, which ffmpeg refused on a mono
     source — an empty answer and nothing cached, every time.
+
+    ``seconds`` stops the encode there: that is the head route, whose whole
+    point is a FINISHED file of the track's first ``HEAD_SECONDS`` — a file with
+    a length and byte ranges, unlike the stream a cold track gets.
     """
     import subprocess  # nosec B404 - ffmpeg, a fixed binary in an argument list, no shell
 
+    limit = ["-t", f"{float(seconds):.3f}"] if seconds else []
     cmd = [
-        "ffmpeg", "-v", "0", "-i", flac_path,
+        "ffmpeg", "-v", "0", "-i", flac_path, *limit,
         "-map", "0:a:0", *_opus_args(bitrate, _audio_channels(flac_path)),
         "-vn", "-f", "ogg", "pipe:1",
     ]
@@ -5808,6 +5824,70 @@ def cover_response(cid, *, vetted=False):
     except Exception:
         logger.debug("Cover fallback failed", exc_info=True)
         return jsonify({"error": "not found"}), 404
+
+
+@webapi.route("/stream/<deezer_id>/head")
+@login_required
+def stream_head(deezer_id):
+    """The track's first ``HEAD_SECONDS`` as a finished Opus file, for the preload.
+
+    A tap on a track whose head is on the device makes a sound at once (48 KB),
+    where the whole file could not have arrived on a slow link — and because
+    this answer is a COMPLETE file it carries a ``Content-Length`` and
+    ``Accept-Ranges: bytes``, so the element can iterate it and the client can
+    hand over to the full stream at a known point.
+
+    The source being encoded has to be on disk in full: an Opus encode reads to
+    an end, so there is no "transcode as it archives" here — a track that is not
+    archived yet answers **503 + Retry-After** and starts nothing. The full
+    preload that follows this one (`/stream`, ``X-NS-Background``) is what queues
+    the archive, so a first pass simply has no head and the next one has.
+
+    One generation is cached under ``head-<id>-opus64-6.ogg`` and served from
+    disk afterwards, like every other transcode.
+    """
+    from ..deezer import archive
+    from .refs import canonical
+
+    deezer_id = canonical(deezer_id)
+    track = None
+    if _valid_id(deezer_id):
+        track = archive.find_local_track(deezer_id)  # by Deezer id
+        if track is not None and not _may_access_track(track):
+            return jsonify({"error": "invalid id"}), 400
+    else:
+        try:
+            key = uuid.UUID(str(deezer_id))
+        except ValueError:
+            return jsonify({"error": "invalid id"}), 400
+        track = Track.get_or_none(Track.id == key)
+        if track is None or not _may_access_track(track):
+            # Someone else's private upload is indistinguishable from an unknown
+            # id — and a podcast episode or a YouTube hit has no head (out of
+            # scope: their own paths differ).
+            return jsonify({"error": "invalid id"}), 400
+
+    if track is None or not track.path or not os.path.isfile(track.path):
+        resp = jsonify({"error": "not archived yet", "head": False})
+        resp.status_code = 503
+        resp.headers["Retry-After"] = "30"
+        return resp
+
+    cache = current_app.transcode_cache
+    cache_key = f"head-{track.id}-opus{HEAD_KBPS}-{HEAD_SECONDS}.ogg"
+    if not cache.has(cache_key):
+        # Materialised in one go: `cache.set` publishes a COMPLETE value, where
+        # `set_generated` would stream the first answer with no length and no
+        # ranges — and the contract here is a finished file from the first byte.
+        try:
+            data = b"".join(_opus_generator(track.path, HEAD_KBPS, HEAD_SECONDS))
+        except Exception:
+            _log_deezer_failure("Head transcode failed for %s", deezer_id)
+            return jsonify({"error": "head unavailable"}), 502
+        if not data:
+            return jsonify({"error": "head unavailable"}), 502
+        cache.set(cache_key, data)
+    return send_file(cache.get(cache_key), mimetype="audio/ogg", conditional=True)
 
 
 @webapi.route("/stream/<deezer_id>/ready")

@@ -320,6 +320,8 @@ POLICY = {
     "share_clip": "full",
     "stream": "full",
     "stream_ready": "full",
+    # the preload's head: the same audio the stream carries, first seconds
+    "stream_head": "full",
     # tagging is the one piece of the genre studio `full` carries
     "genre_label": "full",
     "genre_bulk_preview": "full",

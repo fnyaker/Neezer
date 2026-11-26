@@ -1173,8 +1173,9 @@ def main():
     )
     ap.add_argument(
         "--audio",
-        help="a WAV file archived as the first 12 tracks (ids[\"ids\"]), so /api/stream "
-        "serves them from disk with real byte ranges",
+        help="an audio file (a WAV, or a FLAC to bench `?start=` slices), archived "
+        "as the first 12 tracks (ids[\"ids\"]), so /api/stream serves them from "
+        "disk with real byte ranges",
     )
     ap.add_argument(
         "--audio-all",
@@ -1315,8 +1316,12 @@ def main():
         with app.app_context():
             for sng in ids["ids"]:
                 t = Track[dzids.track_uuid(sng)]
-                # The served type comes from the extension.
-                path = os.path.splitext(t.path)[0] + ".wav"
+                # The served type comes from the extension — the GIVEN file's, so
+                # a bench can archive a FLAC: a `?start=` slice is answered by
+                # re-encoding a FLAC (or copying an MP3/Ogg), while a WAV has no
+                # muxer for a pipe and answers 409.
+                ext = os.path.splitext(args.audio)[1].lower() or ".wav"
+                path = os.path.splitext(t.path)[0] + ext
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 shutil.copyfile(args.audio, path)
                 # It is an ARCHIVE now: the search's "on disk" rule reads this

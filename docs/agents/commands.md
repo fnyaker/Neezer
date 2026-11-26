@@ -115,6 +115,9 @@ cd webapp && node test/eq/run.mjs                    # the equalizer's saturatio
 cd webapp && node test/repeat/run.mjs               # repeat one / all on a 4 s track: an ARCHIVED file served by the real server (byte ranges,
                                                      # tools/perf_api.py --audio) and a live first-play stream, with the trim and the crossfade:
                                                      # every pass reaches its end, none jumps back from the middle, no dead air
+cd webapp && node test/prefetch/run.mjs             # the next track's preload on a 16 and a 64 KB/s link (CDP): the whole-file preload never
+                                                     # costs the playing track (≤ 1.10×), the HEAD case taps when the head has landed and measures
+                                                     # tap → sound, the hole at the hand-over and the stream requests; HEAD=1 runs the head case alone
 cd webapp && node test/skip/run.mjs                 # a crossfaded skip in a HIDDEN page whose timers are throttled (the phone behind a car
                                                      # radio): the next track must be heard at once, graph and direct paths
 cd webapp && node test/offline/run.mjs              # downloads kept by the Android app: an old Blob moved in byte for byte, played off

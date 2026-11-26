@@ -230,6 +230,20 @@ was not consumed to the end. A network hiccup used to cache the first half of a 
 whole track — a 15 kB "song", served for ever with a length and byte ranges, which no seek could
 get past.
 
+**`GET /api/stream/<id>/head` is a track's first seconds as a finished file** (`stream_head`,
+`_opus_generator(..., seconds=)`; the client side is in [playback.md](playback.md)). Fixed on
+purpose: **6 s, Opus 64**, cached as `head-<row uuid>-opus64-6.ogg`, ~48 KB on real music — one shape
+for every play and one cache entry, and the player's hand-over reads exactly that length. It is a
+COMPLETE file, so it carries `Content-Length` and `Accept-Ranges: bytes` (and answers a byte range
+with `206`) where a cold track's stream has neither; it is materialised with `cache.set` rather than
+`set_generated` so the FIRST answer already has them (48 KB in memory, one ffmpeg run, then it is a
+file on disk). Resolution is `stream`'s — a Deezer id or a row UUID, `@login_required`, ownership
+checked, junk ids 400 — and it never calls Deezer or downloads: a track that is not on disk answers
+**503 + `Retry-After: 30`** and starts no ffmpeg, because an Opus encode has to read its source to
+an end. The full preload that follows it (`/stream`, `X-NS-Background`) is what queues the archive,
+so a first pass has no head and a later one has. The route is not gated on the Deezer features
+(`DEEZER_FEATURE["stream_head"] = None`): it only reads a file already on disk.
+
 **libopus caps its bitrate PER CHANNEL: 256 kbit/s.** `OPUS_320` is therefore a valid request for a
 stereo source and a refused one for a mono source: on the image's ffmpeg 9.0.2 `-b:a 320k` on a mono
 input exits 234 with *"The bit rate 320000 bps is unsupported. Please choose a value between 500 and
