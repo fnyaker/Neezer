@@ -831,6 +831,22 @@ class Walker:
                 return True
         return False
 
+    def same_screen(self, dump: Dump, screen: Screen) -> bool:
+        """Is `dump` the screen `screen` names?
+
+        A renamed collision carries its hash in the label (§9.5:
+        « Recherche Neezer · 5f23cd6a ») while a dump only knows the plain title,
+        so comparing the two names alone made every collided screen unrestorable
+        — measured on run 45898606608: 5 screens `restore=failed`, 36 elements
+        `unreachable`, coverage 76.5%. The title AND the hash must agree.
+        """
+        if dump.name == screen.name:
+            return True
+        base, _, digest = screen.name.partition(" · ")
+        if dump.name != base:
+            return False
+        return bool(digest) and dump.hash == digest
+
     def goto(self, screen: Screen) -> bool:
         if self.current is screen:
             return True
@@ -841,7 +857,7 @@ class Walker:
                 self.adb.tap(x, y)
                 self.dump()
             dump = self.dump()
-            if dump.ok and dump.name == screen.name:
+            if dump.ok and self.same_screen(dump, screen):
                 self.current = screen
                 return True
         return False

@@ -743,6 +743,15 @@ par `BACK` (une fois après une navigation, jusqu'à 3 fois sinon) puis, en dern
 n'arrive pas, il est `unreachable` et compte **trouvé mais non cliqué** (`coverage=416/418 (99.5%)`
 reste honnête, §4.4). La règle du frère échantillonne 3 lignes sur ≥ 6 sœurs identiques (`duplicates=n`).
 
+Le **serveur de banc** de la chasse est le sien, pas celui de `release-signin.sh` : ce dernier
+arrête le sien en sortant (son `cleanup`, T1 le documente dans `release-journey.sh`), et une passe qui
+s'en contente n'explore que des coquilles hors ligne — mesuré au run 45898606608 : « Réessayer » sur
+Bibliothèque, « Les podcasts n'ont pas pu être chargés », et une rafale qui ne démarre aucune lecture.
+`explore.sh` démarre donc `perf-server.sh` (8 000 titres, `--covers`, TLS jetable) pour la durée de
+la chasse, garde `release-signin.sh` comme premier verdict (`release_tls_trusted=1`,
+`release_signin=1`), puis reconnecte l'app à SON serveur par l'écran de setup de T1 (`pm clear` puis
+adresse, certificat accepté à l'écran, `bench`/`Bench1`) ; le `trap` arrête le serveur et l'émulateur.
+
 Les trois scénarios du propriétaire sont en tête du rapport, avec leurs nombres :
 `skip_burst=ok taps=40 gap_ms=100 playing=1 title_changed=1 crash=0` (20 `Suivant` à 100 ms puis 20
 alternés, titre lu dans `dumpsys media_session` et horloge de position vérifiée sur deux dumps à

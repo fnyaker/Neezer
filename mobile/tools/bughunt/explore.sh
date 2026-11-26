@@ -99,17 +99,37 @@ fi
 mkdir -p "$out"
 note "preuves: $out"
 
-readonly started=$SECONDS
+# NOT `started`: `ui.sh`'s `await_text` declares `local started=$SECONDS`, and a
+# `local` over a READONLY global fails the whole function (measured on run
+# 45904029041: await_text returned 1 in 1.5 s and the sign-in aborted).
+readonly script_started=$SECONDS
 port=""
 if [[ "$serial" == emulator-* ]]; then
     port="${serial#emulator-}"
 fi
+
+# The bench server the HUNT talks to. `release-signin.sh` starts its own and
+# stops it on exit (its `cleanup`, T1's choice, documented in
+# `release-journey.sh`: every step after it runs offline), so a pass that relies
+# on it explores offline shells only — measured on run 45898606608:
+# « Réessayer » on Bibliothèque, « Les podcasts n'ont pas pu être chargés », and
+# a 「 Suivant 」 burst that never played a track. The hunt therefore keeps its
+# OWN server (the plan's 8 000-title bench, `--covers`) alive for its whole run,
+# and reconnects the app to it after the release sign-in has proved the artifact.
+bench_dir=""
+bench_state=""
+bench_port=""
+t1_done=0
 
 # `emu.sh` ne signale que le PID qu'il a écrit : l'arrêt ne peut pas tuer
 # l'émulateur d'un autre lot, et un `--no-start` n'arrête rien.
 # shellcheck disable=SC2329  # invoked through `trap cleanup EXIT`
 cleanup() {
     local code=$?
+    if [[ -n "$bench_state" ]]; then
+        NEEZER_PERF_STATE="$bench_state" "$here/../perf-server.sh" stop >/dev/null 2>&1 || true
+        [[ -z "$bench_dir" ]] || rm -rf "$bench_dir"
+    fi
     if [[ -n "$port" && "$start" == 1 ]]; then
         "$here/../emu.sh" stop --port "$port" >/dev/null 2>&1 || true
     fi
@@ -206,20 +226,74 @@ adb_dev install -r -g "$apk" 2>&1 | tail -2
 nz_launcher_component "$serial" | grep -qF 'fr.neezer.mobile/' ||
     { note "fr.neezer.mobile ne résout pas son lanceur après l'installation de $apk"; exit 1; }
 
-# --- la connexion (la même que T1) --------------------------------------------
+# --- la connexion (la même que T1), et le serveur qui reste ------------------
+
+bench_start() {
+    [[ -z "$bench_port" ]] || return 0
+    bench_dir="$(mktemp -d)"
+    bench_state="$bench_dir/perf"
+    step "le serveur de banc de la chasse (8 000 titres, TLS jetable)"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=neezer-bughunt" \
+        -addext "subjectAltName=IP:10.0.2.2,IP:127.0.0.1" \
+        -keyout "$bench_dir/key.pem" -out "$bench_dir/cert.pem" >/dev/null 2>&1
+    local server_out
+    server_out="$(NEEZER_PERF_STATE="$bench_state" "$here/../perf-server.sh" start \
+        --covers "$(nz_repo_root)/tests/assets/cover.jpg" \
+        --tls-cert "$bench_dir/cert.pem" --tls-key "$bench_dir/key.pem")" || return 1
+    bench_port="$(sed -n 's/^port=\([0-9]*\) .*/\1/p' <<<"$server_out")"
+    [[ -n "$bench_port" ]] || { note "le serveur de banc n'a pas de port: $server_out"; return 1; }
+    printf 'bench_server=10.0.2.2:%s\n' "$bench_port"
+}
+
+# The setup flow release-signin.sh runs, against the server this script owns:
+# address, certificate check OFF (the bench's leaf is self-signed and accepted on
+# screen), the account the bench fixture publishes (bench / Bench1). The tree is
+# T1's (`type_into`, `tap_text`, `await_text`), not a second walker.
+own_signin() {
+    # The server FIRST: `bench_port` is only known once it has started
+    # (measured on run 45905460989: the address was typed as "10.0.2.2:").
+    bench_start || return 1
+    local addr="10.0.2.2:${bench_port}"
+    # `ui_package`: T1's `mobile/tools/ui.sh`, sourced above (shellcheck cannot
+    # follow the `../ui.sh` path, the `source=` hint names `mobile/tools/ui.sh`).
+    # shellcheck disable=SC2154
+    adb_dev shell pm clear "$ui_package" >/dev/null 2>&1 || true
+    adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null 2>&1 || true
+    await_text "Adresse du serveur" 30 || { note "l'écran serveur ne peint pas"; return 1; }
+    type_into 1 "$addr" || return 1
+    tap_text "Vérifier le certificat" || { note "aucun commutateur « Vérifier le certificat »"; return 1; }
+    tap_text "Vérifier le serveur" || { note "aucun bouton « Vérifier le serveur »"; return 1; }
+    await_text "Certificat auto-signé" 30 || { note "pas de carte de certificat pour $addr"; return 1; }
+    tap_text "Accepter ce certificat" || { note "aucun « Accepter ce certificat »"; return 1; }
+    await_text "Ton compte" 30 || { note "le formulaire de compte ne s'ouvre pas"; return 1; }
+    type_into 1 bench || return 1
+    type_into 2 Bench1 secret || return 1
+    tap_text "Se connecter" || { note "aucun bouton « Se connecter »"; return 1; }
+    await_text "Accueil Neezer" 30 || { note "l'accueil ne peint pas après la connexion"; return 1; }
+    printf 'signin=1 server=%s\n' "$addr"
+}
 
 signin() {
     step "connexion release"
     adb_dev logcat -c >/dev/null 2>&1 || true
     local log="$out/signin.log" ok=1
-    "$here/../release-signin.sh" --serial "$serial" >"$log" 2>&1 || ok=0
-    grep -E '^release_(tls_trusted|signin)=' "$log" || true
-    if (( ok == 0 )); then
-        note "la connexion release a ÉCHOUÉ : c'est un échec de démarrage, pas un résultat de chasse (§9.11)"
-        sed 's/^/  /' "$log" >&2
-        return 1
+    if [[ "$t1_done" == 0 ]]; then
+        # T1's own verdicts, once: they prove the RELEASE artifact signs in
+        # (`release_tls_trusted=1`, `release_signin=1`). Its bench server dies
+        # with it, so the app is then re-pointed at ours.
+        "$here/../release-signin.sh" --serial "$serial" >"$log" 2>&1 || ok=0
+        grep -E '^release_(tls_trusted|signin)=' "$log" || true
+        t1_done=1
+        if (( ok == 0 )); then
+            note "la connexion release a ÉCHOUÉ : c'est un échec de démarrage, pas un résultat de chasse (§9.11)"
+            sed 's/^/  /' "$log" >&2
+            return 1
+        fi
     fi
-    printf 'signin=1\n'
+    own_signin || {
+        note "la connexion au serveur de la chasse a échoué (pas un résultat de chasse, §9.11)"
+        return 1
+    }
 }
 
 # --- le marcheur ---------------------------------------------------------------
@@ -258,7 +332,7 @@ if [[ -n "$only" ]]; then
     # pas de scénario — c'est le seul mode qui ne repart pas de zéro.
     explore --only "$only" || status=$?
     step "résumé"
-    printf 'bughunt_seconds=%s\n' "$((SECONDS - started))"
+    printf 'bughunt_seconds=%s\n' "$((SECONDS - script_started))"
     [[ -f "$out/run.txt" ]] && sed 's/^/  /' "$out/run.txt"
     printf 'bughunt_out=%s\n' "$out"
     exit "$status"
@@ -301,7 +375,7 @@ case "$scenario" in
 esac
 
 step "résumé"
-printf 'bughunt_seconds=%s\n' "$((SECONDS - started))"
+printf 'bughunt_seconds=%s\n' "$((SECONDS - script_started))"
 [[ -f "$out/run.txt" ]] && sed 's/^/  /' "$out/run.txt"
 printf 'bughunt_out=%s\n' "$out"
 exit "$status"
