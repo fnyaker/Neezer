@@ -5995,14 +5995,16 @@ def stream(deezer_id):
             # runs on its own thread and is finalised when it ends, whatever
             # this listener does (see archive.open_live_stream). A listener
             # that leaves only stops the feed: the archive still completes, and
-            # an orphan is given back to the background queue after a grace.
+            # an orphan is given back to the background queue at BULK once the
+            # reuse window (1 s) has passed.
             pf = getattr(current_app, "deezer_prefetch", None)
-            # They were listening to it and the connection dropped: finish
-            # the archive ahead of anything bulk, not behind it.
+            # The listener left: nobody is waiting for these bytes, so the rest
+            # of the file goes behind everything (BULK). A skip must never
+            # compete with the track the person moved on to.
             from ..deezer.workload import Priority as _P
 
             on_abort = (
-                (lambda did=deezer_id: pf.download_ids([did], priority=_P.PREFETCH))
+                (lambda did=deezer_id: pf.download_ids([did], priority=_P.BULK))
                 if pf
                 else None
             )

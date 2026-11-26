@@ -520,11 +520,14 @@ that outlives the session.
   connection instead of 2**. The file is published (tagged COPY, atomic rename, row finalised) as
   soon as the download ends; a reader keeps reading the raw `.part` and so never sees a file being
   retagged, and that `.part` goes with its last reader. When the last listener leaves the download
-  keeps full speed for **1.5 s** (the player's chase reads `/ready` at 600 ms then every second, so
-  a seek reload joins it and clears the pace), then hands back all but **~160 KB/s** (measured
-  128 KB/s) for the rest of a **10 s** grace, then stops and `on_abort` gives the rest to the
-  background queue at PREFETCH — an orphan must not take the link from the track the person moved
-  on to. A cold Opus request is that same live stream piped through ffmpeg as it downloads
+  keeps full speed for **1.0 s** (the player's chase reads `/ready` at 600 ms then every second, so
+  a seek reload joins it and clears the clock: measured **0.2 ms** to the first byte on a `.part`
+  400 ms old, 1 producer and 1 Deezer resolve), then stops at its next chunk and `on_abort` gives
+  the rest to the background queue at **BULK** — nobody is waiting for those bytes. There is no
+  paced grace any more: skipping five cold tracks leaves **nothing** behind (measured: all five
+  producers gone **1.02 s** after the last skip, no `.part`, five rows queued BULK). An orphan must
+  never take the link from the track the person moved on to. A cold Opus request is that same live
+  stream piped through ffmpeg as it downloads
   (`webui._opus_live_generator`: a feeder thread owns the source, 100 ms Ogg pages, first audio
   0.26 s at 512 KB/s where it used to wait for the whole FLAC);
   `api/media.py::_ensure_deezer_archived` calls `ensure_archived` outright; podcast episodes archive
@@ -573,8 +576,10 @@ user's own requests for thirty seconds behind work they never asked for:
 - **Download slots.** `workload.Priority` orders one queue serving three urgencies — `USER` (0),
   `PREFETCH` (5), `BULK` (9, the default). The client says **why** it wants a track (`why` on
   `/api/download`), never how urgent it is, and an unknown reason is bulk, so nothing can claim the
-  front by accident. Bulk workers also `quiet_wait` while a foreground archive is in flight (one
-  link, one Deezer session, one disk head).
+  front by accident. Everything below a person's own tap — `BULK` **and** `PREFETCH` — also
+  `quiet_wait` while a foreground archive is in flight (one link, one Deezer session, one disk
+  head): the track they are hearing is (a), the next track's preload is only (b). At rest the
+  workers still run flat out, because `quiet_wait` returns at once when nobody is waiting.
 - **CPU.** `workload.renice` puts the archive workers and every batch job behind everything else,
   and `workload.cpu_workers` sizes a library-wide job from the machine (half its cores) rather than
   asking the operator.

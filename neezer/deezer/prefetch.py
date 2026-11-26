@@ -206,11 +206,14 @@ class DeezerPrefetcher:
             try:
                 if item is None:
                     return
-                # Bulk work stands down while somebody is waiting on a download
-                # of their own: they share one link, one Deezer session and one
-                # (often mechanical) disk. Bounded, so a wedged foreground
-                # download slows this queue rather than stopping it.
-                if priority > Priority.PREFETCH:
+                # Everything below a person's own tap stands down while somebody
+                # is waiting on a download of their own — BULK and PREFETCH both:
+                # they share one link, one Deezer session and one (often
+                # mechanical) disk, and the track about to play is (b), the
+                # tapped one is (a). Bounded, so a wedged foreground download
+                # slows this queue rather than stopping it; at rest this worker
+                # still runs flat out (quiet_wait returns at once).
+                if priority >= Priority.PREFETCH:
                     quiet_wait(5.0)
                 with deezer_lane(priority):
                     for attempt in range(_MAX_OUTAGE_RETRIES + 1):
