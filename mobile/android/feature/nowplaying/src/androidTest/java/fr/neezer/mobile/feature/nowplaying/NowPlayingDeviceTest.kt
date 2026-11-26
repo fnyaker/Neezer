@@ -384,6 +384,36 @@ class NowPlayingDeviceTest {
         // never landed, and the sheet stayed at 40 % — which is also why the frame
         // now settles a real cancel back).
         val restTop: Float = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().top.value
+        val sheetDp: Float = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().let {
+            it.bottom.value - it.top.value
+        }
+        // A. THE FOLLOW, on its own gesture: down and 40 % of travel, then nothing.
+        rule.onNodeWithTag(SHEET_TAG).performTouchInput {
+            down(Offset(centerX, top + 40.dp.toPx()))
+            repeat(5) {
+                advanceEventTime(800)
+                moveBy(Offset(0f, height * 0.08f))
+            }
+        }
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        val followed = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().top.value - restTop
+        println("MEASURE p2 device follow: ${"%.1f".format(followed)} dp of ${"%.1f".format(sheetDp)} dp")
+        assertTrue(
+            "the sheet follows the finger on the device (moved $followed dp of $sheetDp dp, " +
+                "rest $restTop dp)",
+            followed > sheetDp * 0.28f,
+        )
+        // The block disposed the pointer: the frame must bring the sheet back, and
+        // that IS the cancel rule (S8) measured here.
+        awaitStep("an interrupted drag returns the sheet") {
+            val top = runCatching {
+                rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().top.value
+            }.getOrDefault(Float.MAX_VALUE)
+            top <= restTop + 1f
+        }
+        assertTrue("an interrupted drag never decides", NowPlayingState.open)
+
+        // B. THE DISMISSAL, one whole gesture in one block (`up()` included).
         rule.onNodeWithTag(SHEET_TAG).performTouchInput {
             down(Offset(centerX, top + 40.dp.toPx()))
             repeat(5) {
@@ -391,10 +421,6 @@ class NowPlayingDeviceTest {
                 moveBy(Offset(0f, height * 0.08f))
             }
             up()
-        }
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
-        val sheetDp: Float = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().let {
-            it.bottom.value - it.top.value
         }
         awaitStep(
             "the drag closed the player (from $restTop dp, sheet $sheetDp dp)",
