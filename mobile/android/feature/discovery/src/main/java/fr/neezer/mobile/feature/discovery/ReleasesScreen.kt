@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,6 +24,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -41,6 +43,7 @@ import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import uniffi.nz_ffi.ReleaseGroupData
@@ -80,27 +83,37 @@ fun ReleasesScreen(
     // MB14's note): every Text without an explicit colour would be invisible on
     // Encre. One provider per screen fixes the whole tree.
     CompositionLocalProvider(LocalContentColor provides colors.tx) {
-    when (val screen = state.screen) {
-        is ScreenState.Loading -> SkeletonList(modifier)
-        is ScreenState.Failed -> Box(modifier.padding(NzSpacing.l)) {
-            LoadFailed(cause = screen.cause, onRetry = { screen.retry() })
+    // The feed's phase replaces in place (M7): skeleton → shelves, failure →
+    // retry, the empty note. The page's lead and bar are part of the ready
+    // phase, so they enter with it.
+    NzSwap(
+        targetState = releasesPhase(state),
+        modifier = modifier,
+        label = "nouveautes",
+    ) { phase ->
+    when (phase) {
+        DISCOVERY_LOADING -> SkeletonList(Modifier.testTag(DISCOVERY_LOADING_TAG))
+        DISCOVERY_FAILED -> {
+            val failed = state.screen as? ScreenState.Failed
+            Box(Modifier.padding(NzSpacing.l)) {
+                LoadFailed(cause = failed?.cause.orEmpty(), onRetry = { failed?.retry?.invoke() })
+            }
         }
 
-        is ScreenState.Ready -> {
-            val data = screen.data
-            if (data.empty) {
-                Box(modifier.padding(NzSpacing.l)) {
-                    EmptyState(
-                        title = DiscoveryCopy.NOTHING_NEW_TITLE,
-                        body = DiscoveryCopy.NOTHING_NEW_BODY,
-                        glyph = NzGlyph.Sparkles,
-                        actionLabel = "Explorer",
-                        onAction = { actions.openShelf("discovery") },
-                    )
-                }
-            } else {
+        DISCOVERY_EMPTY -> Box(Modifier.padding(NzSpacing.l)) {
+            EmptyState(
+                title = DiscoveryCopy.NOTHING_NEW_TITLE,
+                body = DiscoveryCopy.NOTHING_NEW_BODY,
+                glyph = NzGlyph.Sparkles,
+                actionLabel = "Explorer",
+                onAction = { actions.openShelf("discovery") },
+            )
+        }
+
+        else -> {
+            val data = (state.screen as? ScreenState.Ready)?.data ?: return@NzSwap
             LazyColumn(
-                modifier = modifier,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     start = NzSpacing.pageX,
                     end = NzSpacing.pageX,
@@ -200,6 +213,24 @@ fun ReleasesScreen(
     }
     }
 }
+
+/**
+ * The feed's four phases, as the [NzSwap] target: loading, the cause, the empty
+ * note (a payload with nothing in it) and the shelves.
+ */
+internal fun releasesPhase(state: ReleasesModel.State): String = when (val screen = state.screen) {
+    is ScreenState.Loading -> DISCOVERY_LOADING
+    is ScreenState.Failed -> DISCOVERY_FAILED
+    is ScreenState.Ready -> if (screen.data.empty) DISCOVERY_EMPTY else DISCOVERY_READY
+}
+
+internal const val DISCOVERY_LOADING = "chargement"
+internal const val DISCOVERY_FAILED = "echec"
+internal const val DISCOVERY_EMPTY = "vide"
+internal const val DISCOVERY_READY = "pret"
+
+/** The feed's loading skeleton, for the phase test. */
+internal const val DISCOVERY_LOADING_TAG = "nouveautes-chargement"
 
 /** "2 nouvelles sorties" — the page's own pill, not a badge on a sleeve. */
 @Composable

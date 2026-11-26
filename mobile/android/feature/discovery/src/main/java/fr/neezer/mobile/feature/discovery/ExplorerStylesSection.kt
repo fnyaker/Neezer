@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -48,6 +49,8 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzSheet
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
+import fr.neezer.mobile.designsystem.NzAppear
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzGrooveFor
 import kotlinx.coroutines.delay
@@ -139,39 +142,47 @@ fun ExplorerPreview(
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
         CompositionLocalProvider(LocalContentColor provides Sillon.colors.tx) {
         ExplorerHead(hasTiles = state.tiles.isNotEmpty(), onAllStations = onAllStations)
-        when (val screen = state.screen) {
-            is ScreenState.Loading -> TilesSkeleton()
-            is ScreenState.Failed -> LoadFailed(
-                cause = screen.cause,
-                onRetry = onRetry,
-                title = "Impossible de charger vos styles",
-            )
-
-            is ScreenState.Ready -> {
-                if (state.tiles.isEmpty()) {
-                    Text(
-                        if (screen.data.source == "none") {
-                            "Votre historique d'écoute est encore vide : les styles que vous écoutez le plus apparaîtront ici. « Toutes les stations » lance un genre sans historique."
-                        } else {
-                            "Aucun style analysé pour l'instant : « Toutes les stations » en propose un."
-                        },
-                        style = Sillon.type.bodySmall,
-                        color = Sillon.colors.dim,
-                    )
-                } else {
-                    TileGrid(
-                        state = state,
-                        onOpen = onOpen,
-                        onStation = onStation,
-                    )
-                    if (state.stale) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-                            Text(
-                                "Liste enregistrée sur cet appareil — l'actualisation a échoué.",
-                                style = Sillon.type.bodySmall,
-                                color = Sillon.colors.dim,
-                            )
-                            NzButton(text = "Réessayer", kind = NzButtonKind.Ghost, onClick = onRetry)
+        // The tile phase replaces in place (M7): the skeleton, the cause, the
+        // empty note and the grid. The head stays outside (it is the section's
+        // title, always painted).
+        NzSwap(targetState = explorerPhase(state), label = "styles") { phase ->
+            Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
+                when (phase) {
+                    DISCOVERY_LOADING -> TilesSkeleton()
+                    DISCOVERY_FAILED -> {
+                        val failed = state.screen as? ScreenState.Failed
+                        LoadFailed(
+                            cause = failed?.cause.orEmpty(),
+                            onRetry = onRetry,
+                            title = "Impossible de charger vos styles",
+                        )
+                    }
+                    DISCOVERY_EMPTY -> NzAppear(visible = true) {
+                        Text(
+                            if (state.data?.source == "none") {
+                                "Votre historique d'écoute est encore vide : les styles que vous écoutez le plus apparaîtront ici. « Toutes les stations » lance un genre sans historique."
+                            } else {
+                                "Aucun style analysé pour l'instant : « Toutes les stations » en propose un."
+                            },
+                            style = Sillon.type.bodySmall,
+                            color = Sillon.colors.dim,
+                        )
+                    }
+                    else -> {
+                        TileGrid(
+                            state = state,
+                            onOpen = onOpen,
+                            onStation = onStation,
+                        )
+                        if (state.stale) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+                                Text(
+                                    "Liste enregistrée sur cet appareil — l'actualisation a échoué.",
+                                    style = Sillon.type.bodySmall,
+                                    color = Sillon.colors.dim,
+                                )
+                                NzButton(text = "Réessayer", kind = NzButtonKind.Ghost, onClick = onRetry)
+                            }
                         }
                     }
                 }
@@ -180,6 +191,23 @@ fun ExplorerPreview(
         }
     }
 }
+
+/** The tiles' four phases, as the [NzSwap] target. */
+internal fun explorerPhase(state: ExplorerModel.State): String = when (val screen = state.screen) {
+    is ScreenState.Loading -> DISCOVERY_LOADING
+    is ScreenState.Failed -> DISCOVERY_FAILED
+    is ScreenState.Ready -> if (state.tiles.isEmpty()) DISCOVERY_EMPTY else DISCOVERY_READY
+}
+
+/** The stations sheet's four phases (its own `allRows` read). */
+private fun stationsPhase(state: ExplorerModel.State): String = when (val rows = state.allRows) {
+    is ScreenState.Loading -> DISCOVERY_LOADING
+    is ScreenState.Failed -> DISCOVERY_FAILED
+    is ScreenState.Ready -> if (state.shownStations.isEmpty()) DISCOVERY_EMPTY else DISCOVERY_READY
+}
+
+/** The tiles' loading skeleton, for the phase test. */
+internal const val EXPLORER_LOADING_TAG = "styles-chargement"
 
 @Composable
 private fun ExplorerHead(hasTiles: Boolean, onAllStations: () -> Unit) {
@@ -451,44 +479,50 @@ private fun StationsSheet(model: ExplorerModel, state: ExplorerModel.State) {
                 onQuery = model::searchStations,
                 placeholder = "Chercher un style",
             )
-            when (val rows = state.allRows) {
-                is ScreenState.Loading -> Text("Chargement des stations…", style = type.bodySmall, color = colors.dim)
-                is ScreenState.Failed -> {
-                    Text("Impossible de charger les stations (${rows.cause}).", style = type.body)
-                    NzButton(text = "Réessayer", kind = NzButtonKind.Ghost, onClick = model::loadStations)
-                }
+            // The station list's phase replaces in place (M7), like the tiles.
+            NzSwap(targetState = stationsPhase(state), label = "stations") { phase ->
+                Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+                    when (phase) {
+                        DISCOVERY_LOADING -> Text("Chargement des stations…", style = type.bodySmall, color = colors.dim)
+                        DISCOVERY_FAILED -> {
+                            val failed = state.allRows as? ScreenState.Failed
+                            Text("Impossible de charger les stations (${failed?.cause.orEmpty()}).", style = type.body)
+                            NzButton(text = "Réessayer", kind = NzButtonKind.Ghost, onClick = model::loadStations)
+                        }
 
-                is ScreenState.Ready -> {
-                    val shown: List<StationRowData> = state.shownStations
-                    if (shown.isEmpty()) {
-                        Text(
-                            if (state.allQuery.isBlank()) {
-                                "Aucun style analysé ne correspond à votre bibliothèque."
-                            } else {
-                                "Aucun style analysé ne correspond à cette recherche."
-                            },
-                            style = type.body,
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.heightIn(max = 360.dp),
-                            verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
-                        ) {
-                            items(shown, key = { it.name }) { row ->
-                                StationRowView(
-                                    row = row,
-                                    busy = state.stationBusy == row.name,
-                                    onPlay = { model.startStation(row.name, fromSheet = true) },
+                        DISCOVERY_EMPTY -> NzAppear(visible = true) {
+                            Text(
+                                if (state.allQuery.isBlank()) {
+                                    "Aucun style analysé ne correspond à votre bibliothèque."
+                                } else {
+                                    "Aucun style analysé ne correspond à cette recherche."
+                                },
+                                style = type.body,
+                            )
+                        }
+
+                        else -> {
+                            val shown: List<StationRowData> = state.shownStations
+                            LazyColumn(
+                                modifier = Modifier.heightIn(max = 360.dp),
+                                verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+                            ) {
+                                items(shown, key = { it.name }) { row ->
+                                    StationRowView(
+                                        row = row,
+                                        busy = state.stationBusy == row.name,
+                                        onPlay = { model.startStation(row.name, fromSheet = true) },
+                                    )
+                                }
+                            }
+                            if (state.allRows is ScreenState.Ready && state.allRows.stale) {
+                                Text(
+                                    "Liste gardée sur cet appareil — l'actualisation a échoué.",
+                                    style = type.bodySmall,
+                                    color = colors.dim,
                                 )
                             }
                         }
-                    }
-                    if (rows.stale) {
-                        Text(
-                            "Liste gardée sur cet appareil — l'actualisation a échoué.",
-                            style = type.bodySmall,
-                            color = colors.dim,
-                        )
                     }
                 }
             }
@@ -527,7 +561,10 @@ private fun StationRowView(row: StationRowData, busy: Boolean, onPlay: () -> Uni
 @Composable
 private fun TilesSkeleton() {
     val colors = Sillon.colors
-    Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+    Column(
+        modifier = Modifier.testTag(EXPLORER_LOADING_TAG),
+        verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
+    ) {
         repeat(3) {
             Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
                 repeat(2) {
