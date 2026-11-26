@@ -382,6 +382,11 @@ diagnose_download() {
     fi
     printf 'the server answered (last 25 requests):\n' >&2
     grep -E '"(GET|POST) /' "$access_log" | tail -n 25 >&2 || true
+    # The tail of the server's OWN log, tracebacks included: a `500` printed as
+    # an HTML page to the client leaves its cause here, and the request line for
+    # a stream that raised is logged with its status.
+    printf 'the server log ends with (120 lines):\n' >&2
+    tail -n 120 "$access_log" >&2 || true
     if tap_text "Réglages" && await_text "Chercher un réglage" 10 &&
         tap_text "Téléchargements" && await_text "Qualité de téléchargement par défaut" 10; then
         # The CAUSE of each failure is a sentence at the bottom of the queue card

@@ -934,6 +934,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The bench server TRANSCODES: a download asks `q=OPUS_320`, and the answer
+      # is ffmpeg's. Without it the route answers `500` — measured on dispatch
+      # 45762930858, where both titles' rows read « erreur du serveur (HTTP 500) »
+      # and no byte was written — and the runner image is not a contract
+      # (`docs/agents/mobile.md`; desktop.yaml's own note on `ffmpeg`). The same
+      # binary the desktop's D5 tests need.
+      - name: The bench server's ffmpeg
+        uses: ./.github/actions/cached-apt
+        with:
+          line: mobile
+          packages: ffmpeg
+
       - name: Install the bench server
         run: pip install -e .
 
