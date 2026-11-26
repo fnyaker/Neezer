@@ -121,7 +121,16 @@ class ShellSmokeTest {
     @Test
     fun thePlayerSitsUnderTheStatusBarAndCoversTheBar() {
         try {
+            // **L'horloge est tenue, et ce n'est pas une précaution de style :**
+            // le lecteur lit la position du moteur à CHAQUE image tant qu'il est
+            // visible (`PlayerColumn`'s frame loop). Avec la vraie horloge, la
+            // composition n'est jamais idle et `waitForIdle()` lève
+            // `ComposeNotIdleException` — mesuré sur ce cas (run 45835289066). On
+            // avance donc les images de l'entrée du panneau (son ressort, ~600 ms)
+            // puis on lit les bornes, horloge arrêtée.
+            rule.mainClock.autoAdvance = false
             NowPlayingState.show()
+            rule.mainClock.advanceTimeBy(1_500)
             rule.waitForIdle()
             val surface = rule.onNodeWithContentDescription("Lecteur plein écran", substring = true)
                 .getUnclippedBoundsInRoot()
@@ -154,8 +163,12 @@ class ShellSmokeTest {
             )
         } finally {
             // L'état du lecteur est un objet du process : un test qui le laisse
-            // ouvert ferait échouer les autres cas de cette classe.
+            // ouvert ferait échouer les autres cas de cette classe. La sortie est
+            // avancée horloge tenue (le panneau doit finir de descendre pour que
+            // la boucle d'images s'arrête), puis l'horloge repart.
             NowPlayingState.hide()
+            rule.mainClock.advanceTimeBy(1_500)
+            rule.mainClock.autoAdvance = true
         }
     }
 }
