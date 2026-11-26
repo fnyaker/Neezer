@@ -1167,7 +1167,10 @@ def scenario_settings(walker: Walker) -> dict:
     blanks = 0
     crash: list[str] = []
     visited: set[str] = set()
-    deadline = time.monotonic() + 8 * 60
+    # 4 min: the scenario is a sample of the section list, not the pass. The
+    # job's 45 minutes hold boot + sign-in + three scenarios + a 25-minute pass
+    # + the session and its second sign-in.
+    deadline = time.monotonic() + 4 * 60
     section: str | None = None
     scrolls = 0
     while time.monotonic() < deadline:
