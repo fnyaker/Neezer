@@ -1,5 +1,6 @@
 package fr.neezer.mobile.designsystem
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -96,7 +97,7 @@ fun NzButton(
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed && enabled) 0.98f else 1f,
-        animationSpec = motion.instant(),
+        animationSpec = motion.displace(),
         label = "nz-button-press",
     )
     // A disabled control is a WELL, not a faded surface: half-transparent lemon
@@ -166,7 +167,7 @@ fun NzIconButton(
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed && enabled) 0.92f else 1f,
-        animationSpec = motion.instant(),
+        animationSpec = motion.displace(),
         label = "nz-icon-button-press",
     )
     val ink = when {
@@ -212,11 +213,19 @@ fun NzChip(
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed && enabled) 0.97f else 1f,
-        animationSpec = motion.instant(),
+        animationSpec = motion.displace(),
         label = "nz-chip-press",
     )
-    val surface = if (selected) colors.ac else colors.s2
-    val ink = if (selected) colors.onac else colors.tx
+    val surface by animateColorAsState(
+        targetValue = if (selected) colors.ac else colors.s2,
+        animationSpec = motion.tween(NzDur.Instant, NzEase.Standard),
+        label = "nz-chip-fill",
+    )
+    val ink by animateColorAsState(
+        targetValue = if (selected) colors.onac else colors.tx,
+        animationSpec = motion.tween(NzDur.Instant, NzEase.Standard),
+        label = "nz-chip-ink",
+    )
     Row(
         modifier = modifier
             .scale(scale)
@@ -255,6 +264,7 @@ fun NzSegmented(
     modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
+    val motion = Sillon.motion
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(NzRadius.chip))
@@ -265,19 +275,29 @@ fun NzSegmented(
     ) {
         options.forEachIndexed { index, option ->
             val selected = index == selectedIndex
+            val fill by animateColorAsState(
+                targetValue = if (selected) colors.ac else Color.Transparent,
+                animationSpec = motion.tween(NzDur.Instant, NzEase.Standard),
+                label = "nz-segment-fill-$index",
+            )
+            val ink by animateColorAsState(
+                targetValue = if (selected) colors.onac else colors.dim,
+                animationSpec = motion.tween(NzDur.Instant, NzEase.Standard),
+                label = "nz-segment-ink-$index",
+            )
             androidx.compose.foundation.layout.Box(
                 modifier = Modifier
                     .weight(1f)
                     .sizeIn(minHeight = NzMinTouchTarget)
                     .clip(RoundedCornerShape(NzRadius.chip))
-                    .background(if (selected) colors.ac else Color.Transparent)
+                    .background(fill)
                     .clickable(role = Role.Tab) { onSelect(index) },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = option,
                     style = Sillon.type.label,
-                    color = if (selected) colors.onac else colors.dim,
+                    color = ink,
                     modifier = Modifier.padding(horizontal = NzSpacing.m, vertical = NzSpacing.s),
                 )
             }
@@ -312,7 +332,7 @@ fun NzSwitch(
     val travel = trackWidth - knob - inset * 2
     val offset by animateFloatAsState(
         targetValue = if (checked) travel.value else 0f,
-        animationSpec = motion.instant(),
+        animationSpec = motion.displace(),
         label = "nz-switch-thumb",
     )
     val track = if (checked) colors.btn else colors.s2

@@ -95,4 +95,56 @@ class MotionTest {
         assertTrue(NzDur.ScreenOut < NzDur.Screen)
         assertTrue(NzDur.Fast < NzDur.Base)
     }
+
+    @Test
+    fun displacedThingsStopUnderReducedAndEco() {
+        val full = NzMotion(NzMotionLevel.Full)
+        assertEquals("a press lives 90 ms at Full", NzDur.Instant, duration(full.displace()))
+        assertEquals(
+            "M14: a displacement is gone under reduced motion (0 ms, not a short walk)",
+            0,
+            duration(NzMotion(NzMotionLevel.Reduced).displace()),
+        )
+        assertEquals(0, duration(NzMotion(NzMotionLevel.Off).displace()))
+        assertEquals("a reorder lives 200 ms at Full", NzDur.Base, duration(full.displaceOffset()))
+        assertEquals(
+            "M14: a reorder is a displacement too",
+            0,
+            duration(NzMotion(NzMotionLevel.Reduced).displaceOffset()),
+        )
+        assertEquals(0, duration(NzMotion(NzMotionLevel.Off).displaceOffset()))
+    }
+
+    @Test
+    fun screenOutIsTheExitHalfOfTheTable() {
+        assertEquals(240, duration(NzMotion(NzMotionLevel.Full).screenOut()))
+        assertEquals(NzDur.ReducedCap, duration(NzMotion(NzMotionLevel.Reduced).screenOut()))
+        assertEquals(0, duration(NzMotion(NzMotionLevel.Off).screenOut()))
+    }
+
+    @Test
+    fun itemSpecsAreTheTableWithTheGuard() {
+        val full = NzMotion(NzMotionLevel.Full).itemSpecs()
+        assertEquals("M4: a windowed row never animates its mount", null, full.fadeIn)
+        assertEquals("M5: a row moves on the 200 ms standard walk", NzDur.Base, duration(full.placement))
+        assertEquals(NzEase.Standard, (full.placement as TweenSpec<*>).easing)
+        assertEquals("M5: the explicit removal keeps the 140 ms exit", NzDur.Fast, duration(full.fadeOut))
+
+        val reduced = NzMotion(NzMotionLevel.Reduced).itemSpecs()
+        assertEquals(null, reduced.fadeIn)
+        assertEquals("M14: a move is a displacement, so it is gone", null, reduced.placement)
+        assertEquals("M14 keeps opacity: the removal still fades", NzDur.Fast, duration(reduced.fadeOut))
+
+        val eco = NzMotion(NzMotionLevel.Off).itemSpecs()
+        assertEquals(null, eco.fadeIn)
+        assertEquals(null, eco.placement)
+        assertEquals("M13: eco removes the fade too", null, eco.fadeOut)
+    }
+
+    @Test
+    fun pressScaleKeepsMeaningWhatItsKdocSays() {
+        assertEquals(NzDur.Instant, duration(NzMotion(NzMotionLevel.Full).pressScale()))
+        assertEquals(0, duration(NzMotion(NzMotionLevel.Reduced).pressScale()))
+        assertEquals(0, duration(NzMotion(NzMotionLevel.Off).pressScale()))
+    }
 }
