@@ -388,8 +388,12 @@ class Dump:
 
     @property
     def hash(self) -> str:
-        joined = "\u0001".join(w.word for w in self.app_wraps if w.word)[:20]
-        return hashlib.sha1(joined.encode("utf-8", "replace")).hexdigest()[:8]
+        """The hash of the FIRST 20 texts (§9.5), not of the first 20 characters:
+        truncating the joined string hashed every screen on its own title, so two
+        screens with the same header read as one and the label collision never
+        fired."""
+        words = [w.word for w in self.app_wraps if w.word][:20]
+        return hashlib.sha1("\u0001".join(words).encode("utf-8", "replace")).hexdigest()[:8]
 
     def view(self) -> dict:
         return {
