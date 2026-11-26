@@ -49,6 +49,7 @@ import fr.neezer.mobile.designsystem.NzChip
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import kotlinx.coroutines.delay
 import uniffi.nz_ffi.RecapSlideData
@@ -103,64 +104,78 @@ fun RecapScreen(
             .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
-        when {
-            state.noYears -> EmptyState(
-                title = DiscoveryCopy.RÉCAP_NO_YEARS,
-                body = "Écoute quelques titres et reviens : ton année se raconte ici.",
-                glyph = NzGlyph.Music,
-            )
+        // The story's PAGE changes phase (no year, a failure, the skeleton, the
+        // empty year, the deck) with one in-place swap (M7). The card change
+        // inside the deck is the story's own pager, untouched.
+        NzSwap(targetState = recapPhase(state), label = "recap") { phase ->
+            Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
+                when (phase) {
+                    RECAP_NO_YEARS -> EmptyState(
+                        title = DiscoveryCopy.RÉCAP_NO_YEARS,
+                        body = "Écoute quelques titres et reviens : ton année se raconte ici.",
+                        glyph = NzGlyph.Music,
+                    )
 
-            state.failure is RecapModel.Failure.Invalid -> EmptyState(
-                title = DiscoveryCopy.RÉCAP_INVALID_TITLE,
-                body = DiscoveryCopy.RÉCAP_INVALID_BODY,
-                glyph = NzGlyph.Alert,
-            )
+                    RECAP_INVALID -> EmptyState(
+                        title = DiscoveryCopy.RÉCAP_INVALID_TITLE,
+                        body = DiscoveryCopy.RÉCAP_INVALID_BODY,
+                        glyph = NzGlyph.Alert,
+                    )
 
-            state.failure is RecapModel.Failure.Offline -> EmptyState(
-                title = DiscoveryCopy.RÉCAP_OFFLINE_TITLE,
-                body = "Ton récap est privé et n'est pas gardé sur l'appareil : il faut le serveur pour le lire.",
-                glyph = NzGlyph.CloudOff,
-                actionLabel = "Réessayer",
-                onAction = actions.retry,
-            )
+                    RECAP_OFFLINE -> EmptyState(
+                        title = DiscoveryCopy.RÉCAP_OFFLINE_TITLE,
+                        body = "Ton récap est privé et n'est pas gardé sur l'appareil : il faut le serveur pour le lire.",
+                        glyph = NzGlyph.CloudOff,
+                        actionLabel = "Réessayer",
+                        onAction = actions.retry,
+                    )
 
-            state.failure is RecapModel.Failure.Cause -> LoadFailed(
-                cause = (state.failure as RecapModel.Failure.Cause).message,
-                onRetry = actions.retry,
-                title = "Récap indisponible",
-            )
+                    RECAP_FAILED -> {
+                        val failure = state.failure
+                        LoadFailed(
+                            cause = (failure as? RecapModel.Failure.Cause)?.message.orEmpty(),
+                            onRetry = actions.retry,
+                            title = "Récap indisponible",
+                        )
+                    }
 
-            data == null -> RecapSkeleton()
+                    RECAP_LOADING -> RecapSkeleton()
 
-            data.empty -> EmptyPanel(state = state, actions = actions, data = data)
+                    RECAP_EMPTY -> {
+                        val data = state.data
+                        if (data != null) EmptyPanel(state = state, actions = actions, data = data)
+                    }
 
-            else -> {
-                if (state.chips.isNotEmpty()) {
-                    YearChips(state, actions)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-                    if (state.loading) {
-                        Text("Chargement…", style = type.label, color = colors.dim)
+                    else -> {
+                        val data = state.data ?: return@NzSwap
+                        if (state.chips.isNotEmpty()) {
+                            YearChips(state, actions)
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+                            if (state.loading) {
+                                Text("Chargement…", style = type.label, color = colors.dim)
+                            }
+                        }
+                        val slide = state.slide
+                        if (slide != null) {
+                            SlideCard(
+                                slide = slide,
+                                index = state.index,
+                                total = data.slides.size,
+                                onTap = actions.tap,
+                                onHold = actions.hold,
+                            )
+                        }
+                        Glance(data)
+                        NzButton(
+                            text = "Partager",
+                            glyph = NzGlyph.Share,
+                            kind = NzButtonKind.Ghost,
+                            onClick = { actions.share(true) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
-                val slide = state.slide
-                if (slide != null) {
-                    SlideCard(
-                        slide = slide,
-                        index = state.index,
-                        total = data.slides.size,
-                        onTap = actions.tap,
-                        onHold = actions.hold,
-                    )
-                }
-                Glance(data)
-                NzButton(
-                    text = "Partager",
-                    glyph = NzGlyph.Share,
-                    kind = NzButtonKind.Ghost,
-                    onClick = { actions.share(true) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
         }
         Spacer(Modifier.height(NzSpacing.xxl))
@@ -171,6 +186,32 @@ fun RecapScreen(
     }
     }
 }
+
+/**
+ * The story's phases, as the [NzSwap] target. Each one is a whole different page
+ * state, so each is its own key; a card's own change inside the deck is not a
+ * phase (the story is a pager, untouched).
+ */
+internal fun recapPhase(state: RecapModel.State): String {
+    val data = state.data
+    return when {
+        state.noYears -> RECAP_NO_YEARS
+        state.failure is RecapModel.Failure.Invalid -> RECAP_INVALID
+        state.failure is RecapModel.Failure.Offline -> RECAP_OFFLINE
+        state.failure is RecapModel.Failure.Cause -> RECAP_FAILED
+        data == null -> RECAP_LOADING
+        data.empty -> RECAP_EMPTY
+        else -> RECAP_READY
+    }
+}
+
+private const val RECAP_NO_YEARS = "sans-annees"
+private const val RECAP_INVALID = "invalide"
+private const val RECAP_OFFLINE = "hors-ligne"
+private const val RECAP_FAILED = "echec"
+private const val RECAP_LOADING = "chargement"
+private const val RECAP_EMPTY = "vide"
+private const val RECAP_READY = "pret"
 
 /** The year selector: one chip per year that holds an event (`yearChips`). */
 @Composable

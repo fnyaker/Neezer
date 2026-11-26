@@ -49,6 +49,7 @@ import fr.neezer.mobile.designsystem.CoverImage
 import fr.neezer.mobile.designsystem.EmptyState
 import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.LoadFailed
+import fr.neezer.mobile.designsystem.NzAppear
 import fr.neezer.mobile.designsystem.NzButton
 import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzCard
@@ -60,6 +61,7 @@ import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSheet
 import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
 import fr.neezer.mobile.designsystem.TrackRowView
@@ -165,42 +167,75 @@ fun HomeScreen(
         HomeHero(state, actions)
         if (state.tuneOpen) TunePanel(state, actions)
 
-        val data = state.data
-        when (val screen = state.screen) {
-            is fr.neezer.mobile.bridge.ScreenState.Failed -> {
-                LoadFailed(
-                    cause = screen.cause,
-                    onRetry = { actions.retry() },
-                    title = "L'accueil n'a pas pu se charger",
-                )
-                StylePicker(state, actions)
-                FlowControls(state, actions)
-            }
-            else -> {
-                if (data == null) {
-                    // First paint with nothing yet: a shelf and a list, never an
-                    // empty page (Skeleton.svelte's rule).
-                    Skeleton(kind = NzSkeletonKind.Shelf, count = 6)
-                    Skeleton(kind = NzSkeletonKind.List, count = 6)
-                } else {
-                    if (state.stale) StaleNote()
-                    ResumePanel(data, actions)
-                    StylePicker(state, actions)
-                    val releases = data.releases
-                    if (releases != null && releases.tracks.isNotEmpty()) {
-                        ReleasesShelf(releases, actions)
+        // The SPA's `HomeHero` is never replaced: the day's one decision stays
+        // put while the sections below it change phase. The skeleton, the
+        // content and the failure replace each other in place (M7: A goes at
+        // once, B enters with a 140 ms fade + 4 dp, `sizeTransform = null`).
+        NzSwap(targetState = homePhaseKey(state), label = "accueil") { phase ->
+            // `AnimatedContent` stacks its children; a Column keeps the page's
+            // 32 dp section rhythm exactly as the outer one did.
+            Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xxl)) {
+                when (phase) {
+                    HOME_PHASE_FAILED -> {
+                        val screen = state.screen
+                        LoadFailed(
+                            cause = (screen as? fr.neezer.mobile.bridge.ScreenState.Failed)?.cause.orEmpty(),
+                            onRetry = { actions.retry() },
+                            title = "L'accueil n'a pas pu se charger",
+                        )
+                        StylePicker(state, actions)
+                        FlowControls(state, actions)
                     }
-                    if (data.artists.isNotEmpty()) ArtistsRow(data, actions)
-                    if (data.reco.isNotEmpty()) ForYou(data, state, actions)
-                    data.recap?.let { RecapPanel(it, actions) }
-                    if (data.moods.isNotEmpty()) MoodsRow(data, state, actions)
-                    FlowControls(state, actions)
-                    if (data.isHomeEmpty()) EmptyHome(state, actions)
+                    HOME_PHASE_LOADING -> {
+                        // First paint with nothing yet: a shelf and a list, never
+                        // an empty page (Skeleton.svelte's rule).
+                        Skeleton(
+                            modifier = Modifier.testTag(HOME_SKELETON_TAG),
+                            kind = NzSkeletonKind.Shelf,
+                            count = 6,
+                        )
+                        Skeleton(kind = NzSkeletonKind.List, count = 6)
+                    }
+                    else -> {
+                        val data = state.data
+                        if (data != null) {
+                            if (state.stale) StaleNote()
+                            ResumePanel(data, actions)
+                            StylePicker(state, actions)
+                            val releases = data.releases
+                            if (releases != null && releases.tracks.isNotEmpty()) {
+                                ReleasesShelf(releases, actions)
+                            }
+                            if (data.artists.isNotEmpty()) ArtistsRow(data, actions)
+                            if (data.reco.isNotEmpty()) ForYou(data, state, actions)
+                            data.recap?.let { RecapPanel(it, actions) }
+                            if (data.moods.isNotEmpty()) MoodsRow(data, state, actions)
+                            FlowControls(state, actions)
+                            // The note block appears IN FLOW when the answer
+                            // says there is nothing to show (M7, enter only).
+                            NzAppear(visible = data.isHomeEmpty()) { EmptyHome(state, actions) }
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+/**
+ * The home has three phases, and only three, because only those change the
+ * PAGE: a failure, nothing yet (the skeletons) and the answer. A re-emit of the
+ * same phase animates nothing (M6, `NzSwap`'s `contentKey`).
+ */
+internal fun homePhaseKey(state: HomeModel.State): String = when {
+    state.screen is fr.neezer.mobile.bridge.ScreenState.Failed -> HOME_PHASE_FAILED
+    state.data == null -> HOME_PHASE_LOADING
+    else -> HOME_PHASE_READY
+}
+
+internal const val HOME_PHASE_FAILED = "failed"
+internal const val HOME_PHASE_LOADING = "vide"
+internal const val HOME_PHASE_READY = "pret"
 
 /** `Home.svelte#empty`/`#allFailed`, read from what the answer carries. */
 private fun HomeData.isHomeEmpty(): Boolean =
@@ -1211,6 +1246,9 @@ const val HOME_MARKER = "Accueil Neezer"
  */
 internal const val HOME_HERO_TAG = "home-hero"
 internal const val HOME_RESUME_TAG = "home-resume"
+
+/** The first skeleton, for the phase test: it exists only in the "vide" phase. */
+internal const val HOME_SKELETON_TAG = "home-skeleton"
 
 /** `flow.js#PICK_AHEAD`, in the sentence `FlowUpNext` writes. */
 private const val PICK_AHEAD_S = 20

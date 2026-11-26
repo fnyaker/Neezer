@@ -4,11 +4,23 @@ import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.animation.core.TweenSpec
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import fr.neezer.mobile.designsystem.NzDur
+import fr.neezer.mobile.designsystem.NzMotion
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.designsystem.inPlaceSpecs
 import fr.neezer.mobile.feature.offline.DownloadsModel
 import fr.neezer.mobile.feature.offline.OfflineHost
 import fr.neezer.mobile.feature.offline.OfflinePort
@@ -16,6 +28,8 @@ import fr.neezer.mobile.testkit.ScreenGoldenRule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -97,6 +111,43 @@ class PodcastsGoldenTest {
         openShow = {},
         consumeMessage = {},
     )
+
+    /**
+     * X3: the subscriptions' phase replaced in place. At eco the skeleton is out
+     * of the tree in the SAME frame the grid is drawn (M7 + M13); a re-emit of the
+     * same phase adds no node (M6). The curve is X0's `inPlaceSpecs` (its exact
+     * spec; `TransitionTest` explains why a running animation is unreadable).
+     */
+    @Test
+    fun aPhaseChangeReplacesInTheSameFrameAtEco() {
+        var state by mutableStateOf(PodcastsModel.State())
+        var tick by mutableIntStateOf(0)
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Off) {
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    tick
+                    PodcastsScreen(state = state, actions = podcastsActions(), isAdmin = false)
+                }
+            }
+        }
+        rule.composeRule.onNodeWithTag(PODCASTS_LOADING_TAG).assertExists()
+        rule.composeRule.onNodeWithText("Les Histoires").assertDoesNotExist()
+
+        state = gridState()
+        rule.composeRule.waitForIdle()
+        rule.composeRule.onNodeWithTag(PODCASTS_LOADING_TAG).assertDoesNotExist()
+        rule.composeRule.onNodeWithText("Les Histoires").assertExists()
+
+        tick++
+        rule.composeRule.waitForIdle()
+        rule.composeRule.onAllNodesWithText("Les Histoires").assertCountEquals(1)
+
+        val full = inPlaceSpecs(NzMotion(NzMotionLevel.Full))
+        assertEquals(NzDur.Fast, (full.fade as TweenSpec<*>).durationMillis)
+        assertEquals(NzDur.Fast, (full.move as TweenSpec<*>).durationMillis)
+        assertNull(full.exit)
+        assertEquals(0, (inPlaceSpecs(NzMotion(NzMotionLevel.Off)).fade as TweenSpec<*>).durationMillis)
+    }
 }
 
 /** A downloads port that is always empty: the render only needs a state. */

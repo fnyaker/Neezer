@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -41,6 +43,8 @@ import fr.neezer.mobile.designsystem.NzChip
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
+import fr.neezer.mobile.designsystem.NzAppear
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import uniffi.nz_ffi.TrackRow
@@ -78,29 +82,38 @@ fun ReleaseShelfScreen(
     val colors = Sillon.colors
     val type = Sillon.type
     CompositionLocalProvider(LocalContentColor provides colors.tx) {
-    when (val screen = state.screen) {
-        is ScreenState.Loading -> Column(modifier.padding(NzSpacing.pageX)) {
+    NzSwap(
+        targetState = shelfPhase(state),
+        modifier = modifier,
+        label = "sorties",
+    ) { phase ->
+    when (phase) {
+        DISCOVERY_LOADING -> Column(Modifier.padding(NzSpacing.pageX)) {
             Box(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(min = 120.dp)
                     .clip(RoundedCornerShape(20.dp))
-                    .background(colors.s1),
+                    .background(colors.s1)
+                    .testTag(DISCOVERY_SHELF_LOADING_TAG),
             )
         }
 
-        is ScreenState.Failed -> Box(modifier.padding(NzSpacing.l)) {
-            LoadFailed(
-                cause = screen.cause,
-                onRetry = { screen.retry() },
-                title = DiscoveryCopy.SHELF_FAILED,
-            )
+        DISCOVERY_FAILED -> {
+            val failed = state.screen as? ScreenState.Failed
+            Box(Modifier.padding(NzSpacing.l)) {
+                LoadFailed(
+                    cause = failed?.cause.orEmpty(),
+                    onRetry = { failed?.retry?.invoke() },
+                    title = DiscoveryCopy.SHELF_FAILED,
+                )
+            }
         }
 
-        is ScreenState.Ready -> {
-            val page = screen.data
+        else -> {
+            val page = (state.screen as? ScreenState.Ready)?.data ?: return@NzSwap
             LazyColumn(
-                modifier = modifier,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = NzSpacing.xxl),
             ) {
                 item(key = "banner") {
@@ -127,12 +140,15 @@ fun ReleaseShelfScreen(
                 }
                 if (state.rows.isEmpty() && state.searching) {
                     item(key = "no-match") {
-                        Text(
-                            "Aucun titre ne correspond à « ${state.query} ».",
-                            style = type.body,
-                            color = colors.dim,
-                            modifier = Modifier.padding(NzSpacing.pageX),
-                        )
+                        // The filtered empty appears in flow, enter only (M7).
+                        NzAppear(visible = true) {
+                            Text(
+                                "Aucun titre ne correspond à « ${state.query} ».",
+                                style = type.body,
+                                color = colors.dim,
+                                modifier = Modifier.padding(NzSpacing.pageX),
+                            )
+                        }
                     }
                 }
                 if (!state.searching && state.rowCount == 0) {
@@ -166,7 +182,18 @@ fun ReleaseShelfScreen(
         }
     }
     }
+    }
 }
+
+/** The shelf's three phases, as the [NzSwap] target. */
+internal fun shelfPhase(state: ReleaseShelfModel.State): String = when (state.screen) {
+    is ScreenState.Loading -> DISCOVERY_LOADING
+    is ScreenState.Failed -> DISCOVERY_FAILED
+    is ScreenState.Ready -> DISCOVERY_READY
+}
+
+/** The shelf's loading placeholder, for the phase test. */
+internal const val DISCOVERY_SHELF_LOADING_TAG = "sorties-chargement"
 
 /** The banner: a mosaic, "Nouveautés · 12 titres · 3 sorties · 1:02:10", the title. */
 @Composable
