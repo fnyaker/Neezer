@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 # The eleven captures of `release-journey.sh --evidence`, in walk order. The
@@ -73,10 +74,14 @@ SCREENS = (
 )
 
 # The developer-text list of the rubric (C5). `\bMB[0-9]+\b` is this repo's own
-# lot naming ("MB3a"), `snake_case` a Kotlin field that leaked, and
-# `[a-z][A-Z][a-z]` a camelCase identifier shown to a person.
+# lot naming ("MB3a"), `snake_case` a Kotlin field that leaked, and the last
+# alternative a camelCase IDENTIFIER shown to a person: bounded to a word that
+# starts lowercase and turns uppercase inside itself (`fileName`, `isReady`),
+# because an unbounded `[a-z][A-Z][a-z]` fires on "Yo**uTu**be" and "Osm**And**"
+# — brands the rubric lets the judge justify, not identifiers (measured on the
+# first real artifact, 2026-11-26).
 BANNED = re.compile(
-    r"TODO|FIXME|lorem|stub|null|Exception|Traceback|\bMB[0-9]+\b|snake_case|[a-z][A-Z][a-z]"
+    r"TODO|FIXME|lorem|stub|null|Exception|Traceback|\bMB[0-9]+\b|snake_case|\b[a-z]{2,}[A-Z][a-z]{2,}\b"
 )
 
 BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
@@ -209,17 +214,33 @@ def screen_check(name: str, directory: Path, dpi: int, ok: list[str], fail: list
     app = [n for n in nodes if n.visible and n.package != SYSTEM_UI]
 
     # --- C2: the page's margin, left against right --------------------------
-    # The blocks are the nodes that carry a word; a node spanning the viewport
-    # is a background or a full-bleed row, not a margin.
-    blocks = [n for n in app if (n.text or n.desc) and not (n.x1 <= 2 and n.x2 >= width - 2)]
-    if len(blocks) < 2:
-        fail.append(f"margin {name} left=0 right=0 nodes={len(blocks)} FAIL (no text block to measure)")
+    # The blocks are the CONTAINERS (no word of their own), not the text lines:
+    # a text line ends where its sentence ends, so its right inset is the length
+    # of the word, never the page's margin. A wide container that does not touch
+    # either edge is the card/row the page margin insets; a background or a
+    # full-bleed row is not a margin.
+    #
+    # The pair taken is the DOMINANT one, and it is a pair per container: the
+    # bottom bar's cells (20 % of the width) and a header's back-button row are
+    # asymmetric by design, and taking the extremes of every node measured those
+    # (measured on the first real artifact: seven screens read 0/0 or 32/96
+    # while their cards sat at 20/20). The page margin is the one most blocks
+    # share; a real imbalance — a whole screen shifted — moves the dominant pair.
+    wide = [
+        n for n in app
+        if not (n.text or n.desc)
+        and 0.5 * width <= n.w <= 0.98 * width
+    ]
+    pairs = Counter((round(dp(n.x1, dpi)), round(dp(width - n.x2, dpi))) for n in wide)
+    if not pairs:
+        fail.append(f"margin {name} left=0 right=0 blocks=0 FAIL (no container to measure)")
     else:
-        left = round(dp(min(n.x1 for n in blocks), dpi))
-        right = round(dp(width - max(n.x2 for n in blocks), dpi))
+        # Most common pair; ties go to the smaller left inset (the outermost).
+        left, right = min(pairs.items(), key=lambda kv: (-kv[1], kv[0][0]))[0]
         bad = abs(left - right) > 2 or min(left, right) < 12
         (fail if bad else ok).append(
-            f"margin {name} left={left} right={right} {'FAIL' if bad else 'ok'}"
+            f"margin {name} left={left} right={right} blocks={sum(pairs.values())} "
+            + ("FAIL" if bad else "ok")
         )
 
     # --- C2: nothing outside the viewport -----------------------------------
@@ -262,8 +283,15 @@ def screen_check(name: str, directory: Path, dpi: int, ok: list[str], fail: list
     )
 
     # --- C2: the design system's 48 dp floor --------------------------------
+    # A target is a NAMED control: a node TalkBack announces. A nameless
+    # clickable is a slider's drawn track or a decorative layer (measured: a
+    # 387x4 dp View on Réglages), and reporting its box as "a small target" is
+    # noise about a hit area this dump cannot show.
     edge = 48 * dpi / 160.0
-    small = [n for n in app if n.clickable and (n.w < edge or n.h < edge)]
+    small = [
+        n for n in app
+        if n.clickable and (n.text or n.desc) and (n.w < edge or n.h < edge)
+    ]
     (fail if small else ok).append(
         f"targets {name} below_48dp={len(small)} "
         + (f"FAIL first={small[0].label()} {round(dp(small[0].w, dpi))}x{round(dp(small[0].h, dpi))}dp"

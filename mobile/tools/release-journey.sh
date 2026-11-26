@@ -284,9 +284,12 @@ check_app "the return to Accueil"
 # `Ouvrir le lecteur plein écran`). The tap lands on the node's CENTRE: these
 # are full cards and bar buttons, not a row found at the bottom of a pane.
 tap_desc_prefix() {
-    local prefix="$1" line bounds x1 y1 x2 y2 attempt
-    for attempt in 1 2 3 4 5; do
-        line="$(ui_text | tr '>' '\n' | grep -F "content-desc=\"$prefix" | head -1)"
+    local prefix="$1" budget="${2:-15}" started=$SECONDS line bounds x1 y1 x2 y2
+    while (( SECONDS - started < budget )); do
+        # `|| true`: no match is the normal first state, and a failed
+        # substitution must not end the walk under `set -e` (the helper is
+        # called from an `if !`, which is what made the first version survive).
+        line="$(ui_text | tr '>' '\n' | grep -F "content-desc=\"$prefix" | head -1 || true)"
         if [[ -n "$line" ]]; then
             bounds="$(sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' <<<"$line")"
             if [[ -n "$bounds" ]]; then
@@ -295,6 +298,9 @@ tap_desc_prefix() {
                 return 0
             fi
         fi
+        # No `sleep`: `ui_text` is a `uiautomator dump`, which waits for idle
+        # and takes the better part of a second — the loop is paced by the
+        # device, and the budget above is the bound.
     done
     return 1
 }
@@ -312,8 +318,9 @@ player_evidence() {
 
     # From the home, the FIRST card that offers to play: a rule read from the
     # tree, never a coordinate.
-    if ! tap_desc_prefix "Lire "; then
+    if ! tap_desc_prefix "Lire " 20; then
         printf 'player=unavailable cause=no "Lire " card on the home\n'
+        printf 'player=unavailable screen=%s\n' "$(screen_texts)"
         return 0
     fi
     if ! await_text "Ouvrir le lecteur plein écran" 15; then
