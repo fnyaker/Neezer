@@ -7678,3 +7678,57 @@ réduite au même titre et l'index de file inchangé). Le budget de frame du gli
 
 **Hors portée.** Les gestes des panneaux, la feuille du SPA (W1), un « glisser vers le haut » pour
 ouvrir la file, le lecteur large.
+
+### X2 — Le lecteur : une barre qui a toujours sa place, un glyphe qui se retourne (delivered 2026-11-26)
+
+**La règle.** La barre du mini-lecteur réserve sa hauteur **dès la première frame** (`PlayerBar.svelte`'s
+`--mini-h`, le lot X2 de `plan-mobile-addendum.md`), son contenu se remplace sur la **clef de la piste**
+et le glyphe lecture↔pause se retourne en un swap. Le lecteur plein écran reste **P2's** : son hôte et
+son geste de fermeture ne bougent pas.
+
+- **Une barre vide est la même barre.** La carte de 64 dp, ses marges 4/8 dp, la rainure en guise de
+  pochette (`CoverImage(url = null, seed = null, sizeDp = 44.dp)`), « Rien en lecture » et un transport
+  **désactivé** (le puits de `NzIconButton`, pas une surface transparente). Le premier « Lire » ne
+  déplace donc plus rien au-dessus de la barre : l'ancien `return` qui laissait la place libre faisait
+  sauter l'écran de **76 dp** sous le doigt (le plan, risque 1, l'a tranché contre le commentaire
+  « jamais avant un titre »).
+- **Le contenu se remplace sur la clef, jamais la pochette.** `NzSwap(targetState = now?.key ?: "",
+  label = "mini-player")` n'enveloppe que les **deux lignes de texte**. La pochette reste dehors : son
+  `AsyncImage` garde le peintre précédent jusqu'à ce que la nouvelle soit prête (la règle P1), et
+  détruire son nœud à chaque changement est le flash que P1 a retiré du lecteur plein écran. La ligne
+  de progression reste dehors aussi (M6 : aucune transition sur une valeur vivante).
+- **Deux sites de glyphe, un seul preset.** `NzGlyphSwap` (140 ms fondu + `scale .85 → 1`, sortie
+  90 ms) remplace l'`Icon` du cercle 68 dp du lecteur et le glyphe du cœur ; celui du mini-lecteur passe
+  par un puits local. **Pourquoi un puits local :** `NzIconButton` dessine son propre `Icon`, et
+  `Buttons.kt` appartient à X0 (le vocabulaire du mouvement) — un lot ne réécrit pas le fichier d'un
+  autre. `GlyphIconButton` (dans `NowPlaying.kt`, `internal`) reprend donc le contrat du bouton : cible
+  48 dp, encre désactivée `dim`, échelle d'appui 0,92 par `motion.displace()`.
+- **Aucun anneau de mise en mémoire tampon n'existe dans cet arbre.** Le plan le nommait (« the
+  buffering ring's `status` marking ») ; le lecteur natif exprime l'état par la ligne « Chargement… »
+  et n'a pas de nœud d'anneau à marquer. Ce qui reste vrai est la garantie du design system, et elle est
+  assertée : `NzMotion.statusMoves` est **toujours** vrai, donc un indicateur d'état ne gèle jamais en
+  éco (M13, règle 2 du `CLAUDE.md`).
+
+**Mesuré** (`MiniPlayerMotionTest`, Robolectric 360 dp, horloge Compose explicite, aucune lecture
+d'horloge murale) :
+
+- la barre fait **76 dp** (64 + 4 + 8) avec **0** titre et avec un titre — écart **0 dp** ; le contenu
+  au-dessus garde son `bottom` à **0,5 dp** près au premier « Lire » ;
+- à `Off`, « Rien en lecture » disparaît et le titre arrive **dans la même frame**, et la pochette
+  reste **1 nœud** avant et après (hors du swap) ;
+- à `Full`, **2** nœuds « Lecture » 30 ms après `toggle()` (le sortant tient sa sortie de 90 ms),
+  **1** après 120 ms ; à `Off`, **1** dès la première frame ;
+- une ré-émission avec la même clef : **1** copie du titre, aucun nouveau nœud (M6) ;
+- la carte vide ne demande **aucune** pochette (`url = null` → la rainure, 0 requête), et le golden
+  `nowplaying-mini-vide-360dp-f1.0.png` (racine unique `mobile/android/screenshots`, T3) est la même
+  image que `docs/agents/screenshots/mobile/X2/x2-mini-vide-360dp.png`.
+
+**Tests.** `MiniPlayerMotionTest` (6 cas), et `NowPlayingDeviceTest.aColdStartWithNothingPlayingDrawsTheEmptyBar`
+(démarrage à froid sans titre : le nœud « Rien en lecture » attendu comme un ÉVÉNEMENT, pas un délai).
+Le budget de frame du premier « Lire » (`FrameTimingMetric`, p95 ≤ 16,7 ms) reste **dû sur un appareil** :
+ce worker n'a pas `/dev/kvm`, la preuve émulateur vient du job `emulator` de `mobile.yaml` (et la capture
+de la coquille vide, demandée par le plan, n'est donc pas produite ici).
+
+**Hors portée.** `NowPlayingHost` et l'entrée du lecteur (P2), la bande de pochettes (P1), les panneaux
+(`NzSheet`), le dessin de la barre (L1 : carte, marges, forme), la rail de position (M6), un anneau de
+buffer qui n'existe pas.

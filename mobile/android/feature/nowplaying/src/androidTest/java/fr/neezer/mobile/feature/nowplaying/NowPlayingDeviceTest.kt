@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithText
@@ -297,8 +298,67 @@ class NowPlayingDeviceTest {
     }
 
     /**
-     * **P2 on the device: a downward drag closes the player, and the queue does
-     * not move.**
+     * **X2 on the device: a cold start with nothing playing draws the EMPTY bar.**
+     *
+     * The bar's room is reserved from the first frame (`PlayerBar.svelte`'s
+     * `--mini-h`): before anything plays it is the same 64 dp card, with the
+     * groove as its cover, « Rien en lecture » and a disabled transport — so the
+     * first « Lire » does not shift the screen under the finger.
+     *
+     * This test proves the COLD picture on the real tree: the feed holds a
+     * snapshot with no title, the bar is composed, and the event waited on is the
+     * node itself (no sleep, no settle). The bar's 76 dp and the swap timings are
+     * `MiniPlayerMotionTest`'s (Robolectric, exact clock).
+     */
+    @Test
+    fun aColdStartWithNothingPlayingDrawsTheEmptyBar() {
+        val empty = object : PlayerPort {
+            private val snapshot = uniffi.nz_ffi.PlayerSnapshot(
+                state = uniffi.nz_ffi.PlayState.STOPPED,
+                current = null,
+                index = null,
+                len = 0u,
+                shuffle = false,
+                repeat = uniffi.nz_ffi.Repeat.OFF,
+                volume = 1f,
+                muted = false,
+                streaming = false,
+                sleep = null,
+                error = null,
+                fault = null,
+                version = 0uL,
+            )
+
+            override fun snapshot(): uniffi.nz_ffi.PlayerSnapshot = snapshot
+            override fun position(): uniffi.nz_ffi.PositionInfo = NoPlayerPort.position()
+            override fun command(cmd: PlayerCommand, tapNs: Long) = Unit
+            override fun queueSource(): fr.neezer.mobile.designsystem.NzRowSource? = null
+            override fun audio(): uniffi.nz_ffi.AudioSettings = NoPlayerPort.audio()
+            override fun setAudio(settings: uniffi.nz_ffi.AudioSettings) = Unit
+            override fun setSleep(timer: uniffi.nz_ffi.SleepTimer?) = Unit
+        }
+        // The bar reads the PROCESS feed; hand it a silent player first, as
+        // `MiniBarFeedTest` does, so this case cannot measure a neighbour test.
+        PlayerFeed.usePortForTest(empty, subscribe = null)
+        NowPlayingState.hide()
+
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
+                MiniPlayer()
+            }
+        }
+        rule.waitUntil(timeoutMillis = 10_000) {
+            rule.onAllNodesWithText("Rien en lecture").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithTag(MINI_BAR_TAG).assertExists()
+        assertEquals(
+            "the empty bar's transport is drawn once (and disabled)",
+            1,
+            rule.onAllNodesWithContentDescription("Lecture").fetchSemanticsNodes().size,
+        )
+    }
+
+    /**
      *
      * The sheet is the real [PlayerSheetFrame] over a real surface, with the
      * process's player behind it (three titles from the bench, the middle one
