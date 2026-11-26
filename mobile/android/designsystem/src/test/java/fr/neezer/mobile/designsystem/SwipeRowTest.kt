@@ -60,6 +60,19 @@ class SwipeRowTest {
 
     private fun restLeft() = rule.onNodeWithText(TITLE).getUnclippedBoundsInRoot().left.value
 
+    /**
+     * A move of one hundredth of a pixel: the smallest injection that makes the
+     * semantics tree current after a move block (Robolectric refreshes it at the
+     * end of a block that carried an event, so a read right after a move block
+     * sees the block before it — measured: the second 35 dp read 1 dp).
+     */
+    private fun flushPointer() {
+        rule.onNodeWithText(TITLE).performTouchInput {
+            advanceEventTime(1)
+            moveBy(Offset(0.01f, 0f))
+        }
+    }
+
     private fun settle() {
         rule.waitForIdle()
         rule.mainClock.advanceTimeBy(600)
@@ -99,6 +112,82 @@ class SwipeRowTest {
         }
         settle()
         assertEquals("a 60 dp movement is the commit distance", 1, queued)
+    }
+
+    /**
+     * **A 70 dp drag follows the finger, and the release completes the action**
+     * (T5, `plan-mobile-tests.md` §T5, bug 6).
+     *
+     * The case above proves the release queues; this one reads the row's position
+     * WHILE the finger is down, one frame at a time, so a row that only moves at
+     * the end — or teleports back on the release frame — fails at the frame it
+     * breaks. The platform's slop is paid once, then two 35 dp steps must each
+     * move the row by their own 35 dp (±2 dp); the release queues exactly once
+     * and returns the row to rest.
+     */
+    @Test
+    fun aSeventyDpDragFollowsTheFingerThenQueuesOnRelease() {
+        row()
+        val before = restLeft()
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithText(TITLE).performTouchInput {
+            down(center)
+            advanceEventTime(16)
+            moveBy(Offset(viewConfiguration.touchSlop + 2f, 0f))
+        }
+        flushPointer()
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        val afterSlop = restLeft()
+        rule.onNodeWithText(TITLE).performTouchInput {
+            advanceEventTime(16)
+            moveBy(Offset(35.dp.toPx(), 0f))
+        }
+        flushPointer()
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        val half = restLeft()
+        rule.onNodeWithText(TITLE).performTouchInput {
+            advanceEventTime(16)
+            moveBy(Offset(35.dp.toPx(), 0f))
+        }
+        flushPointer()
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        val released = restLeft()
+        println(
+            "MEASURE g1 tracking: first 35 dp -> ${"%.1f".format(half - afterSlop)}dp, " +
+                "70 dp -> ${"%.1f".format(released - before)}dp",
+        )
+        assertEquals("the row follows the finger on the first 35 dp", 35f, half - afterSlop, 2f)
+        assertEquals("the row follows the finger on the 70 dp drag", 70f, released - before, 3f)
+
+        // The release, in its own block: it is the distance (70 dp > 60 dp) that
+        // decides, and the read above must happen while the finger is still down
+        // (an `up` in that block would start the spring, and the first frame would
+        // already be on its way back — measured: 36 dp instead of 70).
+        rule.onNodeWithText(TITLE).performTouchInput { up() }
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        val afterRelease = restLeft()
+        println(
+            "MEASURE g1 release frame: ${"%.1f".format(afterRelease - before)}dp " +
+                "after the up (released at ${"%.1f".format(released - before)}dp)",
+        )
+        assertEquals(
+            "the release of a 70 dp drag queues exactly once",
+            1,
+            queued,
+        )
+        assertTrue(
+            "the release frame must not teleport the row back to rest " +
+                "(${"%.1f".format(afterRelease - before)}dp of " +
+                "${"%.1f".format(released - before)}dp)",
+            afterRelease - before > (released - before) * 0.75f,
+        )
+        rule.mainClock.autoAdvance = true
+        settle()
+        assertEquals("and the row springs back to rest", before, restLeft(), 0.5f)
     }
 
     @Test

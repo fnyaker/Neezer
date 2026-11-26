@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeWithVelocity
 import androidx.compose.ui.test.up
 import androidx.compose.ui.unit.dp
 import fr.neezer.mobile.bridge.NzNavigator
@@ -311,6 +312,205 @@ class PlayerSheetGestureTest {
         assertEquals("the sheet follows the finger 1:1 (±1 dp)", 60f, second - first, 1f)
     }
 
+    // -- T5: the frames, not only the ends ------------------------------------
+
+    /**
+     * **The sheet moves with the finger at EVERY frame, and the release continues
+     * from there** (T5, `plan-mobile-tests.md` §T5, bug 6).
+     *
+     * The P2 cases above read the sheet at rest and one frame after the release;
+     * they say the end state is right, not that the content ever followed the
+     * finger. A sheet that only lands at the end (the old
+     * `AnimatedVisibility(slideOutVertically)`) or one that snaps back on the
+     * release frame can still pass a settle check, and a CI log cannot say which
+     * frame broke. This case holds the clock (`autoAdvance = false`), injects
+     * **6 × 5 % of the sheet** one event frame apart and reads
+     * `boundsInRoot.top` after each one: every frame is printed with its number.
+     *
+     * The platform's touch slop is paid once before the measured frames, because
+     * the frame claims the gesture after it and follows only the travel beyond it
+     * (`NowPlaying.kt`, the pointer loop: `start + travelY - slop`). Every
+     * measured frame must then move at least 60 % of its injected dy — the plan's
+     * floor — and 1:1 within ±2 dp.
+     *
+     * Then the release above the threshold, as the plan names it:
+     * `swipeWithVelocity(…, endVelocity = 1 200f)` over 30 % of the sheet. The
+     * three frames after it must keep going DOWN (seeded with that velocity, never
+     * restarted from 0), and the sheet must land on the closed detent inside
+     * 500 ms.
+     */
+    @Test
+    fun theSheetFollowsTheFingerFrameByFrameAndTheFlingLandsOnTheClosedDetent() {
+        openSheet()
+        rule.mainClock.autoAdvance = false
+        val height = sheetHeightDp()
+        val step = height * 0.05f
+        // The platform's touch slop is paid ONCE, before the measured frames: the
+        // frame claims the gesture after it and follows only the travel beyond it
+        // (`NowPlaying.kt`, the pointer loop: `start + travelY - slop`). Paying it
+        // here is what lets every measured frame be 1:1 instead of losing the
+        // slop again on the first one.
+        rule.onNodeWithTag(TAG).performTouchInput {
+            down(Offset(centerX, top + 40.dp.toPx()))
+            advanceEventTime(16)
+            moveBy(Offset(0f, viewConfiguration.touchSlop + 2f))
+        }
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        var previous = sheetTopDp()
+        for (frame in 1..6) {
+            rule.onNodeWithTag(TAG).performTouchInput {
+                advanceEventTime(16)
+                moveBy(Offset(0f, px(step)))
+            }
+            // Robolectric refreshes the semantics tree at the end of an injection
+            // block that carried an event, and a read taken right after a MOVE
+            // block sees the block BEFORE it (measured: frames 2 to 6 read 64, 64,
+            // 104, 104, 144 without this flush). A hundredth of a pixel is the
+            // smallest event that makes the tree current; it changes no distance
+            // the assertions read (±2 dp).
+            flushPointer()
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+            val top = sheetTopDp()
+            val moved = top - previous
+            println(
+                "MEASURE p2 frame $frame: dy=${"%.1f".format(step)}dp, " +
+                    "top=${"%.1f".format(top)}dp, moved=${"%.1f".format(moved)}dp",
+            )
+            assertTrue(
+                "frame $frame: the sheet must follow the finger " +
+                    "(moved ${"%.1f".format(moved)}dp of ${"%.1f".format(step)}dp)",
+                moved >= step * 0.6f,
+            )
+            assertEquals("frame $frame: 1:1 with the finger (±2 dp)", step, moved, 2f)
+            previous = top
+        }
+        assertTrue(
+            "the six frames are past the 28 % threshold ($previous / $height dp)",
+            previous > height * 0.28f,
+        )
+
+        // The finger leaves without deciding: a cancel is never a decision (S8),
+        // so the sheet springs back to the open detent and the fling below starts
+        // from 0. (The up of a real fling must be in the SAME `performTouchInput`
+        // block as the last move — a separate block restarts the event clock and
+        // the tracker reads the pause, not the flick; measured in case 3 above.)
+        rule.onNodeWithTag(TAG).performTouchInput { cancel() }
+        var returned = 0
+        while (sheetTopDp() > 1f && returned < 1_000) {
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+            returned += 16
+        }
+        assertEquals("the cancelled tracking gesture returns to the open detent", 0f, sheetTopDp(), 1f)
+
+        // The release above the threshold, as the plan names it: 30 % of the
+        // sheet at 1 200 px/s, over both the 28 % distance and the 125 dp/s fling.
+        rule.onNodeWithTag(TAG).performTouchInput {
+            swipeWithVelocity(
+                start = Offset(centerX, top + 40.dp.toPx()),
+                end = Offset(centerX, top + 40.dp.toPx() + px(step) * 6f),
+                endVelocity = 1_200f,
+                durationMillis = 100,
+            )
+        }
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        previous = sheetTopDp()
+        println("MEASURE p2 fling: released at ${"%.1f".format(previous)}dp of ${"%.1f".format(height)}dp")
+
+        repeat(3) { frame ->
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+            assertTrue(
+                "release frame ${frame + 1}: the settle must take more than one frame " +
+                    "(an instant settle is the old exit)",
+                NowPlayingState.open,
+            )
+            val top = sheetTopDp()
+            println("MEASURE p2 release frame ${frame + 1}: top=${"%.1f".format(top)}dp")
+            assertTrue(
+                "release frame ${frame + 1}: the sheet keeps leaving, it does not " +
+                    "stop dead at the finger (${"%.1f".format(previous)} -> ${"%.1f".format(top)}dp)",
+                top > previous,
+            )
+            previous = top
+        }
+
+        var elapsed = 0
+        var last = previous
+        while (NowPlayingState.open && elapsed < 500) {
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+            if (NowPlayingState.open) last = sheetTopDp()
+            elapsed += 16
+        }
+        rule.mainClock.autoAdvance = true
+        println(
+            "MEASURE p2 fling: ${if (NowPlayingState.open) "still open" else "closed"} " +
+                "after ${elapsed}ms, last top=${"%.1f".format(last)}dp of ${"%.1f".format(height)}dp",
+        )
+        assertFalse("a fling above 125 dp/s dismisses the player inside 500 ms", NowPlayingState.open)
+        assertTrue(
+            "the sheet reached the closed detent ($last of $height dp)",
+            last >= height * 0.95f,
+        )
+        rule.onNodeWithTag(TAG).assertDoesNotExist()
+    }
+
+    /**
+     * **A slow release returns to the open detent without jumping back on the
+     * release frame** (T5).
+     *
+     * 12 % of the sheet injected (≈10 % of movement after the platform's slop)
+     * at ≈80 dp/s: under the 28 % distance and under the 125 dp/s fling, so the
+     * settle can only be the return. The frame after the release must still be at
+     * the finger (a teleport to 0 — what the old exit did — reads 0 there), and
+     * the sheet is back at 0 inside 500 ms, open.
+     */
+    @Test
+    fun aLowVelocityReleaseDoesNotJumpBackOnTheReleaseFrame() {
+        openSheet()
+        rule.mainClock.autoAdvance = false
+        val step = sheetHeightDp() * 0.03f
+        rule.onNodeWithTag(TAG).performTouchInput {
+            down(Offset(centerX, top + 40.dp.toPx()))
+            // 4 × 3 % at 300 ms each ≈ 80 dp/s.
+            repeat(4) {
+                advanceEventTime(300)
+                moveBy(Offset(0f, px(step)))
+            }
+            up()
+        }
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        val releasedAt = sheetTopDp()
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        val afterRelease = sheetTopDp()
+        println(
+            "MEASURE p2 low release: released at ${"%.1f".format(releasedAt)}dp, " +
+                "first frame ${"%.1f".format(afterRelease)}dp",
+        )
+        assertTrue(
+            "the release frame must not jump back to 0 (released at $releasedAt dp, " +
+                "first frame $afterRelease dp)",
+            afterRelease > releasedAt * 0.75f,
+        )
+
+        var elapsed = 0
+        while (sheetTopDp() > 1f && elapsed < 1_000) {
+            rule.mainClock.advanceTimeByFrame()
+            rule.waitForIdle()
+            elapsed += 16
+        }
+        rule.mainClock.autoAdvance = true
+        println("MEASURE p2 low release settle: $elapsed ms")
+        assertEquals("the low release returns to the open detent", 0f, sheetTopDp(), 1f)
+        assertTrue("a 12 % drag at rest does not dismiss", NowPlayingState.open)
+    }
+
     // -- the harness ----------------------------------------------------------
 
     /** The sheet open and at rest (the entrance ran to completion). */
@@ -358,6 +558,20 @@ class PlayerSheetGestureTest {
             }
         }
     }
+
+    /**
+     * A move of one hundredth of a pixel: the smallest injection that makes the
+     * semantics tree current after a move block (see the tracking case).
+     */
+    private fun flushPointer() {
+        rule.onNodeWithTag(TAG).performTouchInput {
+            advanceEventTime(1)
+            moveBy(Offset(0f, 0.01f))
+        }
+    }
+
+    /** A dp distance of the sheet, in the pointer's px (the injection takes px). */
+    private fun px(dp: Float): Float = with(rule.density) { dp.dp.toPx() }
 
     private fun sheetTopDp(): Float =
         rule.onNodeWithTag(TAG).getUnclippedBoundsInRoot().top.value
