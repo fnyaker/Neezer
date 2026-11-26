@@ -178,13 +178,17 @@ def fingerprint_of(device: dict) -> str:
     that is `incomparable` every other night guards nothing. The model is printed
     when it differs, so a suspicious delta can be read for what it is.
     """
-    parts = [
-        str(device.get("fingerprint") or device.get("model") or "unknown-device"),
-        f"sdk{device['sdk']}" if device.get("sdk") is not None else "sdk?",
-        str(device.get("abi") or "abi?"),
-        f"cores{device['cpu_core_count']}" if device.get("cpu_core_count") is not None else "cores?",
-    ]
-    return "/".join(parts)
+    parts = [str(device.get("fingerprint") or device.get("model") or "unknown-device")]
+    if device.get("sdk") is not None:
+        parts.append(f"sdk{device['sdk']}")
+    if device.get("abi"):
+        parts.append(str(device["abi"]))
+    if device.get("cpu_core_count") is not None:
+        parts.append(f"cores{device['cpu_core_count']}")
+    # A part the report did not carry is OMITTED, never spelled "unknown": the
+    # string is compared with the baseline's, and two runs of the same image must
+    # agree on it. ` | ` because the emulator's own fingerprint contains `/`.
+    return " | ".join(parts)
 
 
 def percentile_of(metric: dict, key: str) -> float | None:

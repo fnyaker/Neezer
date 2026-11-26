@@ -1,0 +1,58 @@
+{
+  "tool": "perf-gate.py",
+  "recorded_utc": "2026-11-26T10:51:06Z",
+  "commit": "af077673975a416f8b455034f0c2b3930246be1e",
+  "note": "Recorded by mobile.yaml's perf job on a GitHub-hosted ubuntu-latest runner (run 45797531420): the emulator is the job's own API 35 x86_64 AVD, the app is the signed benchmark build, the bench server seeds 8 000 favourites, the 4 000-row playlist and real covers. These are EMULATOR numbers on a shared host, slower than a phone and slower than a quiet laptop emulator (MQ2's cold start was 633 ms p50 on its own machine): the gate compares run to run on the same image, never against a phone budget. Re-record with `python mobile/tools/perf-gate.py --record` on the run whose numbers are wanted.",
+  "thresholds": {
+    "p95_regression_pct": 10.0
+  },
+  "device": {
+    "fingerprint": "Android/sdk_phone64_x86_64/emu64x:15/AE3A.240806.019/12368160:userdebug/test-keys | sdk35 | cores4",
+    "model": "Android SDK built for x86_64",
+    "sdk": 35,
+    "cpu_core_count": 4,
+    "label": "emulator-5580 (GitHub runner)"
+  },
+  "gates": {
+    "startup": {
+      "benchmark": "startupColdWithoutProfile",
+      "metric": "timeToInitialDisplayMs",
+      "unit": "ms",
+      "samples": 10,
+      "iterations": 10,
+      "p50": 1959.28128,
+      "p95": 2258.175055,
+      "p99": 2258.175055
+    },
+    "libraryScroll8000": {
+      "benchmark": "favoritesScroll8000",
+      "metric": "frameDurationCpuMs",
+      "unit": "ms",
+      "samples": 975,
+      "iterations": 3,
+      "p50": 106.950434,
+      "p95": 133.800081,
+      "p99": 157.220894
+    },
+    "queueScroll4000": {
+      "benchmark": "playlistScroll4000",
+      "metric": "frameDurationCpuMs",
+      "unit": "ms",
+      "samples": 906,
+      "iterations": 3,
+      "p50": 86.745393,
+      "p95": 111.683079,
+      "p99": 124.856768
+    },
+    "playerOpen": {
+      "benchmark": "playerOpen",
+      "metric": "frameDurationCpuMs",
+      "unit": "ms",
+      "samples": 16,
+      "iterations": 3,
+      "p50": 89.485539,
+      "p95": 829.323774,
+      "p99": 829.323774
+    }
+  }
+}
