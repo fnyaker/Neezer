@@ -1,5 +1,7 @@
 package fr.neezer.mobile.feature.genres
 
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +33,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -48,8 +51,12 @@ import fr.neezer.mobile.designsystem.NzButton
 import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzCard
 import fr.neezer.mobile.designsystem.NzChip
+import fr.neezer.mobile.designsystem.NzDur
+import fr.neezer.mobile.designsystem.NzEase
 import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzMotion
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.NzTopBar
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.rememberListWindow
@@ -118,11 +125,15 @@ fun GenresPage(nav: NzNavigator?, model: GenresModel, modifier: Modifier = Modif
             }
         }
         Box(modifier = Modifier.fillMaxSize()) {
-            when (state.tab) {
-                GenresCopy.TAB_LIBRARY -> LibraryTab(model, state)
-                GenresCopy.TAB_TREE -> TreeTab(model, state)
-                GenresCopy.TAB_MODEL -> ModelTab(model, state)
-                else -> TagTab(model, state)
+            // The tab's body, swapped in place: a fade and 4 dp, never a pop (M7),
+            // and nothing at eco (X0's preset).
+            NzSwap(targetState = state.tab, label = "genres-tab") { tab ->
+                when (tab) {
+                    GenresCopy.TAB_LIBRARY -> LibraryTab(model, state)
+                    GenresCopy.TAB_TREE -> TreeTab(model, state)
+                    GenresCopy.TAB_MODEL -> ModelTab(model, state)
+                    else -> TagTab(model, state)
+                }
             }
         }
     }
@@ -681,6 +692,15 @@ private fun TreeRowPlaceholder() {
     )
 }
 
+/**
+ * The tree chevron's rotation: a DISPLACEMENT, `displace(NzDur.Base)` — 200 ms at
+ * Full, and 0 at reduced motion and eco (M14: a turn is a displacement). Public
+ * to the module's test so the spec the row passes is the spec the test reads;
+ * the ANGLE is a `graphicsLayer` and belongs to the screenshot.
+ */
+internal fun chevronSpec(motion: NzMotion): FiniteAnimationSpec<Float> =
+    motion.displace(NzDur.Base, NzEase.Standard)
+
 @Composable
 private fun TreeRow(row: TrackRow, model: GenresModel, enabled: Boolean) {
     val colors = Sillon.colors
@@ -703,11 +723,20 @@ private fun TreeRow(row: TrackRow, model: GenresModel, enabled: Boolean) {
             horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
         ) {
             if (branch) {
+                // One glyph that TURNS, never two that swap: `ChevronRight` at 0°
+                // closed, 90° open — the SPA's 200 ms standard (T6e). The angle is
+                // a `graphicsLayer`, so a screenshot holds it, not a bound.
+                val turn by animateFloatAsState(
+                    targetValue = if (row.downloaded) 90f else 0f,
+                    animationSpec = chevronSpec(Sillon.motion),
+                    label = "genre-chevron",
+                )
                 Icon(
-                    glyph = if (row.downloaded) NzGlyph.ChevronDown else NzGlyph.ChevronRight,
+                    glyph = NzGlyph.ChevronRight,
                     size = 14.dp,
                     tint = colors.dim,
                     contentDescription = null,
+                    modifier = Modifier.rotate(turn),
                 )
             } else {
                 Box(Modifier.sizeIn(minWidth = 14.dp, minHeight = 14.dp))

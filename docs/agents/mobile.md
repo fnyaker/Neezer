@@ -7785,3 +7785,83 @@ de la coquille vide, demandée par le plan, n'est donc pas produite ici).
 **Hors portée.** `NowPlayingHost` et l'entrée du lecteur (P2), la bande de pochettes (P1), les panneaux
 (`NzSheet`), le dessin de la barre (L1 : carte, marges, forme), la rail de position (M6), un anneau de
 buffer qui n'existe pas.
+
+### X5 — Les listes qui bougent : la file, la playlist, l'arbre, les podcasts (delivered 2026-11-26)
+
+**Le besoin.** Les quatre listes dont le contenu change **parce qu'une personne a agi** — la file
+d'attente, une playlist, l'arbre des genres, les épisodes d'une émission — répondaient au geste en
+une seule image : `removeAt` retirait la ligne et tout ce qui était dessous **téléportait**. Les
+échéances et les bandeaux de phase (squelette → contenu, échec) apparaissaient de même. Sur un
+téléphone, une ligne qui saute sans bouger ne dit pas ce qui vient de se passer.
+
+**Ce qui a changé.** Aucun geste, aucune copie, aucune mise en page : les six écrans demandent
+seulement au vocabulaire de X0 de jouer ce qu'ils font déjà.
+
+- `QueueSheet.kt` — `Modifier.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)` sur chaque
+  ligne (`motion.itemSpecs()`), et la **clef de ligne** devient l'identité de la piste
+  (`itemKey`), plus l'index. `NzSheet` garde son entrée.
+- `PlaylistScreen.kt` — la phase derrière `NzSwap(targetState = phaseOf(state))` (squelette · échec ·
+  page) ; les lignes (normale, édition, squelette) reçoivent `animateItem` ; même clef d'identité. Le
+  modificateur traverse `PlaylistRow` → `SwipeRow(modifier)` : le geste de G1 est intact.
+- `GenresScreen.kt` — le corps d'onglet derrière `NzSwap(targetState = state.tab)` ; le chevron de
+  l'arbre est **un seul glyphe** (`ChevronRight`) tourné par `chevronSpec(motion)` =
+  `displace(NzDur.Base, NzEase.Standard)` — 200 ms au standard, **0** en mouvement réduit et en éco.
+- `ShowScreen.kt` — les épisodes reçoivent `animateItem`, clef = l'identifiant de l'épisode.
+  `EpisodePanel.kt` — le corps des deux segments (Chapitres · Transcription) derrière `NzSwap`.
+- `LanScreen.kt` — les phases des cartes (« Mes appareils », « Amis de confiance ») derrière `NzSwap` ;
+  un pair qui **arrive** reçoit une apparition (`NzAppear`, 140 ms, M6), les pairs déjà là n'animent
+  rien (M4, la règle S7 du SPA : suivre les ids précédents).
+
+**Ce que le lot a appris.**
+
+1. **La clef de ligne ÉTAIT l'animation.** `items(key = { i -> "$i:<piste>" })` — la forme que la
+   file et la playlist portaient, choisie pour distinguer deux fois le même titre — fait de CHAQUE
+   ligne en dessous un **nouvel item** après un retrait : `animateItem` n'a alors rien à déplacer, et
+   la mesure le dit sans ambiguïté (`276 → 220 dp` à l'image 0, c'est-à-dire aucune image
+   intermédiaire). La clef est donc l'identité (`piste` + son rang parmi les copies **de la fenêtre
+   chargée** quand le même titre revient), et le test, lancé sur l'ancienne clef, échoue sur
+   « the first frame is still where the rows were — expected 276.0 but was 220.0 ».
+2. **`itemSpecs()` en éco ne joue réellement rien** : `animateItem(null, null, null)` pose la ligne à
+   sa place définitive dans la première image (mesuré : retrait à `Off` → 220 dp à l'image 0, la même
+   valeur qu'après l'animation à `Full`).
+3. **« Retirer la ligne en cours » n'existe pas** : la règle du lecteur refuse tout retrait sur ou
+   derrière la tête de lecture (`NowPlayingModel.remove`, `editable = index > state.index`), et la
+   ligne jouée n'a pas de ✕. Le cas de la file est donc « une file qui joue, on retire la première
+   ligne à venir » — c'est ce que le test fait, et c'est le seul retrait que l'application permet.
+4. **Un marqueur n'a pas besoin d'un item à lui.** Les marqueurs vivent DANS la ligne d'un épisode
+   (les puces du SPA) : ajouter un marqueur fait grandir cette ligne, et la ligne du dessous voyage
+   de la même distance qu'une insertion — `animateItem` sur les items suffit (mesuré **+52 dp**).
+5. **Le glyphe tourné est le même dessin** : `ChevronRight` à 90° occupe exactement la place de
+   `ChevronDown` ; seuls **24 px** d'anti-aliasing changent dans chaque golden `genres-arbre-*` (le
+   comparateur de T3 l'aurait toléré, le lot les réenregistre et le dit).
+
+**Mesuré** (Robolectric 360 dp, horloge Compose explicite, aucune lecture d'horloge murale ; captures
+en vol sous `docs/agents/screenshots/mobile/X5/`) :
+
+| Cas | Avant | Image 0 | 100 ms | Après | Éco |
+|---|---|---|---|---|---|
+| File, 200 lignes de 56 dp, retrait de la 3ᵉ pendant la lecture | « Titre 4 » à **276 dp** | **276 dp** (aucun saut) | strictement entre | **220 dp** (−56) | **220 dp** à l'image 0 |
+| Montage de la file à **4 000** lignes | — | 6 lignes à 56 dp l'une de l'autre, **égales** 300 ms plus tard (`fadeIn == null`) | — | — | — |
+| Playlist, 200 lignes d'édition de 76 dp, ✕ sur la 3ᵉ | **692 dp** | **692 dp** | strictement entre | **616 dp** (−76) | **616 dp** à l'image 0 |
+| Podcast, marqueur posé sur le 1ᵉʳ des 6 épisodes | « Épisode 2 » à **402,5 dp** | **402,5 dp** | strictement entre | **454,5 dp** (+52) | place à l'image 0 |
+| Chevron de l'arbre | — | `displace(NzDur.Base)` = **200 ms** au standard | — | — | **0 ms** à Reduced et à Off |
+
+Aucun de ces chemins n'ajoute de requête : un retrait est **une** commande `Remove` et la relecture
+locale de la poignée de file (une page de fenêtre), un marqueur est une ré-émission d'état. Le compte
+de mises en page est **1 par phase** : la place d'une ligne est une translation de placement, la ligne
+n'est jamais remesurée (le plafond web de 3 tient par construction).
+
+**Dû sur une machine à KVM** : le `FrameTimingMetric` (p95 ≤ 16,7 ms) d'un retrait ×3 sur la file de
+4 000 titres, et les captures émulateur à 50 % ; ce worker n'a pas de `/dev/kvm` (règle 8 des règles
+de lot), la preuve émulateur vient du job `emulator` de `mobile.yaml`. Les PNG de
+`docs/agents/screenshots/mobile/X5/` sont des images **Robolectric** prises en vol (100 ms), pas des
+captures d'émulateur.
+
+**Tests.** `QueueSheetMotionTest` (3 : le retrait qui déplace à Full, celui qui atterrit à l'image 0
+en éco, le montage muet à 4 000 lignes), `PlaylistScreenMotionTest` (2), `ShowScreenMotionTest` (2, le
+marqueur), `GenresChevronTest` (2, la spec du chevron aux trois niveaux). Chaque cas « ça bouge » a été
+lancé **une fois sur l'arbre d'avant** et échoue : il garde un vrai déplacement, pas un espace vide.
+
+**Hors portée.** Les gestes (le `SwipeRow` de G1, le réordonnancement par appui long de la file, P2),
+l'entrée des feuilles (`NzSheet`), le contenu (aucune ligne, aucune copie nouvelle), la politique de
+pagination de `ListWindow`.

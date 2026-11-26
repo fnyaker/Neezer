@@ -263,6 +263,11 @@ private fun ShowBody(
     val handle = state.handle
     val window = handle?.let { rememberListWindow(it) }
     val rowsOnScreen = 12
+    // An episode inserted or removed moves the rows below it over 200 ms, and a
+    // MARK added inside a row moves them the same way once that row grows (M6:
+    // no mount fade, M4; a 140 ms fade on the row that leaves). Measured: X5's
+    // `ShowScreenMotionTest`.
+    val specs = Sillon.motion.itemSpecs()
 
     LaunchedEffect(listState, window) {
         if (window == null) return@LaunchedEffect
@@ -402,13 +407,14 @@ private fun ShowBody(
                     )
                 }
             } else {
-                items(count = state.loaded, key = { index -> "row:$index" }) { index ->
+                items(count = state.loaded, key = { index -> state.cards[index]?.id ?: "skeleton:$index" }) { index ->
                     val card = state.cards[index]
+                    val motion = Modifier.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
                     if (card == null) {
                         Skeleton(
                             kind = NzSkeletonKind.List,
                             count = 1,
-                            modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                            modifier = motion.padding(horizontal = NzSpacing.pageX),
                         )
                     } else {
                         EpisodeRow(
@@ -425,7 +431,7 @@ private fun ShowBody(
                             onToggleChapters = { actions.toggleChapters(card.id) },
                             onSeek = { seconds -> actions.playAt(card.id, seconds) },
                             onRemoveMarker = actions.removeMarker,
-                            modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                            modifier = motion.padding(horizontal = NzSpacing.pageX),
                         )
                     }
                 }

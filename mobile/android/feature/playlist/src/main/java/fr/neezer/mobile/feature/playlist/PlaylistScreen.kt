@@ -58,6 +58,7 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.SwipeRow
 import fr.neezer.mobile.designsystem.nzDuration
@@ -100,44 +101,57 @@ fun PlaylistScreen(
     wide: Boolean = false,
 ) {
     val colors = Sillon.colors
+    // No top bar here: the SHELL draws the phone's (`app/NavGraph.kt`'s
+    // Scaffold) and a second one showed two bars on the device — measured on
+    // the emulator capture (`mb9-emulateur-360dp.png` before the fix). Since
+    // L1 the shell has no bar at all: the band below carries the playlist's
+    // title, and [PLAYLIST_MARKER] is what names the route to a test. Back is
+    // the system's (or the shell's `DetailBackRow`), as every other screen.
     Column(modifier = modifier.fillMaxSize().semantics { contentDescription = PLAYLIST_MARKER }) {
-        // No top bar here: the SHELL draws the phone's (`app/NavGraph.kt`'s
-        // Scaffold) and a second one showed two bars on the device — measured on
-        // the emulator capture (`mb9-emulateur-360dp.png` before the fix). Since
-        // L1 the shell has no bar at all: the band below carries the playlist's
-        // title, and [PLAYLIST_MARKER] is what names the route to a test. Back is
-        // the system's (or the shell's `DetailBackRow`), as every other screen.
-        when {
-            state.page == null && state.failure != null -> LoadFailed(
-                cause = state.failure,
-                onRetry = actions.retry,
-                modifier = Modifier.padding(NzSpacing.l),
-            )
+        // The phase, swapped in place: skeleton → page, LoadFailed → page (M7). A
+        // re-emit of the same phase plays nothing (X0's `contentKey`).
+        NzSwap(targetState = phaseOf(state), label = "playlist-phase") { phase ->
+            when (phase) {
+                Phase.Failed -> LoadFailed(
+                    cause = state.failure ?: "cause inconnue",
+                    onRetry = actions.retry,
+                    modifier = Modifier.padding(NzSpacing.l),
+                )
 
-            state.page == null -> SkeletonBand()
+                Phase.Loading -> SkeletonBand()
 
-            else -> if (wide) {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    Column(
-                        modifier = Modifier
-                            .width(320.dp)
-                            .fillMaxSize()
-                            .padding(NzSpacing.l),
-                        verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
-                    ) {
-                        Band(state, actions)
-                        ActionLine(state, actions)
-                        if (state.readOnlyNote) ReadOnlyNote(state)
+                Phase.Ready -> if (wide) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        Column(
+                            modifier = Modifier
+                                .width(320.dp)
+                                .fillMaxSize()
+                                .padding(NzSpacing.l),
+                            verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
+                        ) {
+                            Band(state, actions)
+                            ActionLine(state, actions)
+                            if (state.readOnlyNote) ReadOnlyNote(state)
+                        }
+                        Box(Modifier.weight(1f).fillMaxSize()) {
+                            Tracks(state, actions, showBand = false)
+                        }
                     }
-                    Box(Modifier.weight(1f).fillMaxSize()) {
-                        Tracks(state, actions, showBand = false)
-                    }
+                } else {
+                    Tracks(state, actions, showBand = true)
                 }
-            } else {
-                Tracks(state, actions, showBand = true)
             }
         }
     }
+}
+
+/** What the screen draws: its data arrived, its read failed, or nothing yet. */
+private enum class Phase { Loading, Failed, Ready }
+
+private fun phaseOf(state: PlaylistModel.State): Phase = when {
+    state.page != null -> Phase.Ready
+    state.failure != null -> Phase.Failed
+    else -> Phase.Loading
 }
 
 /**
@@ -422,6 +436,9 @@ private fun Tracks(
     // a fake source (a screenshot, a JVM test) gets the same `ListWindow`.
     val window = rememberPlaylistWindow(rows, state.wake)
     val listState = rememberLazyListState()
+    // A row's insert / remove plays X0's `itemSpecs()`: no mount fade (M4), a
+    // 200 ms placement, a 140 ms fade-out (the removal is the person's own act).
+    val specs = Sillon.motion.itemSpecs()
     LaunchedEffect(window, state.wake) {
         snapshotFlow { listState.firstVisibleItemIndex to listState.isScrollInProgress }
             .collect { (first, scrolling) ->
@@ -470,12 +487,13 @@ private fun Tracks(
                 }
             }
         }
-        items(count = state.trackCount, key = { index -> "row-$index-${window.rowAt(index)?.key ?: index}" }) { index ->
+        items(count = state.trackCount, key = { index -> window.itemKey(index) }) { index ->
             val row = window.rowAt(index)
+            val motion = Modifier.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
             if (row == null) {
                 // A page that has not landed yet: a skeleton, never a blank row.
                 Box(
-                    modifier = Modifier
+                    modifier = motion
                         .fillMaxWidth()
                         .height(56.dp)
                         .padding(horizontal = NzSpacing.s, vertical = NzSpacing.xs),
@@ -488,13 +506,14 @@ private fun Tracks(
                     )
                 }
             } else if (state.editing) {
-                EditRow(row, index, state.trackCount, actions)
+                EditRow(row, index, state.trackCount, actions, modifier = motion)
             } else {
                 PlaylistRow(
                     row = row,
                     onClick = { actions.openRow(row, index) },
                     onMore = { actions.more(row, index) },
                     onSwipeQueue = { actions.queueNext(row) },
+                    modifier = motion,
                 )
             }
         }
@@ -537,9 +556,10 @@ private fun PlaylistRow(
     onClick: () -> Unit,
     onMore: () -> Unit,
     onSwipeQueue: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
-    SwipeRow(onQueue = onSwipeQueue) { rowModifier ->
+    SwipeRow(onQueue = onSwipeQueue, modifier = modifier) { rowModifier ->
         Row(
             modifier = rowModifier
                 .heightIn(min = 56.dp)
@@ -585,13 +605,14 @@ private fun EditRow(
     index: Int,
     count: Int,
     actions: PlaylistActions,
+    modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
     val density = LocalDensity.current
     val step = with(density) { 76.dp.toPx() }
     var dragged by remember(row.key) { mutableFloatStateOf(0f) }
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(76.dp)
             .background(if (index % 2 == 0) colors.s1 else colors.bg)
@@ -828,3 +849,20 @@ private fun RecommendationRow(
 
 /** How many rows a 600 dp viewport shows: what the window asks for per report. */
 private const val VISIBLE_ROWS = 12
+
+/**
+ * A row's `LazyColumn` key, stable across a removal.
+ *
+ * The key used to carry the index (`"row-<i>-<track key>"`), which is a NEW item
+ * after every removal: every row below was rebuilt instead of moving, so
+ * `animateItem` had nothing to animate. The identity is the track's own key; the
+ * rank only disambiguates a playlist that holds the same title twice (a playlist
+ * may), counted over the window's LOADED rows — a page that is not loaded draws a
+ * skeleton, which has its own key. Same rule as the queue's (`QueueSheet.kt`).
+ */
+private fun ListWindow.itemKey(index: Int): String {
+    val row = rowAt(index) ?: return "skeleton:$index"
+    var rank = 0
+    for ((other, value) in rows) if (other < index && value.key == row.key) rank += 1
+    return if (rank == 0) row.key else "${row.key}#$rank"
+}
