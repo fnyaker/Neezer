@@ -1,7 +1,5 @@
 package fr.neezer.mobile.app
 
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -24,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.filter
 import androidx.navigation.NavDestination
@@ -40,6 +39,7 @@ import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzToastHost
 import fr.neezer.mobile.designsystem.NzToasts
+import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.feature.discovery.RecapEntry
 import fr.neezer.mobile.feature.discovery.ReleaseShelfEntry
 import fr.neezer.mobile.feature.discovery.ReleasesEntry
@@ -331,17 +331,24 @@ private fun NavGraph(
     startDestination: Any,
 ) {
     val navigator: NzNavigator = graph
+    val motion = Sillon.motion
+    // A transition lambda is not composable: read the density before it. `moveM`
+    // is already 0 dp when the level has no displacement (reduced/eco).
+    val risePx = with(LocalDensity.current) { motion.moveM.roundToPx() }
     NavHost(
         navController = nav,
         startDestination = startDestination,
-        // Chaque écran possède son mouvement (`transitions.md`) : un onglet qui
-        // se pose ne doit pas être ré-animé par le routeur — c'est exactement ce
-        // double mouvement que la personne sent comme « ça se réinitialise après
-        // le geste ».
-        enterTransition = { EnterTransition.None },
-        exitTransition = { ExitTransition.None },
-        popEnterTransition = { EnterTransition.None },
-        popExitTransition = { ExitTransition.None },
+        // L1's rule stays a GUARD, not a blanket: a sweep between the four pager
+        // pages draws nothing (`isTabSwap`), every other route change is a push —
+        // a fade plus the SPA's 8 dp rise, the old page gone in the same frame
+        // (M3). A back fades both pages 140 ms, the one case Compose cannot cut
+        // without a jump.
+        enterTransition = { routeEnter(motion, risePx, tabSwap = isTabSwap()) },
+        exitTransition = { routeExit() },
+        popEnterTransition = { routePopEnter(motion) },
+        popExitTransition = { routePopExit(motion) },
+        // Never a size walk: one layout per frame, and it clips (M10).
+        sizeTransform = { null },
     ) {
         composable<Routes.Setup> { SetupEntry(nav = navigator) }
         composable<Routes.Login> { LoginEntry(nav = navigator) }

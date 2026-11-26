@@ -15,16 +15,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination
 import fr.neezer.mobile.bridge.NzNavigator
+import fr.neezer.mobile.designsystem.NzDur
+import fr.neezer.mobile.designsystem.NzEase
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.NzMotion
+import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTabBar
 import fr.neezer.mobile.designsystem.NzTabItem
 import fr.neezer.mobile.designsystem.Sillon
@@ -96,6 +107,48 @@ private fun NavDestination?.isSettings(): Boolean {
 fun selectedIndexOf(destination: NavDestination?): Int =
     Tab.entries.firstOrNull { destination.isOn(it) }?.page
         ?: if (destination.isSettings()) SETTINGS_ITEM else -1
+
+/**
+ * A push: the SPA's `pageEnter` — a fade plus 8 dp of rise over 200 ms.
+ * NOTHING for a sweep between the four pager pages (the pager is already moving,
+ * L1's reason kept as a guard) nor for an eco device (M13).
+ *
+ * **Reduced motion keeps the fade and drops only the rise** (M14): the plan's
+ * pseudo-code guarded on `!motion.moves`, which is true at reduced too and would
+ * have silenced the opacity the rule keeps; the acceptance test
+ * (`routeEnter(reduced) !== None`) and M14 decide, as X0 already did for
+ * `displaceOffset`. The 0 dp rise is the `moveM` token itself.
+ *
+ * The slide's spec is an `IntOffset` tween, not `motion.base()` (a `Float`
+ * spec does not compile into `slideInVertically`); `displaceOffset` is the token
+ * that carries the enter curve and is 0 at reduced.
+ */
+fun routeEnter(motion: NzMotion, risePx: Int, tabSwap: Boolean): EnterTransition = when {
+    tabSwap || motion.level == NzMotionLevel.Off -> EnterTransition.None
+    !motion.moves -> fadeIn(motion.base())
+    else -> fadeIn(motion.base()) +
+        slideInVertically(motion.displaceOffset(NzDur.Base, NzEase.Enter)) { risePx }
+}
+
+/** M3: on a push the old page leaves in the same frame — no exit to draw. */
+fun routeExit(): ExitTransition = ExitTransition.None
+
+/** A pop: the SPA's traversal — a 140 ms fade, nothing else (opacity kept at reduced, M14). */
+fun routePopEnter(motion: NzMotion): EnterTransition =
+    if (motion.level == NzMotionLevel.Off) EnterTransition.None else fadeIn(motion.fast())
+
+fun routePopExit(motion: NzMotion): ExitTransition =
+    if (motion.level == NzMotionLevel.Off) ExitTransition.None else fadeOut(motion.fast())
+
+/**
+ * The router's own test: a move between two of the four pager pages is the
+ * PAGER's motion (L1), so the router draws nothing; Réglages and every detail
+ * route are a push. Public so `RouteMotionTest` exercises the production guard
+ * instead of a copy of it.
+ */
+fun AnimatedContentTransitionScope<NavBackStackEntry>.isTabSwap(): Boolean =
+    selectedIndexOf(initialState.destination) in Tab.entries.indices &&
+        selectedIndexOf(targetState.destination) in Tab.entries.indices
 
 /**
  * What a page of the pager draws: the tab's own entry, in place of the four
