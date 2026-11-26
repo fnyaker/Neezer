@@ -685,6 +685,66 @@ sign-in **38 s** with `covers_served=2`, **3 000 events in 3 min 44 s**, the who
 When it finds a crash, the fix gets its own task and T1 grows a step for that screen (the crawler
 finds the net's holes; it does not become the gate).
 
+### La chasse aux bugs native (lot B2, plan `plan-bughunt` §9)
+
+Monkey trouve les chemins qu'un script n'a pas écrits ; il ne DIT pas ce qui s'est passé quand un
+contrôle ne fait rien. La chasse, elle, clique **chaque** nœud interactif de chaque écran atteignable
+et classe la transition dans un vocabulaire commun aux deux apps (`plan-bughunt` §4) :
+`exception`, `blank`, `freeze`, `console-error`, `navigated`, `opened-layer`, `state-changed`,
+`nothing`, `blocked-destructive`, `unreachable`, `skipped-session`. Elle tourne sur l'**APK release
+signé et connecté** — l'artefact que la personne installe — et écrit `bughunt-native.json` (le
+registre), `bughunt-native.md` (le rapport humain, gabarit §4.8), `run.txt` (la ligne de résumé),
+`crash.txt`, `logcat.txt`, `device.txt` et une capture par écran plus une par anomalie, dans le
+nommage de T9 (`screens/NN-<écran>.png`, `.xml`).
+
+```sh
+python3 mobile/tools/bughunt/explore.py --self-test       # sans émulateur : parse, dédup, classify
+python3 mobile/tools/bughunt/explore.py --check-routes    # 26/26, sortie 2 sur une dérive
+mobile/tools/bughunt/explore.sh --serial emulator-5580     # boot, connexion, 3 scénarios, passe
+mobile/tools/bughunt/explore.sh --serial emulator-5580 --scenario burst
+mobile/tools/bughunt/explore.sh --serial emulator-5580 --only "Réglages"
+gh workflow run bughunt.yaml --ref <branche>               # le job `native`, KVM du runner
+```
+
+Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
+
+- **le parseur est celui de T9, pas une copie.** `explore.py` charge `mobile/tools/judge/precheck.py`
+  par chemin ; `precheck.Node` ne garde pas `resource-id`/`checkable`/`long-clickable`, donc le même
+  dump est relu une seconde fois pour sa LISTE d'attributs avec les regex `TAG`/`ATTR` de precheck,
+  zippée par ordre de document. Deux parseurs seraient deux vérités sur le même fichier ;
+- **un conteneur défilable qui contient des contrôles n'est pas un élément** : ce sont ses enfants.
+  Sans cette règle, le nœud racine de chaque écran devenait un `nothing` (mesuré sur le premier
+  arbre factice : la racine de l'accueil et celle des Réglages, deux bugs `mineur` par écran qui
+  n'existent pas). La clause de §9.4 reste pour la ligne de liste qui n'est pas cliquable elle-même ;
+- **une action destructive est cliquée jusqu'à sa confirmation, jamais au-delà** : `explore.py` porte
+  l'unique liste (`DESTRUCTIVE`) — `Déconnexion` s'arrête devant `Confirmer`, `Changer de serveur`
+  est `skipped-session` dans la passe, `Mettre à jour` s'arrête à sa feuille. Une confirmation qui
+  n'apparaît pas est un bug `bloquant` (`confirm=no-confirm`), pas un accident du harnais.
+
+La **passe** part de l'accueil, explore en largeur les écrans par ordre de découverte, et se restaure
+par `BACK` (une fois après une navigation, jusqu'à 3 fois sinon) puis, en dernier recours, par
+`am force-stop` + `am start` + le **chemin de taps** enregistré à la découverte. Bornes : 700 nœuds,
+25 min, 15 s par nœud, un tap par nœud. Un élément hors écran est ramené par 3 glissements ; s'il
+n'arrive pas, il est `unreachable` et compte **trouvé mais non cliqué** (`coverage=416/418 (99.5%)`
+reste honnête, §4.4). La règle du frère échantillonne 3 lignes sur ≥ 6 sœurs identiques (`duplicates=n`).
+
+Les trois scénarios du propriétaire sont en tête du rapport, avec leurs nombres :
+`skip_burst=ok taps=40 gap_ms=100 playing=1 title_changed=1 crash=0` (20 `Suivant` à 100 ms puis 20
+alternés, titre lu dans `dumpsys media_session` et horloge de position vérifiée sur deux dumps à
+1,5 s), `settings_apply=ok controls=<n> blanks=0 crash=0` (chaque `switch`/`checkbox`, jamais une
+action irréversible), puis `session_roundtrip=ok login_painted=1 resignin=1 crash=0` — `explore.sh`
+reconnecte à la fin, donc la passe suivante n'a pas besoin d'un second sign-in.
+
+`--check-routes` compare `object Routes` de `NavGraph.kt` à `mobile/tools/bughunt/expected-routes.txt`
+(26 destinations) : une destination ajoutée sans ligne, ou une ligne sans destination, sort en 2 et
+la nomme. C'est la garde anti-dérive de l'inventaire d'écrans — une nouvelle route sans porte se voit
+là avant qu'un rapport ne la manque en silence. Les destinations hors passe (second appareil, compte
+tiers, pré-session) y sont écrites avec leur raison et le rapport les liste (`hors-passe`).
+
+Sur ce worker (pas de `/dev/kvm`) : `--self-test` **0,1 s** (`routes=26/26 parse=ok dedupe=ok
+classify=ok`), `--check-routes` **0,1 s**, `shellcheck` 0.10 en 0,2 s. La passe réelle se mesure sur
+le premier run `bughunt.yaml` — le nombre d'écrans et d'éléments est publié dans le rapport joint.
+
 ### An upgrade is a first-class path (lot T8)
 
 The release page is the delivery channel, and the only install a person makes is
