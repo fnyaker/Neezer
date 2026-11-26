@@ -160,123 +160,12 @@ open_door() {
 # A screen prepared as a person finds it: awake, keyguard down, no ANR dialog.
 prepare_device
 
-# --- 1. signed in, on the home, with covers ---------------------------------
-# `release-signin.sh` prints its own verdicts; they are kept in a file as well so
-# the cover count below is read from the run and not from a grep of the console.
-step "release journey: sign in first (release-signin.sh)"
-signin_log="$(mktemp)"
-trap 'rm -f "$signin_log"; evidence_finish' EXIT
-if ! "$here/release-signin.sh" --serial "$serial" 2>&1 | tee "$signin_log"; then
-    verdict 0
-    note "the release sign-in failed; the journey starts from a signed-in home"
-    exit 1
-fi
-grep -q '^release_tls_trusted=1' "$signin_log" || {
-    verdict 0
-    fail_screen "the platform trust store did not accept the Let's Encrypt chain (phase 1)"
-}
-covers="$(sed -n 's/^release_signin=1 covers_served=\([0-9]*\).*/\1/p' "$signin_log" | tail -1)"
-[[ -n "$covers" ]] && (( covers >= 1 )) || {
-    verdict 0
-    fail_screen "signed in, but the home asked the server for no cover"
-}
-
-# The walk's crash/ANR verdicts are about the walk: the buffers are emptied here
-# so a line from the sign-in (already judged by release-signin.sh) cannot fail a
-# later door for a reason that is not its own.
-adb_dev logcat -c >/dev/null 2>&1 || true
-
-step "release journey: the screens"
-# The home is already painted by the sign-in; its marker is on the root in every
-# state (hero, skeletons, a failed load), so this door costs no tap.
-if await_text "Accueil Neezer" 30; then
-    printf 'door=Accueil opened=1 covers_served=%s\n' "$covers"
-    doors=$((doors + 1))
-else
-    printf 'door=Accueil opened=0 expected="Accueil Neezer"\n'
-    verdict 0
-    fail_screen "the home never painted « Accueil Neezer » after signing in"
-fi
-check_app "the Accueil door"
-shot 01-accueil
-
-open_door "Rechercher" "Rechercher" "Recherche Neezer"
-shot 02-rechercher
-open_door "Bibliothèque" "Biblio" "Bibliothèque Neezer"
-shot 03-bibliotheque
-open_door "Podcasts" "Podcasts" "Podcasts Neezer"
-shot 04-podcasts
-open_door "Accueil (retour)" "Accueil" "Accueil Neezer"
-
-# --- 2. Réglages → Lecture & son → Mode voiture ------------------------------
-# Réglages is the bottom bar's FIFTH item (L1 removed the top bar; it used to be
-# the top-bar action); its menu is proved by its filter's own label. The
-# Bibliothèque tab's WORD is « Biblio » (the SPA's label: 72 dp on a 360 dp bar),
-# while the screen keeps its full name.
-open_door "Réglages" "Réglages" "Chercher un réglage"
-shot 05-reglages
-
-# « Qualité demandée au serveur » is a card title ONLY `PlaybackSection` draws:
-# waiting for « Lecture & son » alone would match the menu row that was just
-# tapped, and a tap that did nothing would pass.
-open_door "Lecture & son" "Lecture & son" "Qualité demandée au serveur"
-shot 06-lecture-et-son
-
-# The car-settings card is the LAST of that section, behind the quality card and
-# the five effect cards (output, pan, audio, equaliser with its ten faders,
-# transitions): eight bounded swipes, along the margin so the faders' own drags
-# are never touched. Its button is the one gate M13 left; the Activity draws
-# « Déclenchement », which no other screen has.
-expected_needle="Déclenchement"
-if ! scroll_to_text "Mode voiture" 8; then
-    printf 'door=Mode voiture opened=0 expected="%s"\n' "$expected_needle"
-    verdict 0
-    fail_screen "no « Mode voiture » card in Lecture & son"
-fi
-# The button asks for POST_NOTIFICATIONS (API 33+) and opens the Activity in the
-# same click: the permission dialog would cover the Activity and the dump would
-# describe the dialog. `ci-emulator.sh` installs with `-g`, but `pm clear` in the
-# sign-in can drop a runtime grant; granting it here restores the installer's
-# state and changes nothing the journey is meant to prove.
-adb_dev shell pm grant "$ui_package" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
-if ! tap_text "Ouvrir les réglages du mode voiture"; then
-    printf 'door=Mode voiture opened=0 expected="%s"\n' "$expected_needle"
-    verdict 0
-    fail_screen "no « Ouvrir les réglages du mode voiture » button"
-fi
-if await_text "$expected_needle" 15; then
-    printf 'door=Mode voiture opened=1\n'
-    doors=$((doors + 1))
-    car_settings=1
-else
-    printf 'door=Mode voiture opened=0 expected="%s"\n' "$expected_needle"
-    verdict 0
-    fail_screen "the car settings did not paint « $expected_needle »"
-fi
-check_app "the Mode voiture door"
-shot 07-mode-voiture
-
-# BACK finishes the Activity (it is started NEW_TASK from the settings screen).
-# The pane returns at whatever offset it was left at, so either of its own card
-# titles names it — the car card just tapped, or the quality card at the top if
-# the scroll state was rebuilt; neither exists on the car Activity.
-adb_dev shell input keyevent KEYCODE_BACK >/dev/null
-if ! await_text "Ouvrir les réglages du mode voiture" 6 &&
-    ! await_text "Qualité demandée au serveur" 10; then
-    verdict 0
-    fail_screen "BACK from the car settings did not return to Lecture & son"
-fi
-if ! tap_text "Accueil" || ! await_text "Accueil Neezer" 15; then
-    verdict 0
-    fail_screen "the home did not come back after the car settings"
-fi
-check_app "the return to Accueil"
-
-# --- 3. the player, for the judge's evidence (lot T9) ------------------------
-# Four captures no door needs. They are EVIDENCE-ONLY: the journey fails on them
-# for a crash (T1's rule), never for a missing mini-bar — a screen the build
-# cannot reach is `player=unavailable`, the judge then says INCOMPLETE, and
-# nobody pretends a flake is a defect.
+# --- the player, for the judge's evidence (lot T9) ---------------------------
+# Four captures no door needs, taken on the home the SIGN-IN has just painted
+# (see the call site): they are EVIDENCE-ONLY, the journey fails on them for a
+# crash (T1's rule), never for a missing mini-bar — a screen the build cannot
+# reach is `player=unavailable`, the judge then says INCOMPLETE, and nobody
+# pretends a flake is a defect.
 
 # A control named by `content-desc` rather than by its text: Compose draws an
 # icon button with an empty `text` and its label in the description TalkBack
@@ -404,6 +293,143 @@ player_evidence() {
     fi
 }
 
-[[ -n "$evidence" ]] && player_evidence
+# --- 1. signed in, on the home, with covers ---------------------------------
+# `release-signin.sh` prints its own verdicts; they are kept in a file as well so
+# the cover count below is read from the run and not from a grep of the console.
+step "release journey: sign in first (release-signin.sh)"
+signin_log="$(mktemp)"
+trap 'rm -f "$signin_log"; evidence_finish' EXIT
+if ! "$here/release-signin.sh" --serial "$serial" 2>&1 | tee "$signin_log"; then
+    verdict 0
+    note "the release sign-in failed; the journey starts from a signed-in home"
+    exit 1
+fi
+grep -q '^release_tls_trusted=1' "$signin_log" || {
+    verdict 0
+    fail_screen "the platform trust store did not accept the Let's Encrypt chain (phase 1)"
+}
+covers="$(sed -n 's/^release_signin=1 covers_served=\([0-9]*\).*/\1/p' "$signin_log" | tail -1)"
+[[ -n "$covers" ]] && (( covers >= 1 )) || {
+    verdict 0
+    fail_screen "signed in, but the home asked the server for no cover"
+}
+
+# The walk's crash/ANR verdicts are about the walk: the buffers are emptied here
+# so a line from the sign-in (already judged by release-signin.sh) cannot fail a
+# later door for a reason that is not its own.
+adb_dev logcat -c >/dev/null 2>&1 || true
+
+step "release journey: the screens"
+# The home is already painted by the sign-in; its marker is on the root in every
+# state (hero, skeletons, a failed load), so this door costs no tap.
+if await_text "Accueil Neezer" 30; then
+    printf 'door=Accueil opened=1 covers_served=%s\n' "$covers"
+    doors=$((doors + 1))
+else
+    printf 'door=Accueil opened=0 expected="Accueil Neezer"\n'
+    verdict 0
+    fail_screen "the home never painted « Accueil Neezer » after signing in"
+fi
+check_app "the Accueil door"
+shot 01-accueil
+
+# The player's four captures happen HERE, on the home the sign-in has just
+# painted, and not at the end of the walk: `release-signin.sh` owns its bench
+# server and STOPS it on exit (its own `cleanup`), so every step after it runs
+# offline — the tabs are shell and still open, but a screen that re-fetches its
+# data paints empty (measured: at the end of the walk the home reads « Ta
+# bibliothèque est vide pour l'instant », no « Lire … » card to tap, run
+# 45798045049). The home painted by the sign-in is the one state with its cards,
+# so the player is opened from it; the sheet is dismissed before the walk
+# continues.
+if [[ -n "$evidence" ]]; then
+    player_evidence
+    # Back on the home whatever the player did: the drag closes the sheet, a
+    # failure leaves it open, and the next door is behind it.
+    if ui_text | grep -qF "Réduire le lecteur"; then
+        tap_desc_prefix "Réduire le lecteur" 5 || true
+    fi
+    # Evidence-only steps never fail the journey (T1's rule): if the sheet will
+    # not close, say so and let the next door fail on its own terms.
+    if ! await_text "Accueil Neezer" 10; then
+        printf 'player=recovery the home did not come back after the captures\n'
+        tap_desc_prefix "Réduire le lecteur" 5 || true
+        await_text "Accueil Neezer" 10 ||
+            printf 'player=recovery still not on the home\n'
+    fi
+fi
+
+open_door "Rechercher" "Rechercher" "Recherche Neezer"
+shot 02-rechercher
+open_door "Bibliothèque" "Biblio" "Bibliothèque Neezer"
+shot 03-bibliotheque
+open_door "Podcasts" "Podcasts" "Podcasts Neezer"
+shot 04-podcasts
+open_door "Accueil (retour)" "Accueil" "Accueil Neezer"
+
+# --- 2. Réglages → Lecture & son → Mode voiture ------------------------------
+# Réglages is the bottom bar's FIFTH item (L1 removed the top bar; it used to be
+# the top-bar action); its menu is proved by its filter's own label. The
+# Bibliothèque tab's WORD is « Biblio » (the SPA's label: 72 dp on a 360 dp bar),
+# while the screen keeps its full name.
+open_door "Réglages" "Réglages" "Chercher un réglage"
+shot 05-reglages
+
+# « Qualité demandée au serveur » is a card title ONLY `PlaybackSection` draws:
+# waiting for « Lecture & son » alone would match the menu row that was just
+# tapped, and a tap that did nothing would pass.
+open_door "Lecture & son" "Lecture & son" "Qualité demandée au serveur"
+shot 06-lecture-et-son
+
+# The car-settings card is the LAST of that section, behind the quality card and
+# the five effect cards (output, pan, audio, equaliser with its ten faders,
+# transitions): eight bounded swipes, along the margin so the faders' own drags
+# are never touched. Its button is the one gate M13 left; the Activity draws
+# « Déclenchement », which no other screen has.
+expected_needle="Déclenchement"
+if ! scroll_to_text "Mode voiture" 8; then
+    printf 'door=Mode voiture opened=0 expected="%s"\n' "$expected_needle"
+    verdict 0
+    fail_screen "no « Mode voiture » card in Lecture & son"
+fi
+# The button asks for POST_NOTIFICATIONS (API 33+) and opens the Activity in the
+# same click: the permission dialog would cover the Activity and the dump would
+# describe the dialog. `ci-emulator.sh` installs with `-g`, but `pm clear` in the
+# sign-in can drop a runtime grant; granting it here restores the installer's
+# state and changes nothing the journey is meant to prove.
+adb_dev shell pm grant "$ui_package" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+if ! tap_text "Ouvrir les réglages du mode voiture"; then
+    printf 'door=Mode voiture opened=0 expected="%s"\n' "$expected_needle"
+    verdict 0
+    fail_screen "no « Ouvrir les réglages du mode voiture » button"
+fi
+if await_text "$expected_needle" 15; then
+    printf 'door=Mode voiture opened=1\n'
+    doors=$((doors + 1))
+    car_settings=1
+else
+    printf 'door=Mode voiture opened=0 expected="%s"\n' "$expected_needle"
+    verdict 0
+    fail_screen "the car settings did not paint « $expected_needle »"
+fi
+check_app "the Mode voiture door"
+shot 07-mode-voiture
+
+# BACK finishes the Activity (it is started NEW_TASK from the settings screen).
+# The pane returns at whatever offset it was left at, so either of its own card
+# titles names it — the car card just tapped, or the quality card at the top if
+# the scroll state was rebuilt; neither exists on the car Activity.
+adb_dev shell input keyevent KEYCODE_BACK >/dev/null
+if ! await_text "Ouvrir les réglages du mode voiture" 6 &&
+    ! await_text "Qualité demandée au serveur" 10; then
+    verdict 0
+    fail_screen "BACK from the car settings did not return to Lecture & son"
+fi
+if ! tap_text "Accueil" || ! await_text "Accueil Neezer" 15; then
+    verdict 0
+    fail_screen "the home did not come back after the car settings"
+fi
+check_app "the return to Accueil"
+
 
 verdict 1
