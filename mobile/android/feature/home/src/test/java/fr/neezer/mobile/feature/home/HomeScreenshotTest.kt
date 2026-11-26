@@ -7,17 +7,28 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.TweenSpec
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import fr.neezer.mobile.bridge.ScreenState
+import fr.neezer.mobile.designsystem.NzDur
+import fr.neezer.mobile.designsystem.NzMotion
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.designsystem.inPlaceSpecs
 import fr.neezer.mobile.testkit.ScreenGoldenRule
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -119,5 +130,45 @@ class HomeGoldenTest {
         )
         assertEquals("la marge haute de la page est celle du SPA (20 dp)", 20f, hero.top.value, 1f)
         assertEquals("deux sections sont à 32 dp", 32f, resume.top.value - hero.bottom.value, 1f)
+    }
+
+    /**
+     * X3: the home's phase replaced in place. At eco the old phase is out of the
+     * tree in the SAME frame and the new one is there (M7 + M13); a re-emit of the
+     * same phase adds no node (M6). The curve is X0's `inPlaceSpecs` — 140 ms and
+     * a 4 dp rise at Full, `None` at Off (asserted as a spec, since Compose cannot
+     * read a running animation's alpha; `TransitionTest` states that limit).
+     */
+    @Test
+    fun aPhaseChangeReplacesInTheSameFrameAtEco() {
+        var state by mutableStateOf(HomeModel.State())
+        var tick by mutableIntStateOf(0)
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Off) {
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        tick // a re-emit of the same phase, forced by the wrapper
+                        HomeScreen(state = state, actions = HomeActions())
+                    }
+                }
+            }
+        }
+        rule.composeRule.onNodeWithTag(HOME_SKELETON_TAG).assertExists()
+        rule.composeRule.onNodeWithTag(HOME_RESUME_TAG).assertDoesNotExist()
+
+        state = defaultState()
+        rule.composeRule.waitForIdle()
+        rule.composeRule.onNodeWithTag(HOME_SKELETON_TAG).assertDoesNotExist()
+        rule.composeRule.onNodeWithTag(HOME_RESUME_TAG).assertExists()
+
+        tick++
+        rule.composeRule.waitForIdle()
+        rule.composeRule.onAllNodesWithTag(HOME_RESUME_TAG).assertCountEquals(1)
+
+        val full = inPlaceSpecs(NzMotion(NzMotionLevel.Full))
+        assertEquals(NzDur.Fast, (full.fade as TweenSpec<*>).durationMillis)
+        assertEquals(NzDur.Fast, (full.move as TweenSpec<*>).durationMillis)
+        assertNull(full.exit)
+        assertEquals("eco plays nothing (M13)", 0, (inPlaceSpecs(NzMotion(NzMotionLevel.Off)).fade as TweenSpec<*>).durationMillis)
     }
 }
