@@ -299,13 +299,29 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # `sdkmanager`/`avdmanager` are Java programs; `emu.sh create` installs the
-      # image and the emulator itself.
+      # `sdkmanager`/`avdmanager` are Java programs, hence the JDK before them.
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+      # The runner image carries `adb` but NOT the emulator package, and
+      # `emu.sh create` refuses an SDK without `emulator/emulator` before it
+      # reaches its own install branch (measured on this job's first run: 1m10s,
+      # "emulator not found at /usr/local/lib/android/sdk/emulator/emulator").
+      # Same recipe as `mobile.yaml`; `emu.sh create` then only makes the AVD.
+      - name: Install the emulator and its system image
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          # `yes | sdkmanager --licenses` fails the step under `pipefail` when
+          # sdkmanager has nothing left to ask and closes the pipe first
+          # (measured on mobile.yaml's emulator job, 2026-11-17): the licences
+          # are what we want, not yes's exit status.
+          yes | "$sdk/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$sdk/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" "system-images;android-35;default;x86_64"
 
       - name: Set up Node
         uses: actions/setup-node@v4
