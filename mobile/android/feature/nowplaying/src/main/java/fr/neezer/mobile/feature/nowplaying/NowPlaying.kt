@@ -1,12 +1,13 @@
 package fr.neezer.mobile.feature.nowplaying
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -23,14 +25,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -58,10 +68,14 @@ import fr.neezer.mobile.feature.party.PartyButton
 import fr.neezer.mobile.feature.remote.RemoteButton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import uniffi.nz_ffi.PlayState
 import uniffi.nz_ffi.PlayerCommand
 import uniffi.nz_ffi.PlayerListener
@@ -248,10 +262,9 @@ fun NowPlayingHost(nav: NzNavigator, modifier: Modifier = Modifier) {
     }
 
     val pane = NowPlayingState.pane
-    AnimatedVisibility(
-        visible = opened,
-        enter = slideInVertically(initialOffsetY = { it }),
-        exit = slideOutVertically(targetOffsetY = { it }),
+    PlayerSheetFrame(
+        opened = opened,
+        onDismiss = { NowPlayingState.hide() },
         modifier = modifier.fillMaxSize(),
     ) {
         PlayerSurface(
@@ -312,6 +325,240 @@ fun NowPlayingHost(nav: NzNavigator, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * The sheet's frame: the player follows the finger down and settles on **distance
+ * or velocity** (P2, `plan-mobile-ui-finish.md` §3 and §4).
+ *
+ * It replaces an `AnimatedVisibility(slideOutVertically)`, which had two defects
+ * the person could see: the exit **started at 0** on every path — the chevron, the
+ * back key and a drag all jumped back to the top before leaving (`transitions.md`
+ * P1's own trap) — and a finger could not move it at all.
+ *
+ * The numbers are the plan's shared ones, no more: **28 % of the sheet height** or
+ * **125 dp/s** decides, the dismissal springs at `spring(0.8f, 400f)` (Apple's
+ * Music, WWDC 2018, S4) and the snap back at `spring(1f, 400f)` — 100 % damping,
+ * so it never overshoots the top edge. The settle is seeded with the release's
+ * own velocity, so the motion continues from the finger instead of restarting.
+ *
+ * **Why a `Float` and not `AnchoredDraggableState`:** the plan's §4 sketched the
+ * anchored draggable, and it cannot hold §3's table — its `flingBehavior` takes ONE
+ * animation spec for both targets (so a snap back would carry the dismissal's 80 %
+ * damping), it cannot land at once under eco, and a cancelled drag leaves the
+ * sheet mid-way instead of returning it. A restricted pointer-input coroutine also
+ * may not call `snapTo`/`animateTo`, so the frame would allocate a coroutine per
+ * move event. This is `SwipeRow`'s proven shape: one state write per move, ONE
+ * settle coroutine cancelled by the next `down` (`docs/agents/transitions.md`
+ * S1/S2/S4, M14).
+ *
+ * **One truth for the three doors.** `NowPlayingState` stays the only state: the
+ * chevron and the back key call `onDismiss()`, and a dismissive settle calls it
+ * too, so none of them can disagree with the sheet's position. Dismissing from
+ * rest animates from the CURRENT offset (never from 0), and a second open starts
+ * from wherever the sheet is — the entrance snaps under the screen in the layout
+ * phase, so the first painted frame is never a flash of the player mid-air.
+ *
+ * **A cancel is never a decision** (S8): a gesture cut by the system returns to
+ * the anchor it started from.
+ *
+ * **Reduced motion / eco** (`Sillon.motion.moves == false`): every settle lands at
+ * once, exactly as M14 asks — no displacement, no duration. The drag itself still
+ * follows the finger: that is the person's own movement, not an animation.
+ */
+@Composable
+internal fun PlayerSheetFrame(
+    opened: Boolean,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    var height by remember { mutableFloatStateOf(0f) }
+    /** The sheet's top, in px: 0 is open, [height] is closed. */
+    var offsetY by remember { mutableFloatStateOf(0f) }
+    var visible by remember { mutableStateOf(false) }
+    var pendingOpen by remember { mutableStateOf(false) }
+    /** Where this drag started, for a cancel that must not decide (S8). */
+    var dragStart by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    val moves = Sillon.motion.moves
+    val tracker = remember { VelocityTracker() }
+    val settleJob = remember { mutableStateOf<Job?>(null) }
+
+    // One settle at a time, from the offset the sheet has NOW and with the speed
+    // the finger left it: the next `down` cancels it, and so does the next door.
+    fun settleTo(target: Float, velocityPx: Float, damping: Float, onDone: () -> Unit = {}) {
+        settleJob.value?.cancel()
+        if (!moves) {
+            offsetY = target
+            onDone()
+            return
+        }
+        settleJob.value = scope.launch {
+            animate(
+                initialValue = offsetY,
+                targetValue = target,
+                initialVelocity = velocityPx,
+                animationSpec = spring(
+                    dampingRatio = damping,
+                    stiffness = Spring.StiffnessMediumLow,
+                    // The settle is DONE when it is within half a pixel: the tail
+                    // below that is not motion, and waiting for Compose's 0.01 px
+                    // threshold made a dismissal read 752 ms of animation for a
+                    // move the eye finishes in ~400 (SwipeRow's own constant).
+                    visibilityThreshold = 0.5f,
+                ),
+            ) { value, _ -> offsetY = value }
+            onDone()
+        }
+    }
+
+    // The latest `opened` for a settle that finishes later than the state it was
+    // started by: a re-open in the exit's last frame must not hide the sheet.
+    val openedNow by rememberUpdatedState(opened)
+
+    // The entrance — and a re-open that interrupts an exit: both end at 0. The
+    // first entrance has no height yet, so the size callback owns its snap.
+    LaunchedEffect(opened) {
+        if (opened) {
+            visible = true
+            if (height > 0f) {
+                pendingOpen = false
+                settleTo(0f, 0f, RETURN_DAMPING)
+            } else {
+                pendingOpen = true
+            }
+        } else if (visible) {
+            // The chevron and the back key: from the CURRENT offset (never 0).
+            settleTo(height, 0f, DISMISS_DAMPING) { if (!openedNow) visible = false }
+        }
+    }
+    BackHandler(enabled = opened) { onDismiss() }
+
+    if (!visible) return
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onSizeChanged { size ->
+                val measured = size.height.toFloat()
+                if (measured <= 0f || measured == height) return@onSizeChanged
+                height = measured
+                if (pendingOpen) {
+                    pendingOpen = false
+                    offsetY = measured
+                    settleTo(0f, 0f, RETURN_DAMPING)
+                } else if (!opened) {
+                    // A rotation mid-close: aim at the NEW bottom.
+                    settleTo(measured, 0f, DISMISS_DAMPING) { if (!openedNow) visible = false }
+                } else {
+                    offsetY = offsetY.coerceIn(0f, measured)
+                }
+            }
+            .offset { IntOffset(0, offsetY.roundToInt()) }
+            .pointerInput(height) {
+                if (height <= 0f) return@pointerInput
+                // The shape [SwipeRow] proved (its five gesture tests run on this
+                // same Robolectric host): one state write per move, and a claimed
+                // gesture consumes only after the platform's slop. The finger's
+                // travel BEYOND the slop is the sheet's motion, so the follow is 1:1
+                // from the first claimed pixel.
+                awaitEachGesture {
+                    // Read at GESTURE time: the node's size, not a state that may
+                    // still be 0 when the pointer-input block was built.
+                    val sheetHeight = size.height.toFloat()
+                    if (sheetHeight <= 0f) return@awaitEachGesture
+                    val slop = viewConfiguration.touchSlop
+                    val flingPx = DISMISS_VELOCITY.toPx()
+                    val start = offsetY
+                    var claimed = false
+                    var cancelled = false
+                    var travelY = 0f
+                    var travelX = 0f
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    tracker.resetTracking()
+                    tracker.addPosition(down.uptimeMillis, down.position)
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.changedToUpIgnoreConsumed()) {
+                                // A REAL up is never consumed; Compose delivers a
+                                // cancelled gesture as a consumed up (`drag()` returns
+                                // false on `isConsumed` for the same reason). That is the
+                                // only way to tell them apart, and S8 needs to: a cancel
+                                // must not decide.
+                                if (change.isConsumed) cancelled = true
+                                tracker.addPosition(change.uptimeMillis, change.position)
+                                break
+                            }
+                            if (!change.pressed) {
+                                cancelled = true
+                                break
+                            }
+                            val delta = change.positionChange()
+                            // Fed from the first move, before the axis is decided: the
+                            // tracker needs the travel before the slop, or a flick under
+                            // the distance reports no velocity at all (SwipeRow measured
+                            // the same with two samples).
+                            tracker.addPosition(change.uptimeMillis, change.position)
+                            if (!claimed) {
+                                travelY += delta.y
+                                travelX += delta.x
+                                if (abs(travelY) <= slop) continue
+                                // A mostly horizontal drag belongs to the cover carousel
+                                // or the seek rail; an upward one has nowhere to go (the
+                                // sheet is already at 0). Neither is ours: consume
+                                // nothing, so the child keeps its gesture.
+                                if (abs(travelX) > abs(travelY) || (start <= 0f && travelY < 0f)) {
+                                    break
+                                }
+                                claimed = true
+                                settleJob.value?.cancel()
+                                change.consume()
+                                offsetY = (start + travelY - slop).coerceIn(0f, sheetHeight)
+                                continue
+                            }
+                            change.consume()
+                            offsetY = (offsetY + delta.y).coerceIn(0f, sheetHeight)
+                        }
+                    } catch (interrupted: CancellationException) {
+                        // `onCancelPointerInput` cancels this coroutine outright (a
+                        // system gesture, a call, another window taking the pointer):
+                        // the sheet must not be left half-open, so the cancel still
+                        // returns it, then the cancellation continues.
+                        if (claimed) settleTo(start, 0f, RETURN_DAMPING)
+                        throw interrupted
+                    }
+                    if (!claimed) return@awaitEachGesture
+                    if (cancelled) {
+                        // A cancel is never a decision: back to where it started.
+                        settleTo(start, 0f, RETURN_DAMPING)
+                        return@awaitEachGesture
+                    }
+                    val velocity = tracker.calculateVelocity().y.let { if (it.isNaN()) 0f else it }
+                    val dismiss = offsetY > sheetHeight * 0.28f || velocity > flingPx
+                    if (dismiss) {
+                        settleTo(sheetHeight, velocity, DISMISS_DAMPING) { onDismiss() }
+                    } else {
+                        settleTo(0f, velocity, RETURN_DAMPING)
+                    }
+                }
+            },
+    ) {
+        content()
+    }
+}
+
+/** The plan's sheet-dismiss speed, `AnchoredDraggableMinFlingVelocity` (S2/S4). */
+private val DISMISS_VELOCITY = 125.dp
+
+/**
+ * The plan's two springs (S4, Apple's Music on WWDC 2018): 80 % damping on the way
+ * out — a little momentum, no rebound — and 100 % on the way back, so the sheet
+ * never overshoots the top edge it is returning to. `Spring.StiffnessMediumLow`
+ * (400f) is the stiffness both use.
+ */
+private const val DISMISS_DAMPING = 0.8f
+private const val RETURN_DAMPING = 1f
 
 /** The line under the title: what the player is DOING, else who sings. */
 internal fun playbackLine(state: NowPlayingModel.State): String = when (state.snapshot?.state) {

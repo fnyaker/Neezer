@@ -7390,3 +7390,64 @@ il se lit avant `captureP1`, comme le fait `player()` dans le même fichier.
 
 **Hors portée.** Le geste de fermeture (P2), la rail de position, le transport, les panneaux, les
 colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fond du SPA (`lib/backdrop.js`).
+
+### P2 — Le lecteur : fermer au doigt (delivered 2026-11-25)
+
+**La règle.** Le lecteur plein écran se ferme au doigt : il suit le doigt **1:1**, le relâchement
+décide sur la **distance** (28 % de la hauteur) **ou** la **vitesse** (125 dp/s), et le ressort part de
+là où le doigt l'a laissé — jamais de 0. Le chevron et le bouton retour prennent le même chemin.
+
+- **Un seul état, trois portes.** `NowPlayingState` reste la seule vérité : `PlayerSheetFrame`
+  (`NowPlaying.kt`) porte l'offset, et le chevron, le retour système (`BackHandler`) et un
+  relâchement décidé appellent tous `onDismiss()` → `NowPlayingState.hide()`. Une animation
+  d'entrée/sortie séparée aurait pu contredire la position ; il n'y en a plus.
+- **Pourquoi pas `AnchoredDraggableState`** (ce que §4 du plan esquissait) : son `flingBehavior`
+  ne prend **qu'une** spec d'animation pour les deux cibles — le retour au repos hériterait du
+  damping de fermeture (0,8) au lieu des 100 % du tableau §3 —, il ne peut pas atterrir
+  instantanément sous éco, et un geste annulé laisse la feuille à mi-chemin. Le geste est donc
+  celui que `SwipeRow` a déjà prouvé : `awaitEachGesture` + `awaitPointerEvent`, **une écriture
+  d'état par mouvement**, un seul `animate(initialVelocity = …)` par relâchement (annulé par le
+  `down` suivant). `detectVerticalDragGestures` ne suffisait pas : il ne réclame pas un geste
+  commencé sur un bouton `clickable` (mesuré : un glissement depuis « Pause » ne bougeait pas la
+  feuille), alors que `awaitFirstDown(requireUnconsumed = false)` le réclame.
+- **Un `change.consume()` seulement après le slop et l'axe décidés** (S5) : un tap atteint son
+  bouton, la rail de position garde son glissement horizontal, le carrousel de pochettes garde le
+  sien, et un glissement **vers le haut** au repos n'est pas consommé (rien à faire au-dessus de 0).
+- **Une annulation n'est pas une décision (S8).** Compose livre une annulation comme un `up`
+  **consommé** (`drag()` renvoie `false` sur `isConsumed` pour la même raison) : c'est le seul
+  signe qui la distingue d'un vrai relâchement, et c'est ce que le code lit pour revenir à l'ancre
+  de départ.
+- **L'image de la sortie doit partir de la position du doigt** (`transitions.md` P1, le piège du
+  SPA) : la sortie animée (chevron/retour) part de `offsetY` courant vers `height`, et une
+  fermeture décidée par le geste part de l'offset où le doigt l'a laissé.
+- **Éco / mouvement réduit** : `Sillon.motion.moves == false` → l'entrée et chaque atterrissage
+  sont des `snapTo`, et la feuille reste suivant le doigt (c'est le mouvement de la personne, pas
+  une animation).
+- **`visibilityThreshold = 0.5f`** sur les deux ressorts : en dessous d'un demi-pixel il n'y a plus
+  de mouvement, et attendre le seuil par défaut de Compose (0,01 px) faisait lire **752 ms** pour
+  une fermeture que l'œil termine en ~400 (même constante que `SwipeRow`).
+
+**Mesuré** (`PlayerSheetGestureTest`, Robolectric 360 dp, horloge Compose, la position lue sur les
+bornes sémantiques du nœud qui bouge, jamais une variable d'état) :
+
+- suivi **1:1** : 60 dp de doigt → **60,0 dp** de feuille (le slop payé une fois, au réclamement) ;
+- **40 %** à vitesse lente (≈107 dp/s, sous le seuil) : retenue à **38 %**, ferme, ressort de
+  fermeture **512 ms** ;
+- **12 %** au repos : revient à 0 en **336 ms** (le plan : ≤ 400 ms), la feuille reste ouverte ;
+- **9 %** à ≈1 875 dp/s : sous la distance de 28 % et ferme quand même (vitesse), **528 ms** ;
+- un glissement parti de « Pause » : **0** commande envoyée, la feuille ferme ; un tap sur « Pause » :
+  **1** bascule ;
+- une annulation à 50 % : la feuille revient à 0, ouverte ;
+- éco : entrée à 0 après **une** frame, et un glissement de 12 % est de retour à 0 après **une** frame.
+
+**Tests.** `PlayerSheetGestureTest` (les sept cas ci-dessus), une capture
+`docs/agents/screenshots/mobile/P2/` (`p2-glissement-360dp.png`, `p2-glissement-600dp.png` : la
+feuille tenue à 25 % avec le doigt encore posé — une frame qu'`AnimatedVisibility` ne pouvait pas
+peindre), et `NowPlayingDeviceTest.aDragDownClosesThePlayerAndTheQueueDoesNotMove` sur l'émulateur
+(3 titres du banc, un glissement de 400 px, la fermeture attendue comme un ÉVÉNEMENT, la barre
+réduite au même titre et l'index de file inchangé). Le budget de frame du glissement
+(`FrameTimingMetric`, p95 ≤ 16,7 ms) reste **dû sur un vrai appareil** : l'activité de test de cet
+émulateur ne rend aucune frame dans `dumpsys gfxinfo` (constat MB11, deux fois), et MQ2 le porte.
+
+**Hors portée.** Les gestes des panneaux, la feuille du SPA (W1), un « glisser vers le haut » pour
+ouvrir la file, le lecteur large.

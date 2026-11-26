@@ -79,6 +79,10 @@ dependencies {
     implementation(project(":feature:viz"))
     implementation(project(":feature:worlds"))
     implementation(libs.androidx.core.ktx)
+    // `androidx.activity.compose` — P2's `BackHandler`: the system back over the
+    // player closes the sheet by the SAME path as the chevron and the drag, so it
+    // animates out from where the sheet is instead of popping a screen behind it.
+    implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

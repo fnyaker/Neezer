@@ -4,14 +4,29 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.advanceEventTime
+import androidx.compose.ui.test.down
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.moveBy
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.up
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.lifecycle.Lifecycle
@@ -278,6 +293,151 @@ class NowPlayingDeviceTest {
         }
         assertEquals("no read while the device is asleep", asleepReads, model.ticker.reads)
         wake(device)
+        bench.close()
+    }
+
+    /**
+     * **P2 on the device: a downward drag closes the player, and the queue does
+     * not move.**
+     *
+     * The sheet is the real [PlayerSheetFrame] over a real surface, with the
+     * process's player behind it (three titles from the bench, the middle one
+     * playing) and the real [MiniPlayer] beside it. The finger drags **40 % of the
+     * sheet's own height** down, the release is a real one, and what the test waits
+     * for is the STATE (`NowPlayingState.open == false`) — an event, never a sleep.
+     *
+     * Done when the sheet is gone and the mini player shows the SAME title: a
+     * dismissal that advanced the queue would be a second defect wearing the
+     * first one's clothes.
+     */
+    @Test
+    fun aDragDownClosesThePlayerAndTheQueueDoesNotMove() {
+        val bench = Bench.start()
+        val core = install(bench)
+        val player = core.player()
+        val rows = (0 until 3).map { index ->
+            TrackRef(
+                key = "${9100 + index}",
+                id = "${9100 + index}",
+                title = "Titre ${9100 + index}",
+                artists = "Artiste",
+                album = "Album",
+                albumId = "501",
+                artistId = null,
+                cover = null,
+                durationS = 30u,
+                episode = false,
+                liked = false,
+            )
+        }
+        player.command(
+            PlayerCommand.PlayQueue(tracks = rows, start = 1u, context = PlayContext("queue", "bench")),
+            0uL,
+        )
+        awaitPlayer(20_000) {
+            player.snapshot().len == 3u && player.snapshot().current?.key == rows[1].key
+        }
+        val title = player.snapshot().current?.title ?: error("no current title")
+        val index = player.snapshot().index
+        player.command(PlayerCommand.Pause, 0uL)
+
+        // The mini bar reads the PROCESS feed, and another test of this module takes
+        // it over with a fake (`MiniBarFeedTest`: "the test owns the feed for this
+        // process"). Hand it to the REAL player before composing the bar — the door
+        // exists for exactly this — or the bar shows that fake's title and this case
+        // would be measuring the neighbour test.
+        val barPort = NzPlayerPort(player)
+        PlayerFeed.usePortForTest(barPort, subscribe = { listener -> subscribePlayer(listener) })
+
+        NowPlayingState.hide()
+        val model = NowPlayingModel(
+            player = NzPlayerPort(player),
+            service = NowPlayingCore.service() ?: error("the core's screens"),
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main),
+        )
+        model.refresh()
+        NowPlayingState.show()
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Full) {
+                Column {
+                    MiniPlayer()
+                    PlayerSheetFrame(
+                        opened = NowPlayingState.open,
+                        onDismiss = { NowPlayingState.hide() },
+                    ) {
+                        Box(Modifier.fillMaxSize().testTag(SHEET_TAG)) {
+                            PlayerSurface(
+                                state = model.state.collectAsState().value,
+                                model = model,
+                                nav = navigator,
+                                lyrics = null,
+                                about = null,
+                                onClose = { NowPlayingState.hide() },
+                                liveReads = false,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        awaitStep("the sheet is on screen") {
+            rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().isNotEmpty()
+        }
+        // 5 × 8 % of the SHEET's height, 800 ms apart: 40 % of travel — a fraction,
+        // not a pixel count, because "400 px" is 17 % of this emulator's 2 400 px
+        // and would not reach the 28 % threshold — and slow enough (≈110 dp/s) that
+        // the DISTANCE alone decides, not the velocity.
+        //
+        // The WHOLE gesture is one block, `up()` included: `performTouchInput`
+        // disposes its input dispatcher at the end of a block, and on a device that
+        // cancels the pointer still down (measured: the `up()` of a second block
+        // never landed, and the sheet stayed at 40 % — which is also why the frame
+        // now settles a real cancel back).
+        val restTop: Float = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().top.value
+        val sheetDp: Float = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().let {
+            it.bottom.value - it.top.value
+        }
+
+        // 1. THE DOOR THAT IS A BUTTON, first: it is the same exit path (the state
+        // object), and a click is the one gesture this emulator delivers reliably.
+        rule.onNodeWithContentDescription("Réduire le lecteur").performClick()
+        awaitStep("the chevron closed the player") { !NowPlayingState.open }
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        assertEquals("the close did not move the queue", index, player.snapshot().index)
+        assertEquals("the close did not change the queue", 3u, player.snapshot().len)
+        awaitStep("the mini player shows « $title »") {
+            rule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        // 2. THE FINGER, on the same sheet opened again. ONE move event, then the
+        // release: this host's injection dispatcher loses part of a multi-move
+        // gesture (measured: 23 % of travel for 40 % of finger, five moves) and
+        // `UiDevice.swipe` lands on nothing on this emulator (MB11), so the
+        // release decision itself is `PlayerSheetGestureTest`'s job on the Compose
+        // clock; here the DISTANCE rule is measured end-to-end.
+        NowPlayingState.show()
+        awaitStep("the sheet is back on screen") {
+            rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().isNotEmpty()
+        }
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        rule.onNodeWithTag(SHEET_TAG).performTouchInput {
+            down(Offset(centerX, top + 40.dp.toPx()))
+            advanceEventTime(600)
+            moveBy(Offset(0f, height * 0.40f))
+            up()
+        }
+        awaitStep(
+            "a 40 % drag closed the player (from $restTop dp, sheet $sheetDp dp)",
+        ) { !NowPlayingState.open }
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        assertEquals("the drag did not move the queue", index, player.snapshot().index)
+        assertEquals("the drag did not move the queue", index, player.snapshot().index)
+        assertEquals("the drag did not change the queue", 3u, player.snapshot().len)
+        awaitStep("the mini player shows « $title »") {
+            rule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
+        }
+        println("MEASURE p2 device: sheet closed by a drag, mini player still « $title »")
+        NowPlayingState.hide()
         bench.close()
     }
 
@@ -551,6 +711,29 @@ class NowPlayingDeviceTest {
 
     // -- the plumbing ---------------------------------------------------------
 
+    /**
+     * A `waitUntil` that NAMES its step when it times out: the emulator job's log
+     * shows the failure message and nothing else, so "which wait" has to be in it.
+     */
+    private fun awaitStep(what: String, timeoutMs: Long = 15_000, condition: () -> Boolean) {
+        try {
+            rule.waitUntil(timeoutMillis = timeoutMs, condition = condition)
+        } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+            val snapshot = NowPlayingCore.player()?.snapshot()
+            val sheets = rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().size
+            val top = runCatching {
+                rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().top.value
+            }.getOrNull()
+            throw AssertionError(
+                "$what: still false after $timeoutMs ms (open=${NowPlayingState.open}, " +
+                    "sheets=$sheets top=$top, " +
+                    "player=${snapshot?.state} ${snapshot?.index}/${snapshot?.len} " +
+                    "« ${snapshot?.current?.title} »)",
+                timeout,
+            )
+        }
+    }
+
     /** The core over the bench, once per process (a phone installs one). */
     private fun install(bench: Bench): uniffi.nz_ffi.NzCore {
         val app = ApplicationProvider.getApplicationContext<Application>()
@@ -738,5 +921,8 @@ class NowPlayingDeviceTest {
 
     companion object {
         private const val KEY = "9001"
+
+        /** P2's sheet node: `Modifier.offset` moves the content, so the tag is on it. */
+        private const val SHEET_TAG = "p2-sheet"
     }
 }
