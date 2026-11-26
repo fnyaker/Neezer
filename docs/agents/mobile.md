@@ -741,6 +741,12 @@ la nomme. C'est la garde anti-dérive de l'inventaire d'écrans — une nouvelle
 là avant qu'un rapport ne la manque en silence. Les destinations hors passe (second appareil, compte
 tiers, pré-session) y sont écrites avec leur raison et le rapport les liste (`hors-passe`).
 
+`run.txt` porte `head_run=<sha>` (le commit de l'arbre du harnais) et
+`apk=<nom> bytes=<n> signer=<sha> sha256=<n>` : `bughunt.yaml` n'exporte pas le run `mobile.yaml`
+dont il télécharge l'APK, donc le sha256 est l'ancre qu'un lecteur compare à la release publiée.
+`crash.txt` est vide quand rien n'a planté, et la première ligne du rapport nomme l'AVD et la taille
+de l'écran.
+
 Sur ce worker (pas de `/dev/kvm`) : `--self-test` **0,1 s** (`routes=26/26 parse=ok dedupe=ok
 classify=ok`), `--check-routes` **0,1 s**, `shellcheck` 0.10 en 0,2 s. La passe réelle se mesure sur
 le premier run `bughunt.yaml` — le nombre d'écrans et d'éléments est publié dans le rapport joint.
