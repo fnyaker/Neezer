@@ -301,10 +301,18 @@ def screen_check(name: str, directory: Path, dpi: int, ok: list[str], fail: list
     # clickable is a slider's drawn track or a decorative layer (measured: a
     # 387x4 dp View on Réglages), and reporting its box as "a small target" is
     # noise about a hit area this dump cannot show.
+    #
+    # TWO dp of tolerance, because a dump rounds to whole pixels and Compose
+    # lays out on an integer grid: 48 dp is 126 px at 420 dpi, and the « Mono »
+    # row measured 126x123 px — 46.9 dp, a rounding boundary, not a small target
+    # (run 45806883020). The floor stays well under what the rule is for: the car
+    # Activity's 44, 40 and 30 dp boxes are all caught.
     edge = 48 * dpi / 160.0
+    tolerance = 2 * dpi / 160.0
     small = [
         n for n in app
-        if n.clickable and (n.text or n.desc) and (n.w < edge or n.h < edge)
+        if n.clickable and (n.text or n.desc)
+        and (n.w < edge - tolerance or n.h < edge - tolerance)
     ]
     (fail if small else ok).append(
         f"targets {name} below_48dp={len(small)} "
