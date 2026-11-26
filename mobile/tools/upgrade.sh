@@ -276,6 +276,14 @@ install_and_sign_in() {
     local apk="$1" before covers signed_in=0 started
     adb_dev install -r -g "$apk" 2>&1 | tail -2
     adb_dev shell pm clear "$ui_package" >/dev/null
+    # `pm clear` DROPS the installer's `-g` runtime grants, and the first
+    # « Télécharger » asks for POST_NOTIFICATIONS (the download draws its progress
+    # in the shade): the system dialog — « Allow Neezer (native) to send you
+    # notifications? », ALLOW / DON'T ALLOW — covers the album page, and the
+    # button never reaches « Téléchargé » (dispatch 45746798927, 180 s). Granting
+    # it here restores what `adb install -g` gave and changes nothing the upgrade
+    # proves (`release-journey.sh` does the same before the car settings).
+    adb_dev shell pm grant "$ui_package" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
     adb_dev logcat -c -b crash >/dev/null 2>&1 || true
     adb_dev shell am start -W -n "$(nz_launcher_component "$serial")" >/dev/null
     await_text "Adresse du serveur" 30 || fail_screen "the setup screen never painted « Adresse du serveur »"
