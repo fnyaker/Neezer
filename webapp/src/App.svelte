@@ -502,7 +502,7 @@
         player.toggle();
         break;
       case "ArrowRight":
-        if (e.ctrlKey || e.metaKey) player.next();
+        if (e.ctrlKey || e.metaKey) player.skipNext();
         break;
       case "ArrowLeft":
         if (e.ctrlKey || e.metaKey) player.prev();

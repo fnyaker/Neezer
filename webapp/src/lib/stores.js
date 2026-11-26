@@ -897,6 +897,11 @@ function createPlayer() {
     // Keep going past the end of the queue (radio / Flow). On until the user
     // clears the queue (clearUpcoming), off until they start a new one.
     autoplay: true,
+    // Bumped by skipNext() when a "next" lands on the last title and cannot
+    // move: a deliberate no-op that the audio owner turns into a continuation
+    // and a "Fin de la file" toast. Deliberately NOT part of the saved session
+    // (snapshot() lists its fields): a reload starts at 0.
+    atEndSeq: 0,
     context: sess.context || null,
     _orig: Array.isArray(sess._orig) ? sess._orig : null,
   });
@@ -1047,6 +1052,32 @@ function createPlayer() {
     return (tracks || []).filter((t) => t && trackKey(t));
   }
 
+  // The move a "next" makes, shared by next() and skipNext() so the queue rule
+  // (advance; wrap under repeat "all"; let the Flow append one) has ONE copy.
+  // Returns the new state, or null when there is nowhere to go.
+  function advance(s) {
+    if (s.index < s.queue.length - 1)
+      return { ...s, index: s.index + 1, playing: true, seq: s.seq + 1 };
+    if (s.repeat === "all" && s.queue.length)
+      return { ...s, index: 0, playing: true, seq: s.seq + 1 };
+    // A queue that is chosen one title at a time (the Flow) may hold the
+    // next one off the queue: it plays at once.
+    const more = queueEndHook ? queueEndHook(s) : null;
+    if (more) {
+      const extra = clean([more]);
+      if (extra.length)
+        return {
+          ...s,
+          queue: [...s.queue, ...extra],
+          _orig: s._orig ? [...s._orig, ...extra] : null,
+          index: s.index + 1,
+          playing: true,
+          seq: s.seq + 1,
+        };
+    }
+    return null;
+  }
+
   const player = {
     subscribe,
     set,
@@ -1075,6 +1106,7 @@ function createPlayer() {
         autoplay: true,
         context: (sess && sess.context) || null,
         _orig: sess && Array.isArray(sess._orig) ? sess._orig : null,
+        atEndSeq: 0,
       });
     },
 
@@ -1293,28 +1325,36 @@ function createPlayer() {
     },
 
     next() {
+      let moved = false;
       update((s) => {
-        if (s.index < s.queue.length - 1)
-          return { ...s, index: s.index + 1, playing: true, seq: s.seq + 1 };
-        if (s.repeat === "all" && s.queue.length)
-          return { ...s, index: 0, playing: true, seq: s.seq + 1 };
-        // A queue that is chosen one title at a time (the Flow) may hold the
-        // next one off the queue: it plays at once.
-        const more = queueEndHook ? queueEndHook(s) : null;
-        if (more) {
-          const extra = clean([more]);
-          if (extra.length)
-            return {
-              ...s,
-              queue: [...s.queue, ...extra],
-              _orig: s._orig ? [...s._orig, ...extra] : null,
-              index: s.index + 1,
-              playing: true,
-              seq: s.seq + 1,
-            };
+        const ns = advance(s);
+        if (ns) {
+          moved = true;
+          return ns;
         }
+        // Natural end of the queue: stop. The state change is the contract —
+        // crossfade and Flow callers depend on `playing: false` here.
         return { ...s, playing: false };
       });
+      return moved ? { moved: true, atEnd: false } : { moved: false, atEnd: true };
+    },
+
+    // The user's own "next" button (bar, full-screen players, keyboard,
+    // MediaSession, remote). A move is exactly next(); at the last title it must
+    // not swallow the tap into a silent pause: it leaves `playing` and `index`
+    // alone and bumps atEndSeq, which the audio owner (Player.svelte) answers
+    // with a continuation attempt and a "Fin de la file" toast.
+    skipNext() {
+      let moved = false;
+      update((s) => {
+        const ns = advance(s);
+        if (ns) {
+          moved = true;
+          return ns;
+        }
+        return { ...s, atEndSeq: (s.atEndSeq || 0) + 1 };
+      });
+      return moved ? { moved: true, atEnd: false } : { moved: false, atEnd: true };
     },
 
     prev() {

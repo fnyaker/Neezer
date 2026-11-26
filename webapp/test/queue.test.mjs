@@ -154,3 +154,29 @@ test("advancePaused at the end, or on repeat-one, just stops", () => {
   assert.equal(get(current).deezer_id, "3", "repeat-one keeps its track");
   assert.equal(get(player).playing, false);
 });
+
+// What a "next" reports is the contract the UI now runs on: Player.svelte
+// answers `atEnd` with a continuation and a "Fin de la file" toast, so the
+// store must SAY when it could not move instead of returning undefined.
+test("next() says whether it moved, and still stops at a natural end", () => {
+  fresh(3, 1, { repeat: "off" });
+  const moved = player.next();
+  assert.deepEqual(moved, { moved: true, atEnd: false });
+  assert.equal(get(player).index, 2);
+  assert.equal(get(player).playing, true);
+
+  const end = player.next();
+  assert.deepEqual(end, { moved: false, atEnd: true });
+  assert.equal(get(player).index, 2, "the last title stays put");
+  // Regression: the natural-end contract (crossfade and Flow callers depend on
+  // it) is untouched.
+  assert.equal(get(player).playing, false);
+});
+
+test("next() wraps under repeat all and reports the move", () => {
+  fresh(3, 2, { repeat: "all" });
+  const r = player.next();
+  assert.deepEqual(r, { moved: true, atEnd: false });
+  assert.equal(get(player).index, 0);
+  assert.equal(get(player).playing, true);
+});

@@ -1236,7 +1236,7 @@
         <button class="sm" class:on={$player.shuffle} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.toggleShuffle()} aria-label="Aléatoire"><Icon name="shuffle" size={22} /></button>
         <button on:click={() => player.prev()} aria-label="Précédent"><Icon name="prev" size={30} /></button>
         <button class="pp" class:busy={$playbackBusy} data-motion={$playbackBusy ? "status" : undefined} on:click={() => player.toggle()} aria-label="Lecture/Pause"><Icon name={$playing ? "pause" : "play"} size={28} /></button>
-        <button on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={30} /></button>
+        <button on:click={() => player.skipNext()} aria-label="Suivant"><Icon name="next" size={30} /></button>
         <button class="sm" class:on={$player.repeat !== "off"} class:gone={!CAN_BROWSE} disabled={!CAN_BROWSE} on:click={() => player.cycleRepeat()} aria-label="Répéter"><Icon name={repeatIcon} size={22} /></button>
       </div>
 
