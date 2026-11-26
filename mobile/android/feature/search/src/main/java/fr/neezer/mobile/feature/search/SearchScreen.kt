@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -70,6 +71,7 @@ import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
 import fr.neezer.mobile.designsystem.nzDuration
@@ -90,6 +92,15 @@ import uniffi.nz_ffi.TranscriptHit
  * clock, so a needle taken from it cannot drift (MB5's lesson on `HOME_MARKER`).
  */
 const val SEARCH_MARKER = "Recherche Neezer"
+
+/**
+ * The chips row, for the phase test: a tab switch with the same answer must not
+ * re-create it (the panel changes, not the row that drives it).
+ */
+internal const val SEARCH_TABS_TAG = "search-onglets"
+
+/** The page's loading skeleton, for the phase test. */
+internal const val SEARCH_LOADING_TAG = "search-chargement"
 
 /**
  * Everything the search can do, as one value.
@@ -393,16 +404,50 @@ fun SearchScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {
-        items(count = blocks.size, key = { index -> keyOf(blocks[index], index) }) { index ->
-            Block(blocks[index], state, window, actions)
+        items(count = blocks.size, key = { index -> blockKey(index) }) { index ->
+            val block = blocks[index]
+            // Every block replaces itself in place (M7): the loading skeleton
+            // becomes its rows, the failure becomes the answer, a tab panel
+            // becomes another. The item's key is the index, so the block is
+            // REUSED across a phase change and the swap can play; the chips row
+            // and the header keep the same phase key and are never recreated.
+            NzSwap(targetState = blockPhaseKey(block, window), label = "recherche") {
+                Block(block, state, window, actions)
+            }
         }
     }
 }
 
-private fun keyOf(block: SearchBlock, index: Int): String = when (block) {
-    is SearchBlock.Track -> "track:${block.index}"
+/**
+ * A block's stable slot: the answer's structure changes type at a given index
+ * when the phase or the tab changes, and reusing that node is what lets its
+ * [NzSwap] animate. The content always comes from the block at that index, so a
+ * reused slot draws the current answer, never a stale one.
+ */
+private fun blockKey(index: Int): String = "bloc:$index"
+
+/**
+ * The phase a block draws, as the [NzSwap] target: a loading skeleton, a failure,
+ * a loaded row or the block's own kind. A track that is not in the window yet is
+ * the same "chargement" phase as the page's skeleton (the plan's `:785` swap);
+ * once its row lands the target is the row's key.
+ */
+private fun blockPhaseKey(block: SearchBlock, window: ListWindow?): String = when (block) {
+    SearchBlock.Loading -> "chargement"
+    is SearchBlock.Failure -> "echec"
+    is SearchBlock.Track -> window?.rowAt(block.index)?.let { "pret:${it.key}" } ?: "chargement"
+    SearchBlock.Header -> "entete"
+    SearchBlock.Landing -> "accueil-vide"
+    SearchBlock.Styles -> "styles"
+    SearchBlock.Tabs -> "onglets"
+    SearchBlock.PodcastTabs -> "onglets-podcasts"
+    SearchBlock.TopCard -> "meilleur"
+    SearchBlock.Stale -> "hors-ligne"
+    is SearchBlock.Section -> "section:${block.section}"
+    is SearchBlock.Shelf -> "rayon:${block.section}:${block.grid}"
     is SearchBlock.Passage -> "passage:${block.index}"
-    else -> "${block::class.simpleName}:$index"
+    is SearchBlock.Note -> "note:${block.text}"
+    is SearchBlock.Fallback -> "repli:${block.status}"
 }
 
 @Composable
@@ -431,7 +476,11 @@ private fun Block(
         is SearchBlock.Passage -> answer?.transcripts?.getOrNull(block.index)
             ?.let { PassageRow(it, actions) }
         SearchBlock.Stale -> StaleNote()
-        SearchBlock.Loading -> Skeleton(kind = NzSkeletonKind.List, count = 5)
+        SearchBlock.Loading -> Skeleton(
+            modifier = Modifier.testTag(SEARCH_LOADING_TAG),
+            kind = NzSkeletonKind.List,
+            count = 5,
+        )
         is SearchBlock.Note -> Text(
             text = block.text,
             style = Sillon.type.bodySmall,
@@ -686,7 +735,8 @@ private fun TabsRow(state: SearchModel.State, actions: SearchActions) {
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .semantics { role = Role.Tab },
+            .semantics { role = Role.Tab }
+            .testTag(SEARCH_TABS_TAG),
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
     ) {
         tabs.forEach { (tab, label) ->
