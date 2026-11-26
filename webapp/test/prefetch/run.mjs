@@ -11,30 +11,41 @@
 //   - COLD: 1 s after pressing play, before the preload has had time to start;
 //   - HOT:  14 s into a track that is really playing, with the preload of the
 //           following one running.
-// Each cell is the median of three runs, and the stream requests and bytes the
-// tap itself causes are counted from the network (CDP), not guessed.
+// Each cell is the median of three runs, and the stream requests, bytes and
+// watchdog reloads the run causes are counted from the browser, not guessed.
 //
-// What the rule (lib/netyield.js#prefetchTrickle, lib/playcache.js) promises:
-// the preload reads at the trickle pace while the element playing needs the
-// link, and at full speed once it has enough in hand — so a slow link pays for
-// the preload at most what the player leaves, never more.
+// What the rule (lib/netyield.js, lib/offline.js#fetchYielding,
+// lib/playcache.js) promises: the preload never starts while the element
+// playing wants the link, and mid-body it steps aside ENTIRELY — the request
+// aborted, resumed with `Range: bytes=<received>-` once the element lets go.
+// It never trickles: take 1 measured that 4 KB/s of a 16 KB/s link still cost
+// the playing track 27 % (cold 29.5 s against 20.9 s without the preload, hot
+// 87.7 s against 25.9 s with four watchdog reloads), and that the trickle was
+// pure cost because a 320 KB track cannot be preloaded in 14 s at 4 KB/s.
 //
-// Measured on 2026-11-26, median of 3, 40 s WAV tracks (320 KB), CDP 150 ms:
+// Measured on 2026-11-26 (take 2), median of 3, 40 s WAV tracks (320 KB), CDP
+// 150 ms:
 //
-//   link      preload  next at 1 s        next at 14 s          preloaded
-//   LAN       off      0.3 s   1 req      0.3 s   1 req 313 KB   0
-//   LAN       on       0.3 s   1 req      0.3 s   0 req            313 KB
-//   16 KB/s   off     20.9 s   1 req     25.9 s   1 req 226 KB   0
-//   16 KB/s   on      29.5 s   1 req     87.7 s   1 req 177 KB   196 KB
-//   64 KB/s   off      3.9 s   1 req      4.2 s   1 req 235 KB   0
-//   64 KB/s   on       3.9 s   1 req      0.3 s   0 req            313 KB
+//   link      preload  cold (next at 1 s)     hot (next at 14 s)     blob at tap
+//   LAN       off      0.3 s   1 req          0.3 s   1 req 313 KB   -
+//   LAN       on       0.3 s   1 req          0.3 s   0 req          313 KB
+//   16 KB/s   off     20.9 s   1 req         25.5 s   1 req 228 KB   -
+//   16 KB/s   on      20.8 s   1 req         26.7 s   1 req 228 KB   incomplete
+//   64 KB/s   off      3.9 s   1 req          4.2 s   1 req 235 KB   -
+//   64 KB/s   on       3.9 s   1 req          0.3 s   0 req          313 KB
 //
-// On LAN and at 64 KB/s the preload does what it is for (the whole blob on the
-// device, no stream request at the tap). At 16 KB/s a 320 KB track cannot be
-// preloaded inside the 14 s before the tap, so the trickle is pure cost: 4 KB/s
-// is 27 % of the link, the cold start goes past COLD_START_MS (30 s), the
-// watchdog reloads the stream four times from zero — and 25 s is already missed
-// by the run with no preload at all (25.9 s).
+// At 16 KB/s the preload gets 22 KB in before the tap and the blob stays
+// incomplete (a 320 KB track needs 20 s at 16 KB/s, longer than the 14 s
+// before the tap), so the tap streams: 20.8 s cold (0.995 ×) and 26.7 s hot
+// (1.047 ×, +1.2 s), no watchdog reload. At 64 KB/s the whole blob is on the
+// device at the tap and it costs no stream request. On LAN it always was.
+//
+// Bounds (the spec's goal is "at least as fast with as without", not a fixed
+// number of seconds): with the preload on, (a) the tap must sound within 1.10 ×
+// the same case without it, (b) the preload must add no watchdog reload, and
+// (c) when the blob is complete at the tap, the tap must cost no stream
+// request. An incomplete blob at 16 KB/s is acceptable and reported, not a
+// failure.
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +61,7 @@ import {
 
 const { chromium } = await loadPlaywright();
 const LEN = 40; // seconds; the bench WAV is 8 KB a second, so 320 KB a track
+const TRACK_BYTES = 44 + LEN * 8000; // silence()'s WAV header + samples
 const wavPath = join(mkdtempSync(join(tmpdir(), "nspf-")), "track.wav");
 writeFileSync(wavPath, silence(LEN));
 const { base, ids, stop } = await startServer(["--audio", wavPath]);
@@ -66,7 +78,9 @@ const RATES = process.env.KBPS
 const RUNS = +process.env.RUNS || 3;
 const COLD_AFTER_MS = 1000; // the spec's cold tap
 const HOT_AFTER_MS = 14000; // ...and its hot one
-const BOUND_MS = 25000; // the lot's bound on a slow link
+const SLOW_RATES = ["16 KB/s", "64 KB/s"];
+const TAP_MS = 1500; // a request this soon after a tap belongs to the tap
+
 
 const song = (id, k) => ({
   deezer_id: id,
@@ -91,12 +105,42 @@ async function run({ kbps, prefetch }) {
     // The page's own elements, so a measurement names the element that plays.
     const Native = window.Audio;
     window.__els = [];
+    // A watchdog recovery reloads the element with the SAME source: that is a
+    // loadstart whose src equals the previous one. A track change names a new
+    // source, so it is not counted.
+    window.__reloads = 0;
     window.Audio = function (...a) {
       const el = new Native(...a);
       window.__els.push(el);
+      let last = "";
+      el.addEventListener("loadstart", () => {
+        const s = String(el.src || "");
+        if (s && s === last) window.__reloads++;
+        last = s;
+      });
       return el;
     };
     window.Audio.prototype = Native.prototype;
+    // What the playback cache holds, asked at the tap: a prefetch is written in
+    // one put at the end, so a row of the track's full length means complete.
+    // Only CALLED once the app has opened the database (it does at startup).
+    window.__cacheSizes = async () => {
+      try {
+        const db = await new Promise((res, rej) => {
+          const r = indexedDB.open("nsupy-playcache");
+          r.onsuccess = () => res(r.result);
+          r.onerror = () => rej(r.error);
+        });
+        const rows = await new Promise((res, rej) => {
+          const q = db.transaction("audio").objectStore("audio").getAll();
+          q.onsuccess = () => res(q.result);
+          q.onerror = () => rej(q.error);
+        });
+        return rows.map((r) => (r.blob ? r.blob.size : r.size || 0));
+      } catch {
+        return [];
+      }
+    };
     // A timeline of what each element was doing: the yield decision reads
     // paused / buffered-ahead, so a bench that cannot see them cannot explain
     // a number (DEBUG=1 prints it).
@@ -229,13 +273,19 @@ async function run({ kbps, prefetch }) {
   await page.locator("button.next").first().click();
   const cold = await sound(TRACKS[1], coldBefore);
   const coldTapMs = Date.now() - marks.tap;
-  const coldReqs = streams.slice(coldTapAt).filter((s) => s.start <= marks.tap + 1500).length;
+  const coldReqs = streams.slice(coldTapAt).filter((s) => s.start <= marks.tap + TAP_MS).length;
   marks.tap = 0;
 
   // HOT: 14 s into the track that is now playing, with the preload of the
-  // following one running (or not, when the setting is off).
+  // following one running (or not, when the setting is off). The watchdog
+  // reloads counted here are the ones the preload's competition causes: the
+  // playing track's element reloaded with the same source.
+  const reloadsBefore = await page.evaluate(() => window.__reloads);
   await page.waitForTimeout(HOT_AFTER_MS);
+  const reloads = (await page.evaluate(() => window.__reloads)) - reloadsBefore;
   const prefetchedBefore = streams.filter((s) => s.bg).reduce((n, s) => n + s.bytes, 0);
+  const sizes = await page.evaluate(() => window.__cacheSizes()).catch(() => []);
+  const complete = sizes.some((s) => s >= TRACK_BYTES - 8);
   const hotTapAt = streams.length;
   const hotBefore = await srcs();
   marks.tap = Date.now();
@@ -243,7 +293,7 @@ async function run({ kbps, prefetch }) {
   await page.locator("button.next").first().click();
   const hot = await sound(TRACKS[2], hotBefore);
   const hotTapMs = Date.now() - marks.tap;
-  const hotStreams = streams.slice(hotTapAt).filter((s) => s.start <= marks.tap + 1500);
+  const hotStreams = streams.slice(hotTapAt).filter((s) => s.start <= marks.tap + TAP_MS);
   marks.tap = 0;
 
   const trace = process.env.DEBUG
@@ -276,6 +326,8 @@ async function run({ kbps, prefetch }) {
     hotTapBytes: hotStreams.reduce((n, s) => n + s.after, 0),
     prefetchBeforeCold,
     prefetched: prefetchedBefore - prefetchBeforeCold,
+    reloads,
+    complete,
   };
 }
 
@@ -298,7 +350,8 @@ for (const rate of RATES) {
         `  ${rate.name} ${prefetch ? "prefetch ON " : "prefetch OFF"} #${i + 1}: ` +
           `cold ${secs(r.cold)} (${r.coldReqs} req, ${r.coldTapMs} ms), ` +
           `hot ${secs(r.hot)} (${r.hotReqs} req, ${(r.hotTapBytes / 1024).toFixed(0)} KB after the tap), ` +
-          `preloaded ${(r.prefetched / 1024).toFixed(0)} KB`
+          `preloaded ${(r.prefetched / 1024).toFixed(0)} KB, ${r.reloads} reload(s), ` +
+          `blob ${r.complete ? "complete" : "incomplete"}`
       );
     }
     table.push({
@@ -311,43 +364,52 @@ for (const rate of RATES) {
       hotTapBytes: median(runs.map((r) => r.hotTapBytes)),
       prefetched: median(runs.map((r) => r.prefetched)),
       hotTapMs: median(runs.map((r) => r.hotTapMs)),
+      reloads: median(runs.map((r) => r.reloads)),
+      complete: runs.filter((r) => r.complete).length >= Math.ceil(RUNS / 2),
     });
   }
 }
 
-console.log("\nrate       prefetch   cold (next at 1 s)      hot (next at 14 s)      preloaded");
+console.log("\nrate       prefetch   cold (next at 1 s)      hot (next at 14 s)      preloaded  reloads  blob");
 for (const row of table) {
   console.log(
     `${row.rate.name.padEnd(10)} ${(row.prefetch ? "ON" : "OFF").padEnd(9)} ` +
       `${secs(row.cold).padStart(7)}  ${String(row.coldReqs).padStart(2)} req   ` +
       `${secs(row.hot).padStart(7)}  ${String(row.hotReqs).padStart(2)} req  ` +
       `${(row.hotTapBytes / 1024).toFixed(0).padStart(4)} KB   ` +
-      `${(row.prefetched / 1024).toFixed(0).padStart(4)} KB`
+      `${(row.prefetched / 1024).toFixed(0).padStart(4)} KB  ` +
+      `${String(row.reloads).padStart(3)}     ${row.complete ? "complete" : "incomplete"}`
   );
 }
 
 const at = (name, prefetch) => table.find((r) => r.rate.name === name && r.prefetch === prefetch);
-const checked = new Set();
-for (const row of table) {
-  if (!row.rate.kbps || checked.has(row.rate.name)) continue;
-  checked.add(row.rate.name);
-  const on = at(row.rate.name, true);
-  const off = at(row.rate.name, false);
+for (const name of SLOW_RATES) {
+  const on = at(name, true);
+  const off = at(name, false);
+  if (!on || !off) continue;
+  // (a) The spec's goal is "at least as fast with as without": 10 % of slack
+  // covers the run-to-run noise, nothing more.
   check(
-    on.cold > 0 && on.cold <= BOUND_MS,
-    `${row.rate.name}: with the preload, a next at 1 s still sounds within ${BOUND_MS / 1000} s`,
-    secs(on.cold)
+    on.cold > 0 && off.cold > 0 && on.cold <= off.cold * 1.1,
+    `${name}: a next at 1 s with the preload ≤ 1.10 × without`,
+    `${secs(on.cold)} against ${secs(off.cold)} (bound ${secs(off.cold * 1.1)})`
   );
   check(
-    on.hot > 0 && on.hot <= BOUND_MS,
-    `${row.rate.name}: with the preload, a next 14 s in sounds within ${BOUND_MS / 1000} s`,
-    secs(on.hot)
+    on.hot > 0 && off.hot > 0 && on.hot <= off.hot * 1.1,
+    `${name}: a next at 14 s with the preload ≤ 1.10 × without`,
+    `${secs(on.hot)} against ${secs(off.hot)} (bound ${secs(off.hot * 1.1)})`
   );
-  if (!off) continue;
+  // (b) The preload must never starve the playing track into a reload.
   check(
-    on.hot > 0 && off.hot > 0 && on.hot <= off.hot + 2000,
-    `${row.rate.name}: the preload never costs the tap more than 2 s`,
-    `${secs(on.hot)} against ${secs(off.hot)}`
+    on.reloads <= off.reloads,
+    `${name}: the preload adds no watchdog reload`,
+    `${on.reloads} against ${off.reloads}`
+  );
+  // (c) A complete blob at the tap must be played from the device.
+  check(
+    !on.complete || on.hotReqs === 0,
+    `${name}: a complete blob at the tap costs no stream request`,
+    `${on.complete ? "complete" : "incomplete"}, ${on.hotReqs} request(s)`
   );
 }
 const lanOn = at("LAN", true);
