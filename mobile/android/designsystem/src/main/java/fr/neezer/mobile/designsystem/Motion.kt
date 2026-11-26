@@ -6,6 +6,7 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.TweenSpec
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 
 /**
@@ -80,6 +81,24 @@ object NzEase {
 }
 
 /**
+ * The three specs a list row's insert / remove / reorder plays — what
+ * `LazyItemScope.animateItem` takes, with the app's guard already applied.
+ *
+ * * [fadeIn] is **always `null`**: a windowed row never animates its mount (M4,
+ *   `motion.js#shiftRows` — a mount plays nothing);
+ * * [placement] is the 200 ms standard move at [NzMotionLevel.Full], `null` at
+ *   reduced and eco (a move is a displacement, M14);
+ * * [fadeOut] is the 140 ms exit at Full **and** reduced (M14 keeps opacity),
+ *   `null` at eco (M13).
+ */
+@Immutable
+data class NzItemSpecs(
+    val fadeIn: FiniteAnimationSpec<Float>?,
+    val placement: FiniteAnimationSpec<IntOffset>?,
+    val fadeOut: FiniteAnimationSpec<Float>?,
+)
+
+/**
  * The motion tokens in force. Everything a component animates goes through this
  * object, so eco and reduced motion are one switch, not fifteen.
  */
@@ -110,17 +129,44 @@ class NzMotion(val level: NzMotionLevel = NzMotionLevel.Full) {
     /** The full-screen player entering. */
     fun screen(): FiniteAnimationSpec<Float> = tween(NzDur.Screen, NzEase.Enter)
 
+    /** The full-screen player leaving (240 ms): `motion.js#screen`'s exit half. */
+    fun screenOut(): FiniteAnimationSpec<Float> = tween(NzDur.ScreenOut, NzEase.Exit)
+
+    /**
+     * A DISPLACEMENT — a press scale, a knob's travel, a chevron's rotation: the
+     * table at Full, and NOTHING at reduced or eco (M14: no displacement). A
+     * colour or an opacity keeps [instant]/[fast], which may still walk in
+     * reduced motion.
+     */
+    fun displace(ms: Int = NzDur.Instant, easing: Easing = NzEase.Standard): FiniteAnimationSpec<Float> =
+        if (moves) tween(ms, easing) else tween(0)
+
+    /** A displacement on an integer offset (a reorder, a segmented indicator). */
+    fun displaceOffset(ms: Int = NzDur.Base, easing: Easing = NzEase.Standard): FiniteAnimationSpec<IntOffset> =
+        if (moves) TweenSpec(durationMillis = dur(ms), easing = easing) else TweenSpec(0)
+
     /** An in-place move (an indicator, a reorder). */
     fun standard(): FiniteAnimationSpec<Float> = tween(NzDur.Base, NzEase.Standard)
 
     fun <T> tween(ms: Int, easing: Easing = NzEase.Enter): TweenSpec<T> =
         TweenSpec(durationMillis = dur(ms), easing = easing)
 
-    /** A press: `scale(0.98)` in, and nothing at all under eco or reduced motion. */
-    fun pressScale(): FiniteAnimationSpec<Float> = when (level) {
-        NzMotionLevel.Full -> tween(NzDur.Instant)
-        else -> tween(0)
-    }
+    /**
+     * A press: `scale(0.98)` in, and nothing at all under eco or reduced motion
+     * (M14 — a press scale is a displacement). Same rule as [displace].
+     */
+    fun pressScale(): FiniteAnimationSpec<Float> = displace(NzDur.Instant)
+
+    /**
+     * A list row's insert / remove / reorder, with the guard applied. Feed it to
+     * `Modifier.animateItem(...)` at the call site (X5); this object never
+     * animates a windowed row's mount (M4).
+     */
+    fun itemSpecs(): NzItemSpecs = NzItemSpecs(
+        fadeIn = null,
+        placement = if (moves) displaceOffset(NzDur.Base) else null,
+        fadeOut = if (level == NzMotionLevel.Off) null else tween(NzDur.Fast, NzEase.Exit),
+    )
 
     /** Is there any movement at all? (eco and reduced answer no — M14 removes displacement). */
     val moves: Boolean get() = level == NzMotionLevel.Full

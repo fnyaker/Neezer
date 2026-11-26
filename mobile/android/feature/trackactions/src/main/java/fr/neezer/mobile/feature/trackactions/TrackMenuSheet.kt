@@ -153,11 +153,7 @@ private fun MenuItemRow(
     val motion = Sillon.motion
     val chevron by animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
-        animationSpec = if (motion.moves) {
-            androidx.compose.animation.core.tween(NzDur.Base, easing = NzEase.Standard)
-        } else {
-            androidx.compose.animation.core.tween(0)
-        },
+        animationSpec = motion.displace(NzDur.Base, NzEase.Standard),
         label = "menu-chevron",
     )
     val ink: Color = if (item.danger) colors.hrt else colors.tx

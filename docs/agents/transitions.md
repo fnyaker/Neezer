@@ -247,6 +247,68 @@ scroll-behavior: auto }` already lives there.
   `transform` and caps the duration; otherwise `el.animate(keyframes, { fill: "none", ...opts })`. It cancels
   any previous animation it started on the same element (a `WeakMap`), which is the interruption rule.
 
+## Le téléphone — the native half (lot X0)
+
+The native app (`mobile/android`) carries the same table, not a second taste: `designsystem/Motion.kt` is a
+1:1 copy of `motion.js#DUR`/`MOVE`/`SCALE`/`EASE_CSS`, and the three levels are the same `Full` /
+`Reduced` / `Off`. What X0 adds is the **vocabulary** a screen was missing: before it, `NzMotion` had a
+duration for a colour but none for a *displacement*, a list's item specs did not exist (so `animateItem`
+appeared nowhere and rows were inserted in one frame), a glyph swapped in one frame, and four design-system
+controls asked `instant()` — which still walks 90 ms under reduced motion, against M14.
+
+**A screen names a state, never a duration (M15).** `designsystem/Transition.kt` exposes the three presets
+every screen lot consumes, and their public signatures are the contract:
+
+```kotlin
+@Composable fun NzSwap(targetState: Any, modifier: Modifier = Modifier, label: String,
+                       content: @Composable (Any) -> Unit)
+@Composable fun NzAppear(visible: Boolean, modifier: Modifier = Modifier,
+                         content: @Composable () -> Unit)
+@Composable fun NzGlyphSwap(glyph: NzGlyph, contentDescription: String?, modifier: Modifier = Modifier,
+                            size: Dp = 22.dp, tint: Color = LocalNzColors.current.tx)
+
+class NzPreset(val fade: FiniteAnimationSpec<Float>, val move: FiniteAnimationSpec<IntOffset>?,
+               val exit: FiniteAnimationSpec<Float>?) { val isNone: Boolean }
+fun inPlaceSpecs(motion: NzMotion): NzPreset
+fun appearSpecs(motion: NzMotion): NzPreset
+fun glyphSpecs(motion: NzMotion): NzPreset
+
+fun NzMotion.itemSpecs(): NzItemSpecs   // fadeIn: Float?, placement: IntOffset?, fadeOut: Float?
+```
+
+| What moves | Native token / preset | Full | Reduced | Eco (Off) |
+|---|---|---|---|---|
+| a press, a knob, a chevron (a **displacement**) | `motion.displace(ms, easing)` (90 ms standard by default), `displaceOffset()` on `IntOffset` | the table (90 / 200 ms) | **0 ms, nothing moves** (a displacement is removed, M14) | 0 ms |
+| a colour, an opacity | `motion.instant()` / `fast()` / `base()` — unchanged | 90 / 140 / 200 ms | capped at 140 ms (opacity/colour only) | 0 ms |
+| a screen's phase (skeleton → content, LoadFailed → content, empty) | `NzSwap` / `inPlaceSpecs` | fade 140 ms + **4 dp** rise, `ExitTransition.None`, `sizeTransform = null` | fade 140 ms, no offset | `EnterTransition.None` / `ExitTransition.None` |
+| an element appearing **in flow** | `NzAppear` / `appearSpecs` (same specs) | fade 140 ms + 4 dp, exit `None` | fade only | `None` |
+| play↔pause, heart↔heart-filled | `NzGlyphSwap` / `glyphSpecs` | fade 140 ms + `scale .85 → 1`, out 90 ms | fade 140 ms, no scale | one glyph, `None` |
+| a row inserted / removed / moved | `motion.itemSpecs()` → `Modifier.animateItem(...)` at the site (X5) | `fadeIn = null` (M4), `placement` 200 ms standard, `fadeOut` 140 ms | `fadeIn = null`, `placement = null`, `fadeOut` 140 ms (M14 keeps opacity) | all `null` |
+| the full-screen player leaving | `motion.screenOut()` | 240 ms | 140 ms | 0 ms |
+
+The three presets are the *only* way a screen animates a phase: `sizeTransform = null` always (a size walk
+is one layout per frame and clips, M10), `contentKey = { it }` so a re-emit of the same phase plays nothing
+(M6), and the exit is `None` on every in-flow replacement (M7 — an outro would keep A's height while B
+enters). The one literal in the file is `NzGlyphSwap`'s `0.85`, the value `PlayerBar.svelte:135` passes to
+`motion.js#swap`.
+
+**What a Compose test can and cannot see.** Compose exposes no API for a *running* animation's spec, alpha
+or transform: `getUnclippedBoundsInRoot` is a layout bound, and a `graphicsLayer` translation is invisible to
+it, so the SPA's `document.getAnimations()` has no native counterpart. `TransitionTest` therefore asserts
+two different things, and says so: (1) the **curve**, by reading the exact specs `inPlaceSpecs` /
+`appearSpecs` / `glyphSpecs` return at the three levels, and (2)–(5) the **wiring**, by what the semantics
+tree contains at a given `mainClock` time (a new phase only at eco, a same-phase re-emit as one node, an
+element gone in the same frame, the outgoing glyph held for its 90 ms exit). A test that claimed to "see" a
+fade would always pass; the emulator pictures at 50 % are what prove the look.
+
+Measured by X0's tests: `MotionTest` asserts every spec at the three levels, and **0** keeps a non-zero
+duration at `Off` outside `statusSpec` (M13's one exception); **0** keeps a displacement at `Reduced`; and
+the **6** hand-written spec sites in `Buttons.kt` (four `instant()`) and `TrackMenuSheet.kt` (the chevron's
+`if`) are **0** — they ask `displace()` now. `TransitionTest` holds the three presets and the semantics
+wiring (6 cases). The demo sheet (`NzComponentSheet`, 360 dp) rendered at the three levels is the same PNG
+(720 × 4800, identical bytes): X0 changes what moves, not a rest state. No frame budget claim: X0 draws
+nothing new.
+
 ## `lib/motion.js` — the transitions (T0)
 
 All have the Svelte signature `(node, params) => config | (({direction}) => config)`, use `css` only (never

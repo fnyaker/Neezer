@@ -514,7 +514,9 @@ the platform decoder.
 - Long lists: `LazyColumn` over a `ListHandle` (`items(count = len, key = …)`, pages of 64 rows
   fetched as they near the viewport), never a `List` of 4 000 records.
 - French copy, glyphs through the design system's `Icon` (no emoji), Sillon tokens only (no literal
-  colour), motion from the design system's tokens with the eco/reduced guard ([transitions.md](transitions.md)).
+  colour), motion from the design system's tokens with the eco/reduced guard ([transitions.md](transitions.md));
+  a screen names a **state**, never a duration — `designsystem/Transition.kt` (`NzSwap`, `NzAppear`,
+  `NzGlyphSwap`, `motion.itemSpecs()`), see *Le téléphone* there.
 
 ### iOS later (not planned in detail)
 
