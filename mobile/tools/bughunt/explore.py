@@ -709,8 +709,18 @@ def find_element(dump: Dump, signature: str) -> W | None:
 # --------------------------------------------------------------------------
 
 def classify(before: dict, after: dict, crash: list[str], pid: str,
-             forced: tuple | None = None) -> tuple[str, str, str | None]:
-    """(outcome, detail, confirm) for one transition, first match wins."""
+             forced: tuple | None = None,
+             baseline_ms: int = 0) -> tuple[str, str, str | None]:
+    """(outcome, detail, confirm) for one transition, first match wins.
+
+    `baseline_ms` is how long a dump took on the SAME screen before the tap. A
+    freeze is a dump that is slow *for this device*, not one that crosses a
+    number a faster machine was measured on: run 45907216650 produced 18
+    `freeze` blockers while every dump on this emulator takes ~4 s (SwiftShader),
+    so the plan's 3 000 ms read as « the app froze » 18 times on controls that
+    answered normally. The floor stays 3 000 ms; a dump must also be 2.5× slower
+    than the screen's own baseline to count.
+    """
     if forced is not None:
         return forced[0], forced[1], forced[2] if len(forced) > 2 else None
     if crash or not pid:
@@ -720,8 +730,10 @@ def classify(before: dict, after: dict, crash: list[str], pid: str,
         return "blank", "l'écran est vide après le tap (0 nœud nommé)", None
     if not after["ok"]:
         return "freeze", "le dump a épuisé ses 5 tentatives", None
-    if after["ms"] > FREEZE_MS:
-        return "freeze", f"le dump a pris {after['ms']} ms (> {FREEZE_MS})", None
+    freeze_at = max(FREEZE_MS, int(2.5 * baseline_ms))
+    if after["ms"] > freeze_at:
+        return ("freeze", f"le dump a pris {after['ms']} ms (> {freeze_at}, "
+                          f"base {baseline_ms} ms sur cet écran)", None)
     if after.get("anr"):
         return "console-error", after["anr"], None
     if after["name"] != before["name"]:
@@ -818,6 +830,22 @@ class Walker:
 
     def dump(self) -> Dump:
         return dump_screen(self.adb)
+
+    def settle(self, dump: Dump, tries: int = 6) -> Dump:
+        """Wait while the screen still says it is loading.
+
+        Measured on run 45907216650: two screens reached mid-load were named
+        « Chargement… » (and one by a paragraph of copy), then could not be
+        restored — 2 of its 4 `restore=failed` and ~3 min of the pass's budget.
+        A screen with fewer than 5 names is treated the same way.
+        """
+        for _ in range(tries):
+            loading = any(word.startswith("Chargement") for word in dump.texts)
+            if not loading and dump.textual >= 5:
+                return dump
+            time.sleep(1.2)
+            dump = self.dump()
+        return dump
 
     def start_app(self) -> bool:
         component = self.adb.launcher()
@@ -952,11 +980,13 @@ class Walker:
                 self.adb.key("BACK")
                 self.dump()
         else:
-            outcome, detail, _ = classify(before, after, fresh, pid, forced=None)
+            outcome, detail, _ = classify(before, after, fresh, pid, forced=None,
+                                          baseline_ms=before_dump.ms)
             if outcome == "nothing":
                 time.sleep(NOTHING_WAIT_S)
                 confirmed = self.dump().view()
-                outcome, detail, _ = classify(before, confirmed, fresh, pid)
+                outcome, detail, _ = classify(before, confirmed, fresh, pid,
+                                              baseline_ms=before_dump.ms)
                 ms = int((time.monotonic() - started) * 1000)
                 after = confirmed
                 if outcome == "nothing":
@@ -1116,6 +1146,7 @@ def explore_screen(walker: Walker, screen: Screen) -> None:
     if not dump.ok:
         screen.restore = "failed"
         return
+    dump = walker.settle(dump)
     walker.write_screen_files(screen, dump)
     kept, suppressed = elements(dump)
     screen.elements = len(kept)
