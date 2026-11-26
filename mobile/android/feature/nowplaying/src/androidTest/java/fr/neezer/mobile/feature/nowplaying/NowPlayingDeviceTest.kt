@@ -377,24 +377,28 @@ class NowPlayingDeviceTest {
         // not a pixel count, because "400 px" is 17 % of this emulator's 2 400 px
         // and would not reach the 28 % threshold — and slow enough (≈110 dp/s) that
         // the DISTANCE alone decides, not the velocity.
+        //
+        // The WHOLE gesture is one block, `up()` included: `performTouchInput`
+        // disposes its input dispatcher at the end of a block, and on a device that
+        // cancels the pointer still down (measured: the `up()` of a second block
+        // never landed, and the sheet stayed at 40 % — which is also why the frame
+        // now settles a real cancel back).
+        val restTop: Float = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().top.value
         rule.onNodeWithTag(SHEET_TAG).performTouchInput {
             down(Offset(centerX, top + 40.dp.toPx()))
             repeat(5) {
                 advanceEventTime(800)
                 moveBy(Offset(0f, height * 0.08f))
             }
+            up()
         }
         InstrumentationRegistry.getInstrumentation().waitForIdleSync()
-        val heldBounds = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot()
-        val heldDp = heldBounds.top.value
-        val sheetDp = heldBounds.bottom.value - heldBounds.top.value
-        println("MEASURE p2 device drag: held at $heldDp dp of $sheetDp dp")
-        assertTrue(
-            "the finger moved the sheet past the 28 % threshold (held $heldDp of $sheetDp dp)",
-            heldDp > sheetDp * 0.28f,
-        )
-        rule.onNodeWithTag(SHEET_TAG).performTouchInput { up() }
-        awaitStep("the drag closed the player") { !NowPlayingState.open }
+        val sheetDp: Float = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().let {
+            it.bottom.value - it.top.value
+        }
+        awaitStep(
+            "the drag closed the player (from $restTop dp, sheet $sheetDp dp)",
+        ) { !NowPlayingState.open }
         InstrumentationRegistry.getInstrumentation().waitForIdleSync()
 
         assertEquals("the drag did not move the queue", index, player.snapshot().index)
@@ -686,9 +690,13 @@ class NowPlayingDeviceTest {
             rule.waitUntil(timeoutMillis = timeoutMs, condition = condition)
         } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
             val snapshot = NowPlayingCore.player()?.snapshot()
+            val sheets = rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().size
+            val top = runCatching {
+                rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot().top.value
+            }.getOrNull()
             throw AssertionError(
                 "$what: still false after $timeoutMs ms (open=${NowPlayingState.open}, " +
-                    "sheets=${rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().size}, " +
+                    "sheets=$sheets top=$top, " +
                     "player=${snapshot?.state} ${snapshot?.index}/${snapshot?.len} " +
                     "« ${snapshot?.current?.title} »)",
                 timeout,

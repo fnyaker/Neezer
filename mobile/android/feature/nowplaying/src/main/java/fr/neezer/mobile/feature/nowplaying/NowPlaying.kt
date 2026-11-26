@@ -73,6 +73,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import uniffi.nz_ffi.PlayState
@@ -475,48 +476,57 @@ internal fun PlayerSheetFrame(
                     val down = awaitFirstDown(requireUnconsumed = false)
                     tracker.resetTracking()
                     tracker.addPosition(down.uptimeMillis, down.position)
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (change.changedToUpIgnoreConsumed()) {
-                            // A REAL up is never consumed; Compose delivers a
-                            // cancelled gesture as a consumed up (`drag()` returns
-                            // false on `isConsumed` for the same reason). That is the
-                            // only way to tell them apart, and S8 needs to: a cancel
-                            // must not decide.
-                            if (change.isConsumed) cancelled = true
-                            tracker.addPosition(change.uptimeMillis, change.position)
-                            break
-                        }
-                        if (!change.pressed) {
-                            cancelled = true
-                            break
-                        }
-                        val delta = change.positionChange()
-                        // Fed from the first move, before the axis is decided: the
-                        // tracker needs the travel before the slop, or a flick under
-                        // the distance reports no velocity at all (SwipeRow measured
-                        // the same with two samples).
-                        tracker.addPosition(change.uptimeMillis, change.position)
-                        if (!claimed) {
-                            travelY += delta.y
-                            travelX += delta.x
-                            if (abs(travelY) <= slop) continue
-                            // A mostly horizontal drag belongs to the cover carousel
-                            // or the seek rail; an upward one has nowhere to go (the
-                            // sheet is already at 0). Neither is ours: consume
-                            // nothing, so the child keeps its gesture.
-                            if (abs(travelX) > abs(travelY) || (start <= 0f && travelY < 0f)) {
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.changedToUpIgnoreConsumed()) {
+                                // A REAL up is never consumed; Compose delivers a
+                                // cancelled gesture as a consumed up (`drag()` returns
+                                // false on `isConsumed` for the same reason). That is the
+                                // only way to tell them apart, and S8 needs to: a cancel
+                                // must not decide.
+                                if (change.isConsumed) cancelled = true
+                                tracker.addPosition(change.uptimeMillis, change.position)
                                 break
                             }
-                            claimed = true
-                            settleJob.value?.cancel()
+                            if (!change.pressed) {
+                                cancelled = true
+                                break
+                            }
+                            val delta = change.positionChange()
+                            // Fed from the first move, before the axis is decided: the
+                            // tracker needs the travel before the slop, or a flick under
+                            // the distance reports no velocity at all (SwipeRow measured
+                            // the same with two samples).
+                            tracker.addPosition(change.uptimeMillis, change.position)
+                            if (!claimed) {
+                                travelY += delta.y
+                                travelX += delta.x
+                                if (abs(travelY) <= slop) continue
+                                // A mostly horizontal drag belongs to the cover carousel
+                                // or the seek rail; an upward one has nowhere to go (the
+                                // sheet is already at 0). Neither is ours: consume
+                                // nothing, so the child keeps its gesture.
+                                if (abs(travelX) > abs(travelY) || (start <= 0f && travelY < 0f)) {
+                                    break
+                                }
+                                claimed = true
+                                settleJob.value?.cancel()
+                                change.consume()
+                                offsetY = (start + travelY - slop).coerceIn(0f, sheetHeight)
+                                continue
+                            }
                             change.consume()
-                            offsetY = (start + travelY - slop).coerceIn(0f, sheetHeight)
-                            continue
+                            offsetY = (offsetY + delta.y).coerceIn(0f, sheetHeight)
                         }
-                        change.consume()
-                        offsetY = (offsetY + delta.y).coerceIn(0f, sheetHeight)
+                    } catch (interrupted: CancellationException) {
+                        // `onCancelPointerInput` cancels this coroutine outright (a
+                        // system gesture, a call, another window taking the pointer):
+                        // the sheet must not be left half-open, so the cancel still
+                        // returns it, then the cancellation continues.
+                        if (claimed) settleTo(start, 0f, RETURN_DAMPING)
+                        throw interrupted
                     }
                     if (!claimed) return@awaitEachGesture
                     if (cancelled) {
