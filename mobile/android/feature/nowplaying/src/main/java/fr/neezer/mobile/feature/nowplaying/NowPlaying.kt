@@ -3,11 +3,14 @@ package fr.neezer.mobile.feature.nowplaying
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -34,6 +38,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -42,21 +48,23 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.currentStateAsState
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.CoverImage
-import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.NzBlurredBackdrop
+import fr.neezer.mobile.designsystem.NzGlyphSwap
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.asRowSource
 import fr.neezer.mobile.designsystem.NzGlyph
-import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzRadius
@@ -107,13 +115,23 @@ private const val MINI_READ_MS = 250L
 /**
  * The mini player above the phone's bottom bar — `PlayerBar.svelte`'s card.
  *
- * Empty until something plays (« Rien en lecture »), and a tap ANYWHERE on the
- * card opens the full-screen player (the SPA's `cardTap`): the sleeve and the
- * names are one target, and the play/pause button answers for itself.
+ * **The room is reserved from the first frame** (`PlayerBar.svelte`'s `--mini-h`,
+ * lot X2): with nothing playing the same 64 dp card is drawn, the groove as its
+ * cover, « Rien en lecture » as its title and a disabled transport. The first
+ * « Lire » therefore moves nothing above the bar — an empty strip that appears
+ * with the first title used to shift the whole screen by 76 dp under the finger.
+ *
+ * The content swaps on the track's KEY (`NzSwap`, 140 ms + 4 dp) and the
+ * play↔pause glyph is a `NzGlyphSwap`; the cover and the 2 dp progress line stay
+ * OUTSIDE the swap, because a sleeve is kept until its replacement is ready (P1)
+ * and a live position is never animated (M6).
+ *
+ * A tap ANYWHERE on the card opens the full-screen player (the SPA's `cardTap`):
+ * the sleeve and the names are one target, and the play/pause button answers for
+ * itself.
  *
  * The card carries its OWN margins and its own [shape] (L1): the shell mounts it
- * bare between the « Contrôlé par … » notice and the tab bar, and an empty player
- * that returns early leaves no strip of air behind it.
+ * bare between the « Contrôlé par … » notice and the tab bar.
  */
 @Composable
 fun MiniPlayer(
@@ -138,14 +156,6 @@ fun MiniPlayer(
         }
     }
 
-    if (!state.playing && now == null) {
-        // The skeleton's rule: a bar with nothing in it is not a lie, it is a
-        // strip 64 dp tall for a player that does not exist. The SPA shows it
-        // empty (« Rien en lecture ») only once a player EXISTS, so the strip
-        // appears with the first title and never before.
-        return
-    }
-
     val colors = Sillon.colors
     val progress = if (state.durationS > 0.0) {
         (state.position.positionS / state.durationS).coerceIn(0.0, 1.0).toFloat()
@@ -155,6 +165,7 @@ fun MiniPlayer(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .testTag(MINI_BAR_TAG)
             .padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
     ) {
         Box(
@@ -176,27 +187,41 @@ fun MiniPlayer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(NzSpacing.m),
             ) {
-                CoverImage(url = now?.cover, sizeDp = 44.dp, seed = now?.id)
+                // Outside the swap: a sleeve keeps its node (and Coil's painter)
+                // across a track change, so the player never flashes a groove.
+                CoverImage(
+                    url = now?.cover,
+                    sizeDp = 44.dp,
+                    modifier = Modifier.testTag(MINI_COVER_TAG),
+                    seed = now?.id,
+                )
                 Column(Modifier.weight(1f)) {
-                    Text(
-                        text = now?.title ?: "Rien en lecture",
-                        style = Sillon.type.body,
-                        color = colors.tx,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = playbackLine(state),
-                        style = Sillon.type.bodySmall,
-                        color = if (state.snapshot?.state == PlayState.BUFFERING) colors.acText else colors.dim,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    // The two text lines only: the key is the track, so a re-emit
+                    // of the same title plays nothing (M6).
+                    NzSwap(targetState = now?.key ?: "", label = "mini-player") {
+                        Column {
+                            Text(
+                                text = now?.title ?: "Rien en lecture",
+                                style = Sillon.type.body,
+                                color = colors.tx,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = if (now == null) "" else playbackLine(state),
+                                style = Sillon.type.bodySmall,
+                                color = if (state.snapshot?.state == PlayState.BUFFERING) colors.acText else colors.dim,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
-                NzIconButton(
+                GlyphIconButton(
                     glyph = if (state.playing) NzGlyph.Pause else NzGlyph.Play,
                     contentDescription = if (state.playing) "Pause" else "Lecture",
                     onClick = { model.toggle() },
+                    enabled = now != null,
                 )
             }
             // The card's own 2 dp line along its bottom edge: played on the
@@ -210,6 +235,64 @@ fun MiniPlayer(
                     .background(colors.acMark),
             )
         }
+    }
+}
+
+/** The mini bar's root, for the height comparison a test holds (X2). */
+internal const val MINI_BAR_TAG = "mini-player-bar"
+
+/** The sleeve's node, kept across a track change (P1's rule, held by a test). */
+internal const val MINI_COVER_TAG = "mini-player-cover"
+
+/**
+ * An icon-only control whose glyph is a [NzGlyphSwap] — play↔pause, heart↔filled.
+ *
+ * `NzIconButton` draws its own `Icon` and `Buttons.kt` belongs to X0 (the motion
+ * vocabulary lot), so this lot mirrors that button's well here instead of
+ * widening the design system's API: the same 48 dp target, the same disabled ink
+ * (a disabled control is a WELL, not a faded surface — `Buttons.kt`'s rule), the
+ * same 0.92 press scale through the motion token.
+ */
+@Composable
+internal fun GlyphIconButton(
+    glyph: NzGlyph,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = 20.dp,
+    tint: Color? = null,
+    enabled: Boolean = true,
+) {
+    val motion = Sillon.motion
+    val colors = Sillon.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) 0.92f else 1f,
+        animationSpec = motion.displace(),
+        label = "nz-glyph-icon-button-press",
+    )
+    val ink = if (enabled) tint ?: colors.tx else colors.dim
+    Box(
+        modifier = modifier
+            .scale(scale)
+            .sizeIn(minWidth = NzMinTouchTarget, minHeight = NzMinTouchTarget)
+            .clip(CircleShape)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        NzGlyphSwap(
+            glyph = glyph,
+            contentDescription = contentDescription,
+            size = size,
+            tint = ink,
+        )
     }
 }
 

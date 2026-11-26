@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.currentStateAsState
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.NzGlyph
+import fr.neezer.mobile.designsystem.NzGlyphSwap
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
@@ -338,12 +339,12 @@ private fun TrackLine(state: NowPlayingModel.State, model: NowPlayingModel, nav:
             )
         }
         val liked = now?.liked == true
-        NzIconButton(
+        GlyphIconButton(
             glyph = if (liked) NzGlyph.HeartFilled else NzGlyph.Heart,
             contentDescription = if (liked) "Retirer des favoris" else "Ajouter aux favoris",
             onClick = {
-                val key = now?.key ?: return@NzIconButton
-                val target = screens ?: return@NzIconButton
+                val key = now?.key ?: return@GlyphIconButton
+                val target = screens ?: return@GlyphIconButton
                 // Optimistic: the glyph flips on the next snapshot; a failure says
                 // why and offers the retry (rule 3), never a silent revert.
                 scope.launch {
@@ -476,11 +477,11 @@ private fun Transport(state: NowPlayingModel.State, model: NowPlayingModel) {
                 .clickable(role = Role.Button) { model.toggle() },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
+            NzGlyphSwap(
                 glyph = if (state.playing) NzGlyph.Pause else NzGlyph.Play,
+                contentDescription = if (state.playing) "Pause" else "Lecture",
                 size = 28.dp,
                 tint = colors.onbtn,
-                contentDescription = if (state.playing) "Pause" else "Lecture",
             )
         }
         NzIconButton(
