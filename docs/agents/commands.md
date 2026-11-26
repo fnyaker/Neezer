@@ -76,6 +76,7 @@ cd webapp && node test/ui/run.mjs                    # the lists' main-thread co
                                                      # open the favourites, type into them, sort, open a 4000-track playlist
 cd webapp && node test/queue/run.mjs [--phone]       # the queue's editing in headless Chromium on a 4000-track queue: drag a row (mouse, or real touch
                                                      # events), drag to the far end with the list scrolling under the finger, the keyboard, clear
+                                                     # (`--phone` is one of the two benches CI runs: the `phone-benches` job)
 cd webapp && node test/theme/run.mjs                 # the sleeve change is a 600 ms walk, not a cut: accent at 60 Hz, no
                                                      # uncovered ground on one or two skips, the podcast header tint, reduced-motion;
                                                      # DIST=<dir> serves a build made elsewhere so it never replaces neezer/webui/dist
@@ -139,6 +140,7 @@ cd webapp && node test/vizdirect/run.mjs [FADE=1]   # the animations on the DIRE
 cd webapp && node test/download/run.mjs              # a playlist downloading on a shared 256 kbit/s link (LINK=bytes/s) while a track is
                                                      # launched: it must start as fast as on an idle link, play without a stall, and the downloads finish
 cd webapp && node test/import/run.mjs [--phone]       # a shared playlist link: pasted into the search, read, played, kept
+                                                     # (`--phone`: every action and chip on a 412 px screen — the other CI bench)
 cd webapp && node test/share/run.mjs                # sharing a TRACK as a link: the sheet opens on Lien (1 GET, 0 waveform,
                                                      # 0 gain, 1 POST), a guest page with OG/oEmbed/twitter tags, 0 audio bytes
                                                      # before play, Opus stream, embed mode, 390 px, Settings revoke (needs a build)
@@ -294,7 +296,12 @@ second copy of it.
   installed, `NS_REQUIRE_DATABASE=1` and `tests/test_schema_external.py`). A test that needs
   ffmpeg or numpy must RUN in the image job — a skip there is the suite testing less than it
   claims.
-- `webapp.yaml` — `npm ci`, `npm test`, `npm run build`.
+- `webapp.yaml` — `npm ci`, `npm test`, `npm run build`, and the **`phone-benches` job**: a build, then
+  `node test/queue/run.mjs --phone` and `node test/import/run.mjs --phone`. It installs Playwright's
+  Chromium globally (`test/harness.mjs` resolves it through `npm root -g`, so it stays out of the app's
+  lockfile) and pip-installs `ci-requirements.txt`, because `test/harness.mjs` starts
+  `tools/perf_api.py` on the runner's `python3`. Two benches nothing used to run: the phone
+  Escape-under-a-finger and the 412 px import row had been red for weeks.
 - `desktop.yaml` — the GPUI workspace in **independent jobs** (`fmt`, `clippy`, `test`, `floor`,
   `build`, `audit`, no `needs` between them): the workflow lasts its LONGEST job, never the sum, so
   work that shares nothing with the suite gets its own job rather than a place at the end of

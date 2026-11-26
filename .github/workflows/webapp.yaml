@@ -5,6 +5,10 @@ name: Web app
 # catalogue and drivers, the listen-party scheduler, the genre trainers...) and
 # its production build. It used to run nowhere but on a developer's machine.
 #
+# `phone-benches` runs two of the browser benches (`test/queue/run.mjs --phone`,
+# `test/import/run.mjs --phone`) against the built SPA: they were red on master
+# for weeks because nothing in CI ran them.
+#
 # viz.test.mjs reads the genre vocabulary out of neezer/deezer/analysis.py,
 # so that file is a dependency of this suite too.
 
@@ -65,3 +69,65 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # The two phone benches, on every SPA change. They were red on master for
+  # weeks and nothing said so: `npm test` only picks up `*.test.mjs`, and no
+  # workflow referenced `test/**/run.mjs`. One job, two benches — a later lot can
+  # widen it. `needs: test` because a broken unit suite is the more useful red.
+  phone-benches:
+    name: phone benches (queue, import)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    defaults:
+      run:
+        working-directory: webapp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      # test/harness.mjs runs `tools/perf_api.py` itself, with the repo's own
+      # python3: what that script imports is the server's runtime, so the job
+      # installs it the way the test job does.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the server's runtime
+        working-directory: .
+        run: pip install -r ci-requirements.txt
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # measure.wasm is not committed: built here from webapp/measure, as the
+      # test job does, because the SPA build imports it.
+      - name: Build the measures core (WebAssembly)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          node measure/build.mjs
+
+      # test/harness.mjs resolves Playwright through `npm root -g` (the app does
+      # not depend on it), so the browser driver is installed globally here
+      # instead of joining the lockfile.
+      - name: Install Playwright
+        run: |
+          npm install --global playwright
+          npx playwright install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+
+      - name: Queue, phone (Escape under a finger, reorder, far end, clear)
+        run: node test/queue/run.mjs --phone
+
+      - name: Import, phone (every action and chip on a 412 px screen)
+        run: node test/import/run.mjs --phone
