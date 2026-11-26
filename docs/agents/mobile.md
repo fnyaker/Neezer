@@ -662,6 +662,27 @@ recipe) and runs the shell smoke, the RELEASE JOURNEY (`mobile/tools/release-jou
 on the minified APK, then its eight doors — see *Pitfalls*) and the Macrobenchmark job on an API 35
 x86_64 emulator against `tools/perf_api.py --serve` reached at `10.0.2.2`.
 
+**The nightly crawler is the net under T1's gate.** `mobile/tools/release-journey.sh` walks eight
+known doors deterministically; the crashes nobody scripted need a crawler, so `mobile/tools/monkey.sh`
+boots through `emu.sh`, installs the universal RELEASE APK, signs it in through `release-signin.sh`,
+and lets **Android Monkey** inject **3 000 seeded events** (`-s 20261125`, `--throttle 250`,
+`--pct-syskeys 0 --pct-appswitch 0 --monitor-native-crashes`) inside `fr.neezer.mobile`. A run is
+red on ANY record the crash buffer attributes to our process (`FATAL EXCEPTION`, `Fatal signal`,
+`UnsatisfiedLinkError`, `dlopen failed`), any `ANR in fr.neezer.mobile`, Monkey's own `// CRASH:` /
+`// NOT RESPONDING:`, a `pidof` that came back empty, or a resumed activity that is not the app — and
+it prints the cause's first line before the counts (`monkey=fail … crashes=1`, never a bare number),
+keeping `crash.log`, `logcat.log`, `screencap.png` and `monkey.log` as artifacts. The seed is the
+contract: the same `--seed` injects the same events, so a red night reproduces instead of being
+retried. `--apk <path>` runs the published file instead (how v1.6.6's first-cover crash was proved:
+`crashes=1`, the line naming `NoSuchMethodError … CoilCovers`). It is **nightly only** (`mobile.yaml`
+`schedule: 0 3 * * *`, `if: github.event_name == 'schedule'`, `needs: apk`) — never on a pull request,
+never a gate. Measured on run **45735007009** (dispatch, the branch's own release APK): boot **25 s**,
+sign-in **38 s** with `covers_served=2`, **3 000 events in 3 min 44 s**, the whole crawl script
+**4 min 47 s** and the job **5 min 53 s** without the temporary v1.6.6 step — the emulator's
+`--throttle` is a ceiling, not a fixed pace, so the plan's 12.5 min estimate was an upper bound.
+When it finds a crash, the fix gets its own task and T1 grows a step for that screen (the crawler
+finds the net's holes; it does not become the gate).
+
 **The instrumented step gets the bench servers its `assumeTrue` gates ask for.** A gate that skips
 when its fixture is absent is honest on a developer machine and a silent hole in CI: run
 **45688339009** printed `Tests 16/10 completed. (8 skipped)` in `:playback` and the job was green.

@@ -46,6 +46,13 @@ on:
       # a change to the smoke.
       - tools/perf_api.py
       - .github/workflows/mobile.yaml
+  # THE NIGHTLY. The crawler (`monkey.sh`, lot T2) and the perf gates are nets,
+  # not gates: 15-20 min of emulator each, which no pull request must pay and
+  # whose check list must not show. `schedule` runs on the default branch only
+  # and in UTC, so 03:00 UTC is 04:00 or 05:00 in Paris depending on the season —
+  # the point is a fixed hour nobody waits in front of.
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -765,3 +772,96 @@ jobs:
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
         run: mobile/tools/ci-emulator.sh
+
+  # --- the nightly crawler ---------------------------------------------------
+  # Android Monkey on the SIGNED-IN release APK: 3 000 seeded events at 250 ms
+  # inside `fr.neezer.mobile`, failing on any crash, any ANR, or a process that
+  # did not survive (mobile/tools/monkey.sh; plan-mobile-tests, lot T2). T1's
+  # release journey is the deterministic GATE on a pull request — eight doors on
+  # the minified file; this is the NET under it, and the owner's list implies
+  # crashes no scripted flow reaches.
+  #
+  # ONCE A NIGHT, NEVER ON A PULL REQUEST: the emulator is 15-20 min (boot, the
+  # real sign-in, 12.5 min of events, the analysis) and a crawler is a net, not a
+  # gate (docs/agents/mobile.md, "Tests and emulation"). `needs: apk` because the
+  # artifact under the crawl must be the RELEASE build — the file a person
+  # installs — never a debug one, and `mobile/tools/monkey.sh` signs it in first:
+  # a crawler on the setup screen explores one screen.
+  monkey:
+    name: Monkey crawler (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    needs: apk
+    # Bounded in time: apk's p90 24.9 min, then the crawl itself — measured on
+    # run 45735007009: boot 25 s, sign-in 38 s, 3 000 events 3 min 44 s, the
+    # whole monkey job 5 min 53 s. `--throttle 250` is a ceiling, not a fixed
+    # pace, so the plan's 12.5 min estimate was an upper bound.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # The documented recipe: /dev/kvm must be readable by the runner user.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.7"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: neezer-mobile-apk
+          path: mobile/android/app/build/outputs/apk/release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: neezer-mobile-native
+          path: mobile/android/bridge
+
+      - name: Install the SDK, the image and the AVD
+        run: |
+          set -euo pipefail
+          # `yes | sdkmanager --licenses` fails under `pipefail` once nothing is
+          # left to ask (the emulator job measured it): the licences are what we
+          # want, not yes's exit status.
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" "system-images;android-35;default;x86_64"
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n nz35 -k "system-images;android-35;default;x86_64" --device pixel_6 --force
+
+      # `release-signin.sh` starts the bench server (`tools/perf_api.py --serve`)
+      # the sign-in paints its covers from, so the runner needs its packages.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the bench server
+        run: pip install -e .
+
+      - name: The nightly crawl
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          NEEZER_MONKEY_EVIDENCE_DIR: ${{ runner.temp }}/monkey-evidence
+        run: mobile/tools/monkey.sh --serial emulator-5580 --events 3000 --seed 20261125
+
+      # Whatever happened: a red nightly must name its screen and its stack, not
+      # just a count (crash.log, logcat.log, screencap.png, monkey.log).
+      - name: Keep the crawl's evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monkey-evidence
+          path: ${{ runner.temp }}/monkey-evidence
+          if-no-files-found: warn
+          retention-days: 7
