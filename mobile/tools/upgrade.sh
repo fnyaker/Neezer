@@ -288,7 +288,10 @@ install_and_sign_in() {
     tap_text "Accepter ce certificat" || fail_screen "no « Accepter ce certificat » button"
     await_text "Ton compte" 30 || fail_screen "the account form never opened"
     type_into 1 bench || fail_screen "the account field did not take « bench »"
-    type_into 2 "Bench1 secret" || fail_screen "the password field did not take the fixture's password"
+    # `Bench1`, and `secret` as the THIRD argument: release-signin.sh's call,
+    # verbatim. The password is one token (perf_api's `BENCH_PASSWORD`), and a
+    # quoted "Bench1 secret" is a two-word string `input text` splits.
+    type_into 2 Bench1 secret || fail_screen "the password field did not take the fixture's password"
     tap_text "Se connecter" || fail_screen "no « Se connecter » button"
 
     # The home, then a NEW cover: both while the process is alive (v1.6.6 died on
