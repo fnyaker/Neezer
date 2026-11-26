@@ -361,6 +361,20 @@ class Dump:
         return any("inputmethod" in (w.n.package or "") for w in self.wraps)
 
     @property
+    def foreign(self) -> tuple:
+        """The other apps' windows on screen (a share sheet, a picker).
+
+        Not ours, not the status bar, not the keyboard: a package that appears
+        between two dumps IS a layer, and its absence is why « Partager » would
+        otherwise read as `nothing` on a button that works.
+        """
+        return tuple(sorted({
+            w.n.package for w in self.wraps
+            if w.n.package and w.n.package not in (PKG, SYSTEM_UI)
+            and "inputmethod" not in w.n.package
+        }))
+
+    @property
     def height(self) -> int:
         return self.root.y2 if self.root is not None else 2400
 
@@ -385,6 +399,7 @@ class Dump:
             "nodes": self.fingerprint,
             "textual": self.textual,
             "layer": self.layer,
+            "foreign": self.foreign,
             "ok": self.ok,
             "ms": self.ms,
             "ime": self.ime,
@@ -644,6 +659,9 @@ def classify(before: dict, after: dict, crash: list[str], pid: str,
     if after["name"] != before["name"]:
         return "navigated", f"{before['name']} → {after['name']}", None
     extra = len(after["layer"]) - len(before["layer"])
+    appeared = set(after.get("foreign", ())) - set(before.get("foreign", ()))
+    if appeared:
+        return "opened-layer", f"une fenêtre d'une autre app : {', '.join(sorted(appeared))}", None
     if extra >= 3:
         return "opened-layer", "une couche s'est ouverte", None
     if after["ime"] and not before["ime"]:
@@ -722,6 +740,11 @@ class Walker:
         self.current: Screen | None = None
         self.label_collision = 0
         self.shots = 0
+        # §4.1: an exception is attributed "depuis le dernier repère" — the crash
+        # buffer keeps its record, so a second read without a mark would count
+        # the same crash once per tap (measured on the fake tree: 6 exceptions
+        # for one injected FATAL EXCEPTION).
+        self.crash_mark = "\n".join(self.adb.crash_lines())
 
     # --- the device ------------------------------------------------------
 
@@ -822,9 +845,13 @@ class Walker:
         after_dump = self.dump()
         ms = int((time.monotonic() - started) * 1000)
         crash = self.adb.crash_lines()
+        joined = "\n".join(crash)
+        fresh = crash if joined != self.crash_mark else []
+        if fresh:
+            self.crash_mark = joined
         pid = self.adb.pid()
         after = after_dump.view()
-        if after_dump.ms > ANR_CHECK_MS or crash or not pid:
+        if after_dump.ms > ANR_CHECK_MS or fresh or not pid:
             lines = self.adb.anr()
             if lines:
                 after["anr"] = lines[0].strip()
@@ -841,7 +868,7 @@ class Walker:
                 self.adb.key("BACK")
                 self.dump()
         else:
-            outcome, detail, _ = classify(before, after, crash, pid, forced=None)
+            outcome, detail, _ = classify(before, after, fresh, pid, forced=None)
         self.clicked += 1
         evidence = None
         if outcome in ("exception", "blank", "freeze", "nothing", "console-error"):
@@ -1301,12 +1328,17 @@ def summary(run: dict) -> dict:
     rows = run.get("rows", [])
     clicked = sum(1 for row in rows
                   if row["outcome"] not in ("unreachable", "skipped-session", "duplicate"))
+    skipped = sum(1 for row in rows if row["outcome"] == "skipped-session")
     found = run.get("elements", 0)
+    # §4.4: coverage is clicked over the elements the pass COULD click. An
+    # `unreachable` stays in the denominator (honest), a `skipped-session` does
+    # not: the plan says never to click it, so counting it would make the
+    # harness's own rule look like a miss.
     return {
         "screens": len(run.get("screens", [])),
         "elements": found,
         "clicked": clicked,
-        "coverage": percent(clicked, found),
+        "coverage": percent(clicked, max(found - skipped, 0)),
         "duplicates": run.get("duplicates", 0),
         "nothing": sum(1 for row in rows if row["outcome"] == "nothing"),
         "blank": sum(1 for row in rows if row["outcome"] == "blank"),
