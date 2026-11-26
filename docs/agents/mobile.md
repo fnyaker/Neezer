@@ -597,6 +597,16 @@ by the one-shot migration, MB4); local transcription (desktop-only).
 
 ## Tests and emulation
 
+### A shipped artifact is tested in its shipped form
+
+The APK a person installs is minified and signed, and that is the form CI runs: `release-journey.sh`
+signs in on `neezer-native-*.apk` and walks its eight doors, the R8 guard reads each module's `-keep`
+rules against the release `mapping.txt` and the dex that ships, and a `v*` tag byte-compares the
+published asset to the tested file. A lot that adds a reflective edge adds its `-keep` rule and its
+guard in the same PR. A check that only proves the DEBUG build has shipped this app broken twice
+(v1.6.5's TLS verifier, v1.6.6's first cover), both times on a green run. The per-workflow inventory
+is [testing.md](testing.md#ci-tests-what-ships).
+
 ### Where things run
 
 - **Rust, host**: `cargo test --workspace --locked` in `mobile/rust` (the core's logic, the FFI

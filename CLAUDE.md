@@ -109,6 +109,11 @@ with a justified inline `nosec` / `nosemgrep`). `cargo-audit` is the exception: 
 and weekly only, and never `continue-on-error`. Fix a red check whatever caused it. Once fully
 green, merge without asking. No skipped or disabled test to get there.
 
+**A shipped artifact is tested in its shipped form.** The APK, the image, the binaries and the
+packages are launched and walked as a person gets them (release / minified / signed, the real image,
+the installed package), never only built; a `v*` tag may not publish a form CI never ran. The
+per-workflow inventory is [testing.md](docs/agents/testing.md#ci-tests-what-ships).
+
 ## Area notes — read the ones you touch
 
 | You touch… | Read |
