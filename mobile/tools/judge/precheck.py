@@ -58,8 +58,8 @@ import sys
 # by shutting the two doors instead of trusting the file: `parse_tree` REFUSES a
 # document that declares a DOCTYPE or an ENTITY (so no DTD, no entity expansion,
 # no billion laughs), and ElementTree never resolves an external entity. The
-# inline markers are that justification, per the repo's `nosemgrep` rule.
-import xml.etree.ElementTree as ET  # noqa: S405  # nosemgrep: python.lang.security.use-defused-xml
+# inline suppression markers below carry that justification, as the repo requires.
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml
 from pathlib import Path
 
 # The eleven captures of `release-journey.sh --evidence`, in walk order. The
@@ -137,7 +137,7 @@ def parse_tree(path: Path) -> tuple[Node, list[Node]]:
     raw = path.read_text(encoding="utf-8", errors="replace")
     if "<!DOCTYPE" in raw or "<!ENTITY" in raw:
         raise ET.ParseError("a DOCTYPE/ENTITY declaration is not a uiautomator dump")
-    tree = ET.fromstring(raw)  # nosec B314  # nosemgrep: python.lang.security.use-defused-xml-parse
+    tree = ET.fromstring(raw)  # nosemgrep: python.lang.security.use-defused-xml-parse
     nodes: list[Node] = []
 
     def walk(element: ET.Element, parent: Node | None) -> Node | None:
