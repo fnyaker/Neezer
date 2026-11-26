@@ -683,6 +683,55 @@ sign-in **38 s** with `covers_served=2`, **3 000 events in 3 min 44 s**, the who
 When it finds a crash, the fix gets its own task and T1 grows a step for that screen (the crawler
 finds the net's holes; it does not become the gate).
 
+### An upgrade is a first-class path (lot T8)
+
+The release page is the delivery channel, and the only install a person makes is
+an update OVER the build they already have. Android allows it only when the two
+APKs carry the **same signer certificate** and the new `versionCode` is not
+lower; and an install that keeps the app but loses its session or its offline
+store sends that person back to « Adresse du serveur » with their downloads
+gone. `mobile/tools/upgrade.sh --serial <s> --from <tag|apk> --to <apk>` proves
+all of it on one device, in this order: it installs the previous tag's universal
+`neezer-native.apk`, signs in to `perf-server.sh` (with a certificate generated
+once and kept alive for the whole run: the app pins the leaf it accepted), opens
+`neezer://album/1` and taps « Télécharger », records `dumpsys package`
+(`versionCode`, `lastUpdateTime`) and the app data directory's file count, then
+`adb install -r` OVER it, and asserts:
+
+- `version_code_up=1` — strictly greater, from `dumpsys package` on both sides;
+- `signers_equal=1` — the certificate's SHA-256 digest from `apksigner` on BOTH
+  files, not the DN (two keys can share a CN);
+- `session_kept=1` — the home paints `Accueil Neezer`, neither « Adresse du
+  serveur » nor « Ton compte » is anywhere, and the home asks the server for a
+  NEW cover (`/api/cover` counted on the bench's access log) — a request made
+  with the session stored BEFORE the install;
+- `data_kept=1` — the album still says « Téléchargé », and the data directory
+  holds at least as many files and KiB as before (`adb root`; the emulator image
+  is userdebug, and the script fails loudly on an image that refuses root instead
+  of skipping the measurement).
+
+The negative control is ASSERTED, never tolerated: the DEBUG-signed APK built
+with the SAME `VERSION_CODE` must be refused with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and the installed versionCode must be
+unchanged after the refusal. (With Gradle's default `versionCode 1` Android
+answers `INSTALL_FAILED_VERSION_DOWNGRADE` first and the signature is never
+compared — the job therefore builds the debug APK with the release's code.)
+
+CI: `mobile.yaml`'s `upgrade` job runs `if: schedule || workflow_dispatch` (a pull
+request has no published tag to install), needs `apk`, and takes **<fill>**.
+
+Measured (dispatch run <fill>, emulator-5580, API 35 x86_64, KVM):
+`previous=v<fill> (<fill> B, versionCode <n>) → current=2.0.<n> (<fill> B)`,
+`signers_equal=1 sha256=<fill>`, `session_kept=1 covers_before=<n>
+covers_after=<n>`, `data_kept=1 data_files_before=<n> data_files_after=<n>
+data_kib_before=<n> data_kib_after=<n>`,
+`negative_control=INSTALL_FAILED_UPDATE_INCOMPATIBLE expected=1`.
+
+Never a rule without its number: the versionCode rule is `github.run_number`, so
+it only grows (`mobile.yaml`'s `VERSION_CODE`), and the signer rule is the
+keystore secret — a tag without `ANDROID_KEYSTORE_BASE64` is refused at build
+time, which is the same invariant from the other end.
+
 **The instrumented step gets the bench servers its `assumeTrue` gates ask for.** A gate that skips
 when its fixture is absent is honest on a developer machine and a silent hole in CI: run
 **45688339009** printed `Tests 16/10 completed. (8 skipped)` in `:playback` and the job was green.
