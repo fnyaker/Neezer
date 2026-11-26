@@ -59,7 +59,7 @@ import sys
 # document that declares a DOCTYPE or an ENTITY (so no DTD, no entity expansion,
 # no billion laughs), and ElementTree never resolves an external entity. The
 # inline suppression markers below carry that justification, as the repo requires.
-import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 from pathlib import Path
 
 # The eleven captures of `release-journey.sh --evidence`, in walk order. The
@@ -137,7 +137,7 @@ def parse_tree(path: Path) -> tuple[Node, list[Node]]:
     raw = path.read_text(encoding="utf-8", errors="replace")
     if "<!DOCTYPE" in raw or "<!ENTITY" in raw:
         raise ET.ParseError("a DOCTYPE/ENTITY declaration is not a uiautomator dump")
-    tree = ET.fromstring(raw)  # nosemgrep: python.lang.security.use-defused-xml-parse
+    tree = ET.fromstring(raw)  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml-parse
     nodes: list[Node] = []
 
     def walk(element: ET.Element, parent: Node | None) -> Node | None:
