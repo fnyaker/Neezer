@@ -35,6 +35,10 @@ const RENEW_MS = 15000;
 const MAX_PAUSE_MS = 20000; // the longest a trickled web read sleeps
 
 const elements = new Map(); // element -> wants the link
+// Elements the PLAYER itself is loading to switch to (a quality switch, the
+// head's hand-over): paused until the swap, so `elementWants` says no, but their
+// request is the person's own next sound and must outrank any prefetch.
+const needs = new Set();
 const holds = new Set(); // tokens (prefetch)
 let waiters = [];
 // A prefetch read waiting for the PLAYER to let go of the link. It is a
@@ -56,8 +60,10 @@ function nativeYield(ms) {
 }
 
 function recompute() {
-  let elWant = false;
-  for (const w of elements.values()) if (w) { elWant = true; break; }
+  let elWant = needs.size > 0;
+  if (!elWant) {
+    for (const w of elements.values()) if (w) { elWant = true; break; }
+  }
   // The prefetch's own hold must not count as a reason for it to keep waiting:
   // it reads while holding, so waiting on the hold would be waiting on itself.
   if (elementWant && !elWant) {
@@ -109,9 +115,21 @@ export function whenClear() {
   return new Promise((r) => waiters.push(r));
 }
 
+/**
+ * The player is loading `el` to switch to it (a quality switch, the head's
+ * hand-over). It is paused until the swap, so `elementWants` says no — but the
+ * bytes it is waiting for are the person's own next sound, and a prefetch must
+ * never take them. Cleared once the element is promoted (or dropped).
+ */
+export function needLink(el, on = true) {
+  if (!el) return;
+  if (on) needs.add(el);
+  else needs.delete(el);
+  recompute();
+}
+
 /** Holds the link (the next track's preload); returns its release. */
-export function hold() {
-  const token = {};
+export function hold() {  const token = {};
   holds.add(token);
   recompute();
   let done = false;
@@ -222,6 +240,7 @@ export function trickle(n) {
 
 /** Whether the PLAYER (a watched element) needs the link right now, holds aside. */
 export function playerWantsLink() {
+  if (needs.size > 0) return true;
   for (const w of elements.values()) if (w) return true;
   return false;
 }
@@ -240,6 +259,7 @@ export function whenPlayerFree() {
 /** For tests: forget every element and hold. */
 export function resetNetYield() {
   elements.clear();
+  needs.clear();
   holds.clear();
   clearInterval(renewTimer);
   renewTimer = null;

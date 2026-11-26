@@ -66,6 +66,16 @@ function reqp(request) {
 const ownedCovers = new Set();
 // Track ids whose prefetch is in flight, to dedupe concurrent triggers.
 const inFlight = new Set();
+// The tracks whose HEAD is on the device (lib/playcache.js#prefetchHead). Kept
+// in memory next to `cachedIds`: the head is a different thing from the track's
+// audio — it is the first seconds only — so it lives under its own key in the
+// same store and never makes `isCached()` true.
+const cachedHeads = new Set();
+const headsInFlight = new Set();
+
+/** The track's first seconds, Opus 64, one finished file — see the server's /head. */
+export const HEAD_SECONDS = 6;
+const headKey = (id) => "head:" + id;
 // Entries written before the app keyed on UUIDs sit under their Deezer id until
 // `migrateStoredKeys` renames them; the index answers to the UUID meanwhile.
 const storedAs = new Map(); // key (uuid) -> the id on disk, while it differs
@@ -82,7 +92,8 @@ export async function initPlayCache() {
     for (const a of audio) {
       const key = migrateKey(a.id);
       if (key !== a.id) storedAs.set(key, a.id);
-      ids.add(key);
+      if (key.startsWith("head:")) cachedHeads.add(key.slice(5));
+      else ids.add(key);
       size += a.size || 0;
     }
     const add = {};
@@ -140,6 +151,87 @@ async function touchAudio(id) {
     store.put(rec);
   }
   await done(t);
+}
+
+// The cached HEAD of a track → object URL (caller revokes), or null. A head is
+// the track's first HEAD_SECONDS as one finished Opus file: enough for the tap
+// to make a sound at once on a link that could never deliver the track, and the
+// player hands over to the full stream before it runs out. It is deliberately
+// NOT the track: `getCachedAudioURL` never sees it, and neither does `isCached`.
+export async function getCachedHeadURL(id) {
+  const key = String(id);
+  if (!cachedHeads.has(key)) return null;
+  try {
+    const db = await openDB();
+    const rec = await reqp(tx(db, "audio", "readonly").objectStore("audio").get(headKey(key)));
+    if (!rec || !rec.blob || !rec.head) {
+      cachedHeads.delete(key);
+      return null;
+    }
+    touchAudio(headKey(key)).catch(() => {});
+    return URL.createObjectURL(rec.blob);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Prefetch just the HEAD of the next track: its first `HEAD_SECONDS`, Opus 64,
+ * as one finished file (~48 KB on real music — a tap's worth of link at 64 KB/s,
+ * where the whole FLAC cannot arrive at all).
+ *
+ * Same yielding rules as the full preload: it holds the link as the NEXT track's
+ * preload does, never starts while a playing element wants it, and steps aside
+ * by abort + Range when it does. It runs before the full prefetch, so the head
+ * is in hand long before the full file could be — and it is skipped outright
+ * when the track is already on the device (a download or a complete blob).
+ */
+export async function prefetchHead(track, quality, stillWanted = () => true) {
+  const id = trackKey(track);
+  if (!id || !streamable(track)) return;
+  if (isDownloaded(id) || isCached(id) || cachedHeads.has(id) || headsInFlight.has(id)) return;
+  headsInFlight.add(id);
+  try {
+    const got = await holding(() =>
+      fetchYielding(api.streamHeadUrl(trackRef(track)), null, {
+        headers: { "X-NS-Background": "1" },
+        mustYield: playerWantsLink,
+        whenFree: whenPlayerFree,
+        stillWanted: () => stillWanted(track),
+      })
+    );
+    if (!got || !got.blob || !got.blob.size) return;
+    // An Ogg stream or nothing: a misrouted answer — a proxy, a stale service
+    // worker, a bench that fakes the whole-file stream — must never be stored as
+    // a head, or the player would swap a six-second file for the track.
+    if (!(await isOgg(got.blob))) return;
+    await putHead(id, got.blob, quality);
+  } catch {
+    // 503 is the server saying "not archived yet" — expected on a first pass,
+    // and the full preload that follows is what queues the archive. Anything
+    // else is a missed head: a head is only ever a shortcut.
+  } finally {
+    headsInFlight.delete(id);
+  }
+}
+
+async function putHead(id, blob, quality) {
+  const db = await openDB();
+  const t = tx(db, "audio", "readwrite");
+  t.objectStore("audio").put({
+    id: headKey(id),
+    blob,
+    size: blob.size,
+    // Never matches a real quality on purpose: the head is not the track at
+    // any bitrate, and `getCachedAudioURL` must never hand it out as one.
+    quality: `HEAD:${quality || ""}:${HEAD_SECONDS}`,
+    type: blob.type || "audio/ogg",
+    head: true,
+    ts: Date.now(),
+  });
+  await done(t);
+  cachedHeads.add(id);
+  playCacheSize.update((n) => n + blob.size);
 }
 
 // Prefetch a track's audio (+ cover) into the cache. Skips a track that's
@@ -220,6 +312,16 @@ export async function prefetchUpcoming(tracks, quality, stillWanted = () => true
 }
 
 const PREFETCH_ATTEMPTS = 4;
+
+/** Whether a body starts with Ogg's capture pattern ("OggS"). */
+async function isOgg(blob) {
+  try {
+    const b = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+    return b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53;
+  } catch {
+    return false;
+  }
+}
 
 /** Retry-After in ms: the server's own answer, 5 s when missing or odd, clamped 2–30 s. */
 function retryAfterMs(seconds) {
@@ -432,13 +534,17 @@ async function evictEntry(e) {
     const t = tx(db, "audio", "readwrite");
     t.objectStore("audio").delete(e.key);
     await done(t);
-    const key = migrateKey(e.key); // an entry not yet renamed is indexed by its UUID
-    storedAs.delete(key);
-    cachedIds.update((s) => {
-      const n = new Set(s);
-      n.delete(key);
-      return n;
-    });
+    if (String(e.key).startsWith("head:")) {
+      cachedHeads.delete(String(e.key).slice(5));
+    } else {
+      const key = migrateKey(e.key); // an entry not yet renamed is indexed by its UUID
+      storedAs.delete(key);
+      cachedIds.update((s) => {
+        const n = new Set(s);
+        n.delete(key);
+        return n;
+      });
+    }
   } else {
     const t = tx(db, "covers", "readwrite");
     t.objectStore("covers").delete(e.key);
@@ -472,6 +578,7 @@ export async function clearPlayCache() {
     t.objectStore("covers").clear();
     await done(t);
     cachedIds.set(new Set());
+    cachedHeads.clear();
     playCacheSize.set(0);
     offlineCovers.update((m) => {
       const n = { ...m };

@@ -1058,6 +1058,12 @@ export const api = {
   streamReady: (id, quality) =>
     req("/stream/" + encodeURIComponent(id) + "/ready" + (quality && quality !== "FLAC" ? "?q=" + quality : "")),
 
+  // The track's first seconds, Opus 64, as a FINISHED file (a length and byte
+  // ranges, unlike a cold track's stream). The preload starts a tapped track on
+  // it and hands over to the full stream before it runs out — see
+  // lib/playcache.js#prefetchHead and the route's own docstring.
+  streamHeadUrl: (id) => BASE + "/stream/" + encodeURIComponent(id) + "/head",
+
   // archived cover art (same-origin) for any track id — used to cache pochettes
   // for offline playback.
   coverUrl: (id) => BASE + "/cover/" + id,

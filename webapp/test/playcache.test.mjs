@@ -286,3 +286,174 @@ test("a 503 that never clears stops after four attempts", async () => {
   assert.equal(stored(t.id), undefined);
   serveStream();
 });
+
+// --- the HEAD (lot 5): the track's first seconds, as one finished file ------
+//
+// The head is what makes a tap sound at once on a link that could never deliver
+// the track, and it is deliberately NOT the track: six seconds, stored under its
+// own key, never handed out by `getCachedAudioURL` / `isCached`. The player
+// starts on it and hands over to the full stream before it runs out.
+
+const HEAD_BYTES = 48 * 1024;
+const headBody = new Uint8Array(HEAD_BYTES);
+for (let i = 0; i < HEAD_BYTES; i++) headBody[i] = (i * 7) & 0xff;
+// An Ogg page magic: the route answers an Ogg file, and the prefetch refuses
+// anything that is not one (a misrouted answer must never be stored as a head).
+headBody.set([0x4f, 0x67, 0x67, 0x53], 0);
+
+/** The /head answer: a FINISHED file — a length and byte ranges, like the route. */
+function serveHead({ onChunk } = {}) {
+  const reqs = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (!String(url).endsWith("/head")) return other();
+    const headers = init.headers || {};
+    const m = /^bytes=(\d+)-$/.exec(headers.Range || headers.range || "");
+    const offset = m ? +m[1] : 0;
+    const rec = { url: String(url), headers: { ...headers }, signal: init.signal, offset, aborted: false };
+    reqs.push(rec);
+    if (init.signal) init.signal.addEventListener("abort", () => (rec.aborted = true));
+    const rest = headBody.slice(offset);
+    let i = 0;
+    const reader = {
+      async read() {
+        if (i >= rest.length) return { done: true, value: undefined };
+        await new Promise((r) => setTimeout(r, 5));
+        if (init.signal && init.signal.aborted) {
+          const e = new Error("aborted");
+          e.name = "AbortError";
+          throw e;
+        }
+        const value = rest.slice(i, i + 1024);
+        i += 1024;
+        if (onChunk) onChunk(offset + i);
+        return { done: false, value };
+      },
+      async cancel() {},
+    };
+    const h = {
+      "content-type": "audio/ogg",
+      "accept-ranges": "bytes",
+      "content-length": String(rest.length),
+    };
+    if (offset) h["content-range"] = `bytes ${offset}-${HEAD_BYTES - 1}/${HEAD_BYTES}`;
+    return {
+      ok: true,
+      status: offset ? 206 : 200,
+      headers: hdr(h),
+      body: { getReader: () => reader },
+    };
+  };
+  return () => reqs;
+}
+
+test("the head is stored apart from the track, and never stands in for it", async () => {
+  ny.resetNetYield();
+  const reqs = serveHead();
+  const t = track();
+  await playcache.prefetchHead(t, "FLAC");
+  assert.equal(reqs().length, 1);
+  assert.ok(reqs()[0].url.endsWith(`/api/stream/${t.id}/head`), "the head route, named by the row id");
+  assert.equal(reqs()[0].headers["X-NS-Background"], "1", "a preload says so to the server");
+  // Written under its own key, marked as a head, and NOT the track.
+  const row = stored("head:" + t.id);
+  assert.ok(row, "the head is on the device");
+  assert.equal(row.size, HEAD_BYTES);
+  assert.equal(row.head, true);
+  assert.match(row.quality, /^HEAD:/);
+  assert.equal(get(cachedIds).has(t.id), false, "the track itself is NOT cached");
+  assert.equal(await playcache.getCachedAudioURL(t.id, "FLAC"), null, "never served as the whole track");
+  const url = await playcache.getCachedHeadURL(t.id);
+  assert.ok(url && url.startsWith("blob:"), "the head is handed out as a blob URL");
+  URL.revokeObjectURL(url);
+  // A track that already has its head is not asked for again.
+  await playcache.prefetchHead(t, "FLAC");
+  assert.equal(reqs().length, 1);
+});
+
+test("the head steps aside by abort + Range, like the full preload", async () => {
+  ny.resetNetYield();
+  const el = new FakeEl();
+  ny.watchElement(el);
+  el.paused = false;
+  el.ranges = [[0, 39]];
+  el.fire("play");
+  assert.equal(ny.playerWantsLink(), false);
+  let flipped = false;
+  const reqs = serveHead({
+    onChunk: () => {
+      if (flipped) return;
+      flipped = true;
+      el.ranges = [[0, 2]];
+      el.fire("progress");
+    },
+  });
+  const t = track();
+  const p = playcache.prefetchHead(t, "FLAC");
+  await waitFor(() => reqs().length === 1 && reqs()[0].aborted);
+  assert.equal(stored("head:" + t.id), undefined, "a half-read head is not written");
+  el.ranges = [[0, 39]];
+  el.fire("progress");
+  await p;
+  assert.equal(reqs().length, 2);
+  assert.equal(reqs()[1].headers.Range, "bytes=1024-", "resumed at the received byte");
+  assert.equal(stored("head:" + t.id).size, HEAD_BYTES);
+  ny.resetNetYield();
+});
+
+test("no head is asked for when the whole track is already on the device", async () => {
+  ny.resetNetYield();
+  const reqs = serveHead();
+  const t = track();
+  cachedIds.update((s) => new Set(s).add(t.id));
+  await playcache.prefetchHead(t, "FLAC");
+  assert.equal(reqs().length, 0, "the whole file is better than its head");
+  cachedIds.update((s) => {
+    const n = new Set(s);
+    n.delete(t.id);
+    return n;
+  });
+});
+
+test("a body that is not an Ogg stream is not stored as a head", async () => {
+  ny.resetNetYield();
+  const t = track();
+  globalThis.fetch = async (url) => {
+    if (!String(url).endsWith("/head")) return other();
+    return {
+      ok: true,
+      status: 200,
+      headers: hdr({ "content-type": "audio/wav", "content-length": "16" }),
+      body: {
+        getReader: () => {
+          let sent = false;
+          return {
+            async read() {
+              if (sent) return { done: true, value: undefined };
+              sent = true;
+              return { done: false, value: new Uint8Array(16).fill(7) };
+            },
+            async cancel() {},
+          };
+        },
+      },
+    };
+  };
+  await playcache.prefetchHead(t, "FLAC");
+  assert.equal(stored("head:" + t.id), undefined, "a WAV is not a head");
+  assert.equal(await playcache.getCachedHeadURL(t.id), null);
+});
+
+test("a cold track's head is given up on quietly — the full preload queues it", async () => {
+  ny.resetNetYield();
+  const t = track();
+  let attempts = 0;
+  globalThis.fetch = async (url) => {
+    if (!String(url).endsWith("/head")) return other();
+    attempts++;
+    return notArchived();
+  };
+  await playcache.prefetchHead(t, "FLAC");
+  assert.equal(attempts, 1, "one look: it retries nothing, the full preload comes next");
+  assert.equal(stored("head:" + t.id), undefined);
+});
+

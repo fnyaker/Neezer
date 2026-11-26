@@ -2095,6 +2095,115 @@ class WebUITestCase(unittest.TestCase):
         rv = self.client.get("/api/stream/" + str(t.id))
         self.assertEqual(rv.status_code, 200)
 
+    # -- the head: a track's first seconds as a finished file ----------------
+
+    def _need_ffmpeg(self):
+        import shutil
+
+        if not shutil.which("ffmpeg"):
+            if os.environ.get("NS_REQUIRE_FFMPEG") == "1":  # pragma: no cover
+                raise RuntimeError("NS_REQUIRE_FFMPEG=1 but ffmpeg is not on PATH")
+            self.skipTest("ffmpeg not installed")
+
+    def _archived_real_flac(self, sng_id="1", seconds=8):
+        """A Deezer track whose archive is real audio: the head is a transcode."""
+        import subprocess
+
+        t = self._make_deezer_track(sng_id=sng_id)
+        # White noise, not silence: Opus compresses digital silence to nothing,
+        # and this test is about the head's real size on real music.
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "0", "-y",
+                "-f", "lavfi", "-i", "anoisesrc=colour=white:amplitude=0.3:r=8000",
+                "-t", str(seconds), "-c:a", "flac", t.path,
+            ],
+            check=True,
+        )
+        return t
+
+    def test_stream_head_is_a_finished_opus_file(self):
+        """The preload's head: 6 s of Opus, a real file (length + byte ranges),
+        encoded once and then served from the cache."""
+        import tempfile
+        from unittest import mock
+
+        from neezer import webui as webui_mod
+        from neezer.webui import HEAD_KBPS, HEAD_SECONDS
+
+        self._need_ffmpeg()
+        self._login()
+        t = self._archived_real_flac(seconds=8)
+
+        real = webui_mod._opus_generator
+        calls = []
+
+        def counting(*a, **kw):
+            calls.append(a)
+            return real(*a, **kw)
+
+        with mock.patch.object(webui_mod, "_opus_generator", counting):
+            rv = self.client.get("/api/stream/1/head")
+            self.assertEqual(rv.status_code, 200)
+            self.assertEqual(rv.mimetype, "audio/ogg")
+            body = rv.get_data()
+            # A finished file, not a stream generated as it is sent.
+            self.assertEqual(rv.headers.get("Accept-Ranges"), "bytes")
+            self.assertEqual(int(rv.headers["Content-Length"]), len(body))
+            self.assertTrue(body.startswith(b"OggS"))
+            # 6 s at 64 kbit/s is 48 KB: nowhere near a whole FLAC.
+            self.assertLess(len(body), 200 * 1024)
+            self.assertGreater(len(body), 8 * 1024)
+
+            # The length is exactly the head's, so the client can hand over at
+            # a known point: the file ends where HEAD_SECONDS says it does.
+            import mediafile
+
+            with tempfile.NamedTemporaryFile(suffix=".opus") as fh:
+                fh.write(body)
+                fh.flush()
+                self.assertAlmostEqual(
+                    mediafile.MediaFile(fh.name).length, HEAD_SECONDS, delta=0.2
+                )
+
+            # A byte range is answered like any other finished file.
+            part = self.client.get("/api/stream/1/head", headers={"Range": "bytes=0-99"})
+            self.assertEqual(part.status_code, 206)
+            self.assertEqual(len(part.get_data()), 100)
+
+            # Asked again: served from the cache, never encoded twice.
+            again = self.client.get("/api/stream/1/head")
+            self.assertEqual(again.status_code, 200)
+            self.assertEqual(again.get_data(), body)
+        self.assertEqual(len(calls), 1, "one encode for three answers")
+        self.assertEqual(calls[0][1:], (HEAD_KBPS, HEAD_SECONDS))
+        with self.app.app_context():
+            self.assertTrue(
+                self.app.transcode_cache.has(
+                    f"head-{t.id}-opus{HEAD_KBPS}-{HEAD_SECONDS}.ogg"
+                )
+            )
+
+    def test_stream_head_refuses_a_cold_track(self):
+        """Nothing on disk: 503 + Retry-After and NO ffmpeg — the full preload
+        that follows is what queues the archive."""
+        from unittest import mock
+
+        from neezer import webui as webui_mod
+
+        self._login()
+        self._make_deezer_track(sng_id="1", archived=False)
+        with mock.patch.object(
+            webui_mod, "_opus_generator", side_effect=AssertionError("ffmpeg on a missing file")
+        ):
+            rv = self.client.get("/api/stream/1/head")
+        self.assertEqual(rv.status_code, 503)
+        self.assertEqual(rv.headers.get("Retry-After"), "30")
+        self.assertFalse(rv.get_json()["head"])
+
+    def test_stream_head_requires_login(self):
+        self.assertEqual(self.client.get("/api/stream/1/head").status_code, 401)
+
     def test_upload_imports_audio(self):
         from io import BytesIO
 
