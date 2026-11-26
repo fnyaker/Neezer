@@ -1,0 +1,72 @@
+{
+  "01-accueil.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/",
+    "viewport": "411x866@2.625"
+  },
+  "02-rechercher.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/search",
+    "viewport": "411x866@2.625"
+  },
+  "03-bibliotheque.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/library",
+    "viewport": "411x866@2.625"
+  },
+  "04-podcasts.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/podcasts",
+    "viewport": "411x866@2.625"
+  },
+  "05-reglages.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/settings",
+    "viewport": "411x866@2.625"
+  },
+  "06-lecture-et-son.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/settings/playback",
+    "viewport": "411x866@2.625"
+  },
+  "07-mode-voiture.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/settings/appearance (scrolled to Mode voiture)",
+    "viewport": "411x866@2.625"
+  },
+  "08-lecteur.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "#/library → player card",
+    "viewport": "411x866@2.625"
+  },
+  "10-file.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "player → button[aria-label=\"File d'attente\"]",
+    "viewport": "411x866@2.625"
+  },
+  "11-lecteur-glisse.png": {
+    "spaCommit": "b579a8aafd9c5903aa156ab32dc1d00809b6dfcf",
+    "spaTree": "096a13fffaa742895b9f57428ebcc6af05bd1800",
+    "capturedAt": "2026-11-26T08:37:30.919Z",
+    "route": "player, dragged down 60 %",
+    "viewport": "411x866@2.625"
+  }
+}

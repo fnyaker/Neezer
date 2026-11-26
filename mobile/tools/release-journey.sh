@@ -29,8 +29,16 @@
 # failure it prints the door that failed, the screen's own texts, the last tree
 # (bounded) and the crash buffer's cause, then exits 1.
 #
+# `--evidence <dir>` (lot T9) adds the judge's evidence and NOTHING else: one
+# screenshot + one accessibility dump per door (01…07), the four player captures
+# (08…11), then `journey.txt`, `logcat.txt`, `crash.txt`, `device.txt` whatever
+# happened. Without the flag not one capture is taken — T1's numbers, byte for
+# byte.
+#
 # Bounded everywhere: `await_text` 10 s (30 s for a cold launch), eight swipes at
-# most for a below-the-fold control, no `sleep`. The emulator is not started
+# most for a below-the-fold control, no `sleep` — the ONE exception is inside the
+# mid-gesture capture of `--evidence`, where the device itself is performing a
+# 3 s swipe and the shot has to land inside it. The emulator is not started
 # here — `ci-emulator.sh` owns it, and every `adb` call names the serial it was
 # given, never a device this script did not choose.
 
@@ -41,10 +49,13 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/env.sh"
 
 serial=""
+evidence=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial) serial="$2"; shift 2 ;;
         --serial=*) serial="${1#*=}"; shift ;;
+        --evidence) evidence="$2"; shift 2 ;;
+        --evidence=*) evidence="${1#*=}"; shift ;;
         -h | --help) sed -n '2,40p' "$0"; exit 0 ;;
         *) printf 'release-journey.sh: unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -56,6 +67,48 @@ done
 
 note() { printf 'release-journey.sh: %s\n' "$*" >&2; }
 step() { printf '\n=== %s\n' "$*"; }
+
+# --- the judge's evidence (lot T9) ------------------------------------------
+# A capture is ONE screenshot and the accessibility dump of the SAME screen:
+# the judge looks at the pixels, `precheck.py` reads the tree, and a review can
+# cite both. `exec-out` and not `shell`: `screencap -p` through a pty rewrites
+# its CR/LF pairs and corrupts the PNG (the lot's escalation says so).
+shot() {
+    [[ -n "$evidence" ]] || return 0
+    local name="$1"
+    mkdir -p "$evidence/screens"
+    adb_dev exec-out screencap -p >"$evidence/screens/$name.png" ||
+        note "screencap failed for $name"
+    dump_ui >"$evidence/screens/$name.xml" ||
+        note "dump_ui failed for $name"
+    printf 'shot=%s\n' "$name"
+}
+
+# The four files the judge reads around the images: the script's own output,
+# the buffers, and the device the captures came from. Written on EVERY exit —
+# the crash is the thing worth judging — never only on success.
+evidence_finish() {
+    [[ -n "$evidence" ]] || return 0
+    mkdir -p "$evidence"
+    adb_dev logcat -d -b all 2>/dev/null | tail -n 5000 >"$evidence/logcat.txt" || true
+    adb_dev logcat -d -b all 2>/dev/null |
+        grep -E 'FATAL EXCEPTION|ANR in fr.neezer.mobile|UnsatisfiedLinkError|dlopen failed' \
+            >"$evidence/crash.txt" || true
+    {
+        printf 'model=%s\n' "$(adb_dev shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+        printf 'sdk=%s\n' "$(adb_dev shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')"
+        printf 'density=%s\n' "$(adb_dev shell getprop ro.sf.lcd_density 2>/dev/null | tr -d '\r')"
+        printf 'font_scale=%s\n' "$(adb_dev shell settings get system font_scale 2>/dev/null | tr -d '\r')"
+        printf 'serial=%s\n' "$serial"
+    } >"$evidence/device.txt" 2>/dev/null || true
+}
+
+# `journey.txt` is what this script prints, taken from the stream itself: a
+# redirect at the call site would lose the `set -e` failure paths.
+if [[ -n "$evidence" ]]; then
+    mkdir -p "$evidence/screens"
+    exec > >(tee "$evidence/journey.txt")
+fi
 
 readonly doors_expected=8
 doors=0
@@ -112,7 +165,7 @@ prepare_device
 # the cover count below is read from the run and not from a grep of the console.
 step "release journey: sign in first (release-signin.sh)"
 signin_log="$(mktemp)"
-trap 'rm -f "$signin_log"' EXIT
+trap 'rm -f "$signin_log"; evidence_finish' EXIT
 if ! "$here/release-signin.sh" --serial "$serial" 2>&1 | tee "$signin_log"; then
     verdict 0
     note "the release sign-in failed; the journey starts from a signed-in home"
@@ -145,10 +198,14 @@ else
     fail_screen "the home never painted « Accueil Neezer » after signing in"
 fi
 check_app "the Accueil door"
+shot 01-accueil
 
 open_door "Rechercher" "Rechercher" "Recherche Neezer"
+shot 02-rechercher
 open_door "Bibliothèque" "Biblio" "Bibliothèque Neezer"
+shot 03-bibliotheque
 open_door "Podcasts" "Podcasts" "Podcasts Neezer"
+shot 04-podcasts
 open_door "Accueil (retour)" "Accueil" "Accueil Neezer"
 
 # --- 2. Réglages → Lecture & son → Mode voiture ------------------------------
@@ -157,11 +214,13 @@ open_door "Accueil (retour)" "Accueil" "Accueil Neezer"
 # Bibliothèque tab's WORD is « Biblio » (the SPA's label: 72 dp on a 360 dp bar),
 # while the screen keeps its full name.
 open_door "Réglages" "Réglages" "Chercher un réglage"
+shot 05-reglages
 
 # « Qualité demandée au serveur » is a card title ONLY `PlaybackSection` draws:
 # waiting for « Lecture & son » alone would match the menu row that was just
 # tapped, and a tap that did nothing would pass.
 open_door "Lecture & son" "Lecture & son" "Qualité demandée au serveur"
+shot 06-lecture-et-son
 
 # The car-settings card is the LAST of that section, behind the quality card and
 # the five effect cards (output, pan, audio, equaliser with its ten faders,
@@ -195,6 +254,7 @@ else
     fail_screen "the car settings did not paint « $expected_needle »"
 fi
 check_app "the Mode voiture door"
+shot 07-mode-voiture
 
 # BACK finishes the Activity (it is started NEW_TASK from the settings screen).
 # The pane returns at whatever offset it was left at, so either of its own card
@@ -211,5 +271,132 @@ if ! tap_text "Accueil" || ! await_text "Accueil Neezer" 15; then
     fail_screen "the home did not come back after the car settings"
 fi
 check_app "the return to Accueil"
+
+# --- 3. the player, for the judge's evidence (lot T9) ------------------------
+# Four captures no door needs. They are EVIDENCE-ONLY: the journey fails on them
+# for a crash (T1's rule), never for a missing mini-bar — a screen the build
+# cannot reach is `player=unavailable`, the judge then says INCOMPLETE, and
+# nobody pretends a flake is a defect.
+
+# A control named by `content-desc` rather than by its text: Compose draws an
+# icon button with an empty `text` and its label in the description TalkBack
+# reads (the home's cards: `Lire ${title}, ${artist}`; the mini bar:
+# `Ouvrir le lecteur plein écran`). The tap lands on the node's CENTRE: these
+# are full cards and bar buttons, not a row found at the bottom of a pane.
+tap_desc_prefix() {
+    local prefix="$1" line bounds x1 y1 x2 y2 attempt
+    for attempt in 1 2 3 4 5; do
+        line="$(ui_text | tr '>' '\n' | grep -F "content-desc=\"$prefix" | head -1)"
+        if [[ -n "$line" ]]; then
+            bounds="$(sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' <<<"$line")"
+            if [[ -n "$bounds" ]]; then
+                read -r x1 y1 x2 y2 <<<"$bounds"
+                adb_dev shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2)) >/dev/null
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+# Every word on the screen, minus the clock and the level a track redraws every
+# second: two sets that differ name a real change (the title), not the elapsed
+# time between the two dumps.
+player_words() {
+    ui_text | tr '>' '\n' | sed -n 's/.* text="\([^"]\+\)".*/\1/p' |
+        grep -vE '^[0-9]+:[0-9]{2}$|^[0-9]+ %$|^-?[0-9]+$|^[0-9]+$' | sort -u
+}
+
+player_evidence() {
+    local before after waited bounds x1 y1 x2 y2 width height x y0 y_end swipe
+
+    # From the home, the FIRST card that offers to play: a rule read from the
+    # tree, never a coordinate.
+    if ! tap_desc_prefix "Lire "; then
+        printf 'player=unavailable cause=no "Lire " card on the home\n'
+        return 0
+    fi
+    if ! await_text "Ouvrir le lecteur plein écran" 15; then
+        printf 'player=unavailable cause=the mini bar never named itself\n'
+        return 0
+    fi
+    if ! tap_desc_prefix "Ouvrir le lecteur plein écran"; then
+        printf 'player=unavailable cause=no mini bar to open\n'
+        return 0
+    fi
+    if ! await_text "Réduire le lecteur" 15; then
+        printf 'player=unavailable cause=the full-screen player never painted\n'
+        return 0
+    fi
+    shot 08-lecteur
+
+    # The next track: the title (and the sleeve) change, the layout does not.
+    before="$(player_words)"
+    if ! tap_desc_prefix "Suivant" && ! tap_text "Suivant"; then
+        printf 'player=unavailable cause=no "Suivant" control on the player\n'
+        return 0
+    fi
+    waited=0
+    while (( waited < 10 )); do
+        after="$(player_words)"
+        if [[ "$before" != "$after" ]]; then
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [[ "$before" == "$after" ]]; then
+        printf 'player=unavailable cause=the title did not change after Suivant\n'
+        return 0
+    fi
+    shot 09-lecteur-suivant
+
+    # The queue sheet, then back to the player.
+    if ! tap_desc_prefix "File d'attente" && ! tap_text "File d'attente"; then
+        printf 'player=unavailable cause=no queue button on the player\n'
+        return 0
+    fi
+    if await_text "Vider la file" 10; then
+        shot 10-file
+    else
+        printf 'player=unavailable cause=the queue sheet never painted\n'
+    fi
+    adb_dev shell input keyevent KEYCODE_BACK >/dev/null
+    if ! await_text "Réduire le lecteur" 10; then
+        printf 'player=unavailable cause=BACK from the queue did not return to the player\n'
+        return 0
+    fi
+
+    # The mid-gesture capture: the sheet's own header bounds give the finger's
+    # column and start; the swipe lasts 3 s, so a shot at ~1 200 ms lands
+    # mid-drag BY CONSTRUCTION. The `sleep` is inside a gesture the device is
+    # performing, and the coordinates are the control's own — the two rules the
+    # plan forbids elsewhere do not apply here.
+    bounds="$(grep -F 'Réduire le lecteur' "$evidence/screens/08-lecteur.xml" | head -1 |
+        sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p')"
+    if [[ -z "$bounds" ]]; then
+        printf 'player=unavailable cause=no header bounds in 08-lecteur.xml\n'
+        return 0
+    fi
+    read -r x1 y1 x2 y2 <<<"$bounds"
+    read -r width height < <(ui_screen)
+    x=$(((x1 + x2) / 2))
+    y0=$(((y1 + y2) / 2))
+    y_end=$((y0 - height * 4 / 10))
+    adb_dev shell input swipe "$x" "$y0" "$x" "$y_end" 3000 >/dev/null &
+    swipe=$!
+    sleep 1.2
+    adb_dev exec-out screencap -p >"$evidence/screens/11-lecteur-glisse.png"
+    dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
+    printf 'shot=11-lecteur-glisse\n'
+    wait "$swipe" 2>/dev/null || true
+    sleep 4
+    if [[ -z "$(app_pid)" ]]; then
+        verdict 0
+        fail_screen "the app's process is gone after the mid-gesture drag"
+    fi
+}
+
+[[ -n "$evidence" ]] && player_evidence
 
 verdict 1

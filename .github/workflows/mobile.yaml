@@ -767,11 +767,27 @@ jobs:
         if: steps.harness.outputs.present == 'true'
         run: pip install -e .
 
+      # THE JUDGE'S EVIDENCE (lot T9). `NEEZER_EVIDENCE_DIR` makes the release
+      # journey take one screenshot and one accessibility dump per door plus the
+      # four player captures, and write `journey.txt`, `logcat.txt`, `crash.txt`
+      # and `device.txt` — the artifact the Sonnet judge reads. It is uploaded
+      # EVEN WHEN THE JOURNEY FAILED (`if: always()`): the crash is the thing
+      # worth judging, and an artifact that only exists on a green run hides it.
       - name: Smoke
         if: steps.harness.outputs.present == 'true'
         env:
           ANDROID_HOME: /usr/local/lib/android/sdk
+          NEEZER_EVIDENCE_DIR: ${{ github.workspace }}/mobile/tools/judge/evidence
         run: mobile/tools/ci-emulator.sh
+
+      - name: Keep the journey's evidence
+        if: always() && steps.harness.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-journey-evidence
+          path: mobile/tools/judge/evidence
+          retention-days: 14
+          if-no-files-found: warn
 
   # --- the nightly crawler ---------------------------------------------------
   # Android Monkey on the SIGNED-IN release APK: 3 000 seeded events at 250 ms

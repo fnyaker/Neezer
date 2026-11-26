@@ -828,6 +828,49 @@ A server that fails to answer is a red job — a fixture CI owns must never degr
   the set — `mobile-native-x86_64-…`/`mobile-native-all-…` — since a 3-ABI product restored by a
   1-ABI run would ship ARM libraries that run never built or checked.
 
+### Le juge (T9): a person's verdict on the shipped screens
+
+No assertion catches a layout that is **wrong but stable**: T3's goldens freeze whatever the tree
+paints (a golden recorded on the owner's misaligned artist grid keeps the misalignment), and no
+test can say "this screen looks nothing like the web app". The owner asked for a judge
+(2026-11-25): a Sonnet agent reads the screens the RELEASE APK painted, beside the web app's own,
+and says whether the result is shippable. Six criteria, the owner's own words: **crash,
+alignment, blur, gestures, useless text, gap with the web app**.
+
+Three roles, kept apart: T1's `release-journey.sh --evidence <dir>` **produces** the evidence on the
+minified APK (11 screenshots + their accessibility dumps, `journey.txt`, `logcat.txt`,
+`crash.txt`, `device.txt`; `mobile.yaml` hands it over as the `mobile-journey-evidence` artifact,
+14 days, uploaded even on a failed run); `mobile/tools/judge/precheck.py` **counts** what a script
+can count (crash buffer, margins, overflow, overlapping clickables, truncated labels, sub-48 dp
+targets, developer strings) and prints `precheck: ok=<n> fail=<n>`; the judge **judges** the
+pixels against `mobile/tools/judge/reference/` — ten web captures at the emulator's own dp size
+(411 × 866 at 2.625), refreshed by `cd webapp && node test/screens/run.mjs`. The rubric is
+`mobile/tools/judge/rubric.md`; a criterion or a threshold changes ONLY with its `precheck.py` line
+in the same PR — a rule that lives only in a prompt drifts.
+
+**Blocking**: any crash, a control off-screen or under another, a label clipped where the web shows
+it whole, a page margin off by more than 2 dp, a flat backdrop where the web blurs the sleeve, a
+gesture that snaps back or does not commit, developer text or English copy on a French screen.
+Everything else is a `COMMENT`. A missing artefact is `INCOMPLETE`: it blocks the merge too, but the
+remedy is to re-run `emulator` and re-send the task, never a code fix.
+
+**Labels** (created once, `gh label create`): `ui` (`#0e8a16`, "Change ce qu'une personne voit (app
+native)"), `judge:ok` (`#0e8a16`), `judge:block` (`#b60205`), `judge:incomplete` (`#fbca04`). A
+`ui` PR is not merged before the judge's `PASS`; a release is not tagged before it. `judge.yaml`
+turns the label into the `Judge gate` check (SKIPPED on an unlabelled PR, red on `judge:block` or on
+neither label, and a new commit withdraws `judge:ok` by itself).
+
+**Two modes**, both copied from `mobile/tools/judge/trigger.md` into a `send-task` to the
+`Coder-Claude` agent: `pr` (after `mobile.yaml` is fully green, before merging) and `release`
+(before `git push origin v<version>`, on the commit about to be tagged). **Quota**: the judge is
+the most expensive role here — one pass 8–12 min of Sonnet, **≤3 a week** in steady state, ≤6 during
+the UI-finish landing, deduplicated by head SHA (a review whose body says `juge automatique` for
+the same `commit_id` is not re-posted). It never runs an emulator, builds nothing, replays no
+`mobile.yaml` run, and touches no file.
+
+**Nothing here replaces a test.** The judge is the check the owner asked for in words rather than
+in assertions; a defect it finds gets its own lot, and T1 grows a step for that screen.
+
 ### Measures (every lot that touches what they measure writes them in its PR)
 
 | Measure | How | Measured (emulator-5660, API 35 x86_64, KVM, swiftshader, `-no-audio`, 2026-11-24; the MQ2 follow-up rows below were re-run on **emulator-5640**, same image; no real phone was attached — `adb devices` empty — so no real-phone column exists yet) |
