@@ -91,7 +91,8 @@ pub struct SettingsData {
     pub viz_scope_orientation: String,
     /// `viz.scope.colour` — `duo`, `mono`, …
     pub viz_scope_colour: String,
-    /// `player.quality` — what the player asks the server for.
+    /// The PLAYER's rung (`player.audio`'s quality, in the SPA's spelling): one
+    /// truth, mirrored as `player.quality` for a reader of the SPA's keys.
     pub quality: String,
     /// `offline.quality` — what a download asks for.
     pub download_quality: String,
@@ -994,7 +995,9 @@ mod tests {
         assert_eq!(data.cache_limit, 1024 * 1024 * 1024);
         assert!(data.prefetch);
         assert_eq!(data.prefetch_count, 1);
-        assert_eq!(data.quality, "FLAC");
+        // The player's own default, not the SPA's `FLAC`: the card reads the
+        // player (`player.audio`), and a fresh device plays `Auto` (one truth).
+        assert_eq!(data.quality, "AUTO");
     }
 
     /// A source crosses with the server's own words: its place, its rank, why it

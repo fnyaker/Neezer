@@ -43,6 +43,7 @@ class SettingsModelTest {
     private fun TestScope.model(
         service: FakeSettingsService,
         toasts: MutableList<String> = mutableListOf(),
+        playback: PlaybackAudio? = null,
     ): SettingsModel {
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
         val scope = CoroutineScope(dispatcher)
@@ -52,6 +53,9 @@ class SettingsModelTest {
             scope = scope,
             io = dispatcher,
             toast = { toasts.add(it) },
+            // Explicitly the test's own port (or none): the default would reach
+            // `AppSettings.playback()`, i.e. the core this JVM test does not have.
+            playback = playback,
         )
     }
 
@@ -186,6 +190,63 @@ class SettingsModelTest {
             NzAppearance.current.value.motion,
         )
         assertEquals(listOf("viz.eco" to "true"), service.writes)
+    }
+
+    /**
+     * The quality card writes the PLAYER (`player.audio`) — the same call the
+     * player's own badge makes — and no `player.quality` at all.
+     *
+     * Today the card writes only the SPA's key, which the player never reads
+     * (`nz-core/src/player/quality.rs:195`): the tap looked saved and the next
+     * title was still asked at the old rung.
+     */
+    @Test
+    fun the_quality_tap_moves_the_player_and_writes_no_spa_key() = runTest {
+        val service = FakeSettingsService(settings = SettingsFixtures.settings(quality = "AUTO"))
+        val playback = FakePlaybackAudio()
+        val toasts = mutableListOf<String>()
+        val model = model(service, toasts, playback)
+        model.start()
+        assertEquals("AUTO", model.state.settings?.quality)
+
+        model.setPlaybackQuality("OPUS_64")
+
+        assertEquals(
+            "the engine's own value moved",
+            uniffi.nz_ffi.Quality.OPUS64,
+            playback.settings.quality,
+        )
+        assertEquals("one write, not a storm", 1, playback.writes.size)
+        assertEquals("the card shows what the player got", "OPUS_64", model.state.settings?.quality)
+        assertTrue(
+            "no `player.quality` write: the player is the one truth",
+            service.writes.isEmpty(),
+        )
+        assertEquals(listOf("Qualité : Opus 64 · au prochain titre"), toasts)
+
+        // The other four rungs travel the same way, and the fifth is a no-op.
+        model.setPlaybackQuality("AUTO")
+        assertEquals(uniffi.nz_ffi.Quality.AUTO, playback.settings.quality)
+        model.setPlaybackQuality("OPUS_256")
+        assertEquals("a rung the engine has no place for is ignored", 2, playback.writes.size)
+    }
+
+    /** No player (the core did not start): the card says so and changes nothing. */
+    @Test
+    fun a_quality_tap_without_a_player_says_so_and_changes_nothing() = runTest {
+        val service = FakeSettingsService()
+        val toasts = mutableListOf<String>()
+        val model = model(service, toasts, playback = null)
+        model.start()
+
+        model.setPlaybackQuality("OPUS_128")
+
+        assertEquals("nothing is pretended", "FLAC", model.state.settings?.quality)
+        assertTrue(service.writes.isEmpty())
+        assertTrue(
+            "the cause is named, not swallowed: ${toasts.single()}",
+            toasts.single().contains("Le lecteur n'a pas démarré"),
+        )
     }
 
     /** A source's order is drawn at once, and the server's answer replaces it. */

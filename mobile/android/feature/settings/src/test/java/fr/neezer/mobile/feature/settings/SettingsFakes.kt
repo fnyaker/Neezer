@@ -6,14 +6,17 @@ import uniffi.nz_ffi.AccessAccountData
 import uniffi.nz_ffi.AccessData as Access
 import uniffi.nz_ffi.AccountData
 import uniffi.nz_ffi.AccountsData
+import uniffi.nz_ffi.AudioSettings
 import uniffi.nz_ffi.DeezerCard
 import uniffi.nz_ffi.DeezerStatusData
 import uniffi.nz_ffi.FeatureData
 import uniffi.nz_ffi.GrantData
 import uniffi.nz_ffi.GroupData
 import uniffi.nz_ffi.ListHandle
+import uniffi.nz_ffi.Normalization
 import uniffi.nz_ffi.PersonData
 import uniffi.nz_ffi.ProviderData
+import uniffi.nz_ffi.Quality
 import uniffi.nz_ffi.ServerSettingsData
 import uniffi.nz_ffi.ServiceData
 import uniffi.nz_ffi.ServicesData
@@ -429,5 +432,39 @@ class FakeSettingsService(
         servicesCache = services
         serverCache = server
         deezerCache = deezer
+    }
+}
+
+/**
+ * The player, faked: one [AudioSettings] the test reads back, and every write in
+ * order. No JNA, no `.so`, no device — the same seam as [FakeSettingsService].
+ *
+ * Its default is what a real fresh device answers: `Auto`, which is the player's
+ * own default and NOT the card's old `FLAC` (`SettingsFixtures.settings()`'s
+ * default, the SPA's — the two disagreeing is the bug this lot fixes).
+ */
+class FakePlaybackAudio(
+    var settings: AudioSettings = AudioSettings(
+        quality = Quality.AUTO,
+        crossfadeS = 0f,
+        trimSilence = false,
+        normalization = Normalization.OFF,
+        eqDb = List(10) { 0f },
+        eqPreset = null,
+        bassDb = 0f,
+        mono = false,
+        balance = 0f,
+        speed = 1f,
+        meteredCap = Quality.OPUS128,
+    ),
+) : PlaybackAudio {
+    /** Every settings value written, in order (a test asserts there was one). */
+    val writes = mutableListOf<AudioSettings>()
+
+    override fun audio(): AudioSettings = settings
+
+    override fun setAudio(settings: AudioSettings) {
+        this.settings = settings
+        writes.add(settings)
     }
 }

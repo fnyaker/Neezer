@@ -209,14 +209,33 @@ fun accountUse(account: AccountData): String {
 
 // -- the local settings --------------------------------------------------------
 
-/** `Settings.svelte#QUALITIES`, label and hint, in the sheet's order. */
+/**
+ * The quality card's five rungs, label and hint, in the sheet's order.
+ *
+ * Five, not six: `AUTO` is the player's own default (the card used to show
+ * `FLAC` while the player played `Auto`), and `OPUS_256`/`OPUS_192` have no rung
+ * in `nz_audio::Quality` — offering a rate the engine cannot load is the bug,
+ * not the simplification (D14a already removed them from the player's menu).
+ */
 val QUALITY_CHOICES: List<Triple<String, String, String>> = listOf(
+    Triple("AUTO", "Auto", "Selon le débit mesuré"),
     Triple("FLAC", "FLAC", "Sans perte — lourd"),
-    Triple("OPUS_320", "Opus 320", "Haute qualité (recommandé)"),
-    Triple("OPUS_256", "Opus 256", "Haute qualité"),
-    Triple("OPUS_192", "Opus 192", "Bon compromis"),
+    Triple("OPUS_320", "Opus 320", "Haute qualité"),
     Triple("OPUS_128", "Opus 128", "Standard, léger"),
     Triple("OPUS_64", "Opus 64", "Données réduites"),
+)
+
+/**
+ * The card's id → the engine's rung. `AUTO` included: the player starts on it,
+ * and a card that could not name it would draw nothing selected on a fresh
+ * device.
+ */
+val QUALITY_RUNGS: Map<String, uniffi.nz_ffi.Quality> = mapOf(
+    "AUTO" to uniffi.nz_ffi.Quality.AUTO,
+    "FLAC" to uniffi.nz_ffi.Quality.FLAC,
+    "OPUS_320" to uniffi.nz_ffi.Quality.OPUS320,
+    "OPUS_128" to uniffi.nz_ffi.Quality.OPUS128,
+    "OPUS_64" to uniffi.nz_ffi.Quality.OPUS64,
 )
 
 /** `format.js#bytes`: 1,2 Go / 340 Mo / 12 ko, in French. */

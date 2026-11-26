@@ -81,9 +81,12 @@ fun SettingsEntry(
     // The seam a JVM test uses (`SettingsScreenshotTest`): the app passes
     // nothing and gets the core's own service; a fake renders the same screen.
     service: SettingsService? = AppSettings.service(),
+    // The player, for the quality card (the one setting that lives in the
+    // engine). The same role as [service]: a test hands a fake.
+    playback: PlaybackAudio? = AppSettings.playback(),
 ) {
     val scope = rememberCoroutineScope()
-    val model = remember(service) { service?.let { SettingsModel(it, scope) } }
+    val model = remember(service, playback) { service?.let { SettingsModel(it, scope, playback = playback) } }
 
     // The section comes from the ROUTE (a tap navigates, back pops): one source
     // of truth, so a deep link and a tap land on the same page.
