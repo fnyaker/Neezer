@@ -790,10 +790,12 @@ jobs:
   monkey:
     name: Monkey crawler (nightly)
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule'
     needs: apk
-    # Bounded in time: apk's p90 24.9 min, then boot + sign-in ≈ 2 min and
-    # 3 000 events at 250 ms = 12.5 min, plus the analysis.
+    # Bounded in time: apk's p90 24.9 min, then the crawl itself — measured on
+    # run 45735007009: boot 25 s, sign-in 38 s, 3 000 events 3 min 44 s, the
+    # whole monkey job 5 min 53 s. `--throttle 250` is a ceiling, not a fixed
+    # pace, so the plan's 12.5 min estimate was an upper bound.
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -846,30 +848,6 @@ jobs:
 
       - name: Install the bench server
         run: pip install -e .
-
-      # TEMPORARY, evidence only — removed before merge: a crawler that has
-      # never failed on a crash is a crawler nobody has seen work. The published
-      # v1.6.6 release APK dies on its home's first cover
-      # (`NoSuchMethodError`), and the sign-in the script runs first is exactly
-      # where; the run must exit 1 and name it.
-      - name: Proof it catches v1.6.6's crash (temporary evidence step)
-        env:
-          NEEZER_MONKEY_EVIDENCE_DIR: ${{ runner.temp }}/monkey-evidence
-        run: |
-          set -euo pipefail
-          apk="$RUNNER_TEMP/neezer-native-1.6.6.apk"
-          curl -fsSL -o "$apk" \
-            "https://github.com/${{ github.repository }}/releases/download/v1.6.6/neezer-native.apk"
-          out="$RUNNER_TEMP/v1.6.6.log"
-          if mobile/tools/monkey.sh --serial emulator-5580 --apk "$apk" \
-              --events 3000 --seed 20261125 > "$out" 2>&1; then
-            echo "::error::monkey.sh passed on v1.6.6, whose release crashes on the home's first cover"
-            sed 's/^/  /' "$out"
-            exit 1
-          fi
-          sed 's/^/  /' "$out"
-          grep -F 'NoSuchMethodError' "$out"
-          grep -E 'crashes=[1-9][0-9]*' "$out"
 
       - name: The nightly crawl
         env:

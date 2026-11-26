@@ -90,6 +90,7 @@ mkdir -p "$evidence"
 note "evidence: $evidence"
 
 started=$SECONDS
+crawl_ran=0
 port=""
 if [[ "$serial" == emulator-* ]]; then
     port="${serial#emulator-}"
@@ -210,7 +211,9 @@ analyse() {
         crashes=$monkey_crashes
     fi
     injected="$(sed -n 's/^Events injected: *\([0-9][0-9]*\).*/\1/p' "$evidence/monkey.log" 2>/dev/null | tail -1 || true)"
-    [[ -n "$injected" ]] || injected="$events"
+    # A crawl that never started (the sign-in failed) injected nothing, and
+    # saying `events=3000` there would be a number the run did not produce.
+    [[ -n "$injected" ]] || injected=$(( crawl_ran == 1 ? events : 0 ))
 }
 
 # The first sentence of the cause, which a job log is read for. The exception
@@ -263,6 +266,7 @@ adb_dev shell command -v monkey >/dev/null 2>&1 ||
     die "the system image carries no monkey ($(nz_sdk_root))"
 
 monkey_status=0
+crawl_ran=1
 adb_dev shell monkey \
     -p "$ui_package" \
     --throttle 250 \
