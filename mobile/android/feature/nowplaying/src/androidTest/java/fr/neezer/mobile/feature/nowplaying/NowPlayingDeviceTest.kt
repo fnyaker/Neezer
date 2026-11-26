@@ -341,6 +341,14 @@ class NowPlayingDeviceTest {
         val index = player.snapshot().index
         player.command(PlayerCommand.Pause, 0uL)
 
+        // The mini bar reads the PROCESS feed, and another test of this module takes
+        // it over with a fake (`MiniBarFeedTest`: "the test owns the feed for this
+        // process"). Hand it to the REAL player before composing the bar — the door
+        // exists for exactly this — or the bar shows that fake's title and this case
+        // would be measuring the neighbour test.
+        val barPort = NzPlayerPort(player)
+        PlayerFeed.usePortForTest(barPort, subscribe = { listener -> subscribePlayer(listener) })
+
         NowPlayingState.hide()
         val model = NowPlayingModel(
             player = NzPlayerPort(player),
