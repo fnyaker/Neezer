@@ -35,7 +35,11 @@ permissions:
 jobs:
   web:
     name: Web hunt (SPA + bench server)
-    runs-on: ubuntu-latest
+    # NOT `ubuntu-latest`: it now resolves to 26.04, and Playwright 1.55 (the
+    # version this harness pins) refuses to install chromium on it —
+    # "Playwright does not support chromium on ubuntu26.04-x64" (measured on the
+    # first real run, 45893297274). 24.04 is the newest LTS it supports.
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     defaults:
       run:
