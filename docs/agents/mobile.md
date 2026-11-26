@@ -683,6 +683,85 @@ sign-in **38 s** with `covers_served=2`, **3 000 events in 3 min 44 s**, the who
 When it finds a crash, the fix gets its own task and T1 grows a step for that screen (the crawler
 finds the net's holes; it does not become the gate).
 
+### An upgrade is a first-class path (lot T8)
+
+The release page is the delivery channel, and the only install a person makes is
+an update OVER the build they already have. Android allows it only when the two
+APKs carry the **same signer certificate** and the new `versionCode` is not
+lower; and an install that keeps the app but loses its session or its offline
+store sends that person back to « Adresse du serveur » with their downloads
+gone. `mobile/tools/upgrade.sh --serial <s> --from <tag|apk> --to <apk>` proves
+all of it on one device, in this order: it installs the previous tag's universal
+`neezer-native.apk`, signs in to `perf-server.sh` (with a certificate generated
+once and kept alive for the whole run: the app pins the leaf it accepted), opens
+`neezer://album/<id>` (the album the bench's seed reports) and taps « Télécharger », records `dumpsys package`
+(`versionCode`, `lastUpdateTime`) and the app data directory's file count, then
+`adb install -r` OVER it, and asserts:
+
+- `version_code_up=1` — strictly greater, from `dumpsys package` on both sides;
+- `signers_equal=1` — the certificate's SHA-256 digest from `apksigner` on BOTH
+  files, not the DN (two keys can share a CN);
+- `session_kept=1` — the home paints `Accueil Neezer`, neither « Adresse du
+  serveur » nor « Ton compte » is anywhere, and a NEW `GET /api/me` is answered
+  200 — the request a cold `restore()` makes with the cookie stored BEFORE the
+  install. `/api/me` and not a cover: `cover_path` answers a disk hit with ZERO
+  requests, so after an upgrade the home draws the same cached sleeves and a
+  cover count would prove nothing;
+- `data_kept=1` — the album still says « Téléchargé », and the data directory
+  holds at least as many files and KiB as before (`adb root`; the emulator image
+  is userdebug, and the script fails loudly on an image that refuses root instead
+  of skipping the measurement).
+
+The negative control is ASSERTED, never tolerated: the DEBUG-signed APK built
+with the SAME `VERSION_CODE` must be refused with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and the installed versionCode must be
+unchanged after the refusal. (With Gradle's default `versionCode 1` Android
+answers `INSTALL_FAILED_VERSION_DOWNGRADE` first and the signature is never
+compared — the job therefore builds the debug APK with the release's code.)
+
+CI: `mobile.yaml`'s `upgrade` job runs `if: schedule || workflow_dispatch` (a pull
+request has no published tag to install), needs `apk`, and takes **4 min 35 s**
+on a `workflow_dispatch` (the script itself: **1 min 15 s**, of which the 180 s
+download ceiling is never reached: the album lands in **10 s**).
+
+Measured (dispatch run **45765680655**, emulator-5580, API 35 x86_64, KVM):
+`previous=v1.6.7 (54 914 697 B, versionCode 453) → current=2.0.510 (54 377 941 B,
+versionCode 510)`, `signers_equal=1
+sha256=5a373ce6e82cbbbd9e776739bc578767745aced7de4fd973a4558f1353bd400a`,
+`session_kept=1 me_before=0 me_after=1 covers_before=10 covers_after=10`,
+`data_kept=1 data_files_before=27 data_files_after=27 data_kib_before=1796
+data_kib_after=1924`, `offline_kept=1`,
+`negative_control=INSTALL_FAILED_UPDATE_INCOMPATIBLE expected=1` — and the run's
+own verdict: `upgrade=ok previous=v1.6.7 current=2.0.510 data_kept=1
+session_kept=1 version_code_up=1`. The covers count is the number that did NOT
+move (10 → 10) and it is why the session is proved by `/api/me`, not by sleeves:
+they are disk-cached, so an upgrade cannot add one.
+
+Three things the bench itself taught, on the way to that green run (each one a
+dispatch):
+
+- **The bench server TRANSCODES, so the job installs `ffmpeg`.** A download asks
+  `q=OPUS_320` and the answer is ffmpeg's; without it the route answers `500`
+  and the app stores `erreur du serveur (HTTP 500 …)` for every title. The
+  runner image is not a contract — `mobile.yaml`'s `upgrade` job installs it
+  through `.github/actions/cached-apt` (`line: mobile`), the same binary
+  desktop.yaml's D5 tests name for the same reason.
+- **`pm clear` drops the installer's `-g` grants.** The first « Télécharger »
+  then asks for `POST_NOTIFICATIONS` (M13), and the system dialog covers the
+  album page: the download runs behind it and the tree never says
+  « Téléchargé ». The script re-grants the permission right after `pm clear`,
+  and a scripted `input text` gets ONE token — `bench` / `Bench1` from
+  `perf_api.py`'s fixture, `secret` as `type_into`'s third argument.
+- **A failed download's cause is in the store, not on the screen** (this build's
+  card draws the count and the note but no cause line): `downloads.error` in
+  `files/neezer/desktop.sqlite`, and the rows live in the **`-wal`** — the main
+  file is 4 KiB and answers `no such table: downloads` on its own.
+
+Never a rule without its number: the versionCode rule is `github.run_number`, so
+it only grows (`mobile.yaml`'s `VERSION_CODE`), and the signer rule is the
+keystore secret — a tag without `ANDROID_KEYSTORE_BASE64` is refused at build
+time, which is the same invariant from the other end.
+
 **The instrumented step gets the bench servers its `assumeTrue` gates ask for.** A gate that skips
 when its fixture is absent is honest on a developer machine and a silent hole in CI: run
 **45688339009** printed `Tests 16/10 completed. (8 skipped)` in `:playback` and the job was green.

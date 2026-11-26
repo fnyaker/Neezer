@@ -160,6 +160,12 @@ scroll_to_text() {
 # field that has not taken the focus yet drops injected keys while `input text`
 # reports success (MQ2's journey measured exactly that). The third argument is
 # `secret` for a password field, which shows dots and never the text.
+#
+# A SPACE travels as `%s`: `adb shell` hands `input text` its own argv, so a
+# quoted "Bench1 secret" arrives as two words and `input` types the first one
+# only (measured on the T8 dispatch run 45745271196: three attempts left an
+# 18-dot field, « the field #2 never held »). `%s` is `input text`'s own escape
+# and the device decodes it back to one space.
 type_into() {
     local index="$1" text="$2" attempt bounds x1 y1 x2 y2
     for attempt in 1 2 3; do
@@ -170,7 +176,7 @@ type_into() {
         [[ -n "$bounds" ]] || { printf 'ui.sh: no text field #%s on screen\n' "$index" >&2; return 1; }
         read -r x1 y1 x2 y2 <<<"$bounds"
         adb_dev shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2)) >/dev/null
-        adb_dev shell input text "$text" >/dev/null
+        adb_dev shell input text "${text// /%s}" >/dev/null
         # The password field shows dots, never the text: its proof is the login.
         if [[ "${3:-}" == secret ]] || ui_text | grep -qF -- "text=\"$text\""; then
             return 0

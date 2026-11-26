@@ -865,3 +865,136 @@ jobs:
           path: ${{ runner.temp }}/monkey-evidence
           if-no-files-found: warn
           retention-days: 7
+
+  # --- the previous release, installed over (nightly, and on demand) ---------
+  # The release page is the delivery channel: a person installs THIS build over
+  # the one they already have, and Android only allows that with the same
+  # signer certificate and a versionCode that did not go backwards. Every other
+  # job here starts from an empty device, so a rotated key, a versionCode that
+  # fell behind or a migration that wipes the session was green everywhere and
+  # broken for the only path a person takes (plan-mobile-tests, lot T8).
+  #
+  # NOT on a pull request: a branch has no published tag to install (the plan's
+  # own escalation), and a `workflow_dispatch` is how a change to this job is
+  # proved: `gh workflow run mobile.yaml --ref mobile/tests-t8-upgrade`.
+  upgrade:
+    name: Release upgrade in place (previous tag → this build)
+    runs-on: ubuntu-latest
+    # Bounded in time: apk's p90 24.9 min, then the upgrade itself — measured on
+    # the dispatch run that proved this lot: 4 min 35 s wall (run 45765680655).
+    timeout-minutes: 45
+    needs: apk
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # `gh release list` / `gh release download` read the release page.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.7"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: neezer-mobile-apk
+          path: mobile/android/app/build/outputs/apk/release
+
+      # The native library and the bindings the `apk` job built: the debug APK
+      # below is the control's OTHER SIGNER and must not rebuild Rust.
+      - uses: actions/download-artifact@v4
+        with:
+          name: neezer-mobile-native
+          path: mobile/android/bridge
+
+      - name: Install the SDK, the image and the AVD
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" "system-images;android-35;default;x86_64" \
+            "build-tools;36.0.0"
+          echo no | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n nz35 -k "system-images;android-35;default;x86_64" --device pixel_6 --force
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The bench server TRANSCODES: a download asks `q=OPUS_320`, and the answer
+      # is ffmpeg's. Without it the route answers `500` — measured on dispatch
+      # 45762930858, where both titles' rows read « erreur du serveur (HTTP 500) »
+      # and no byte was written — and the runner image is not a contract
+      # (`docs/agents/mobile.md`; desktop.yaml's own note on `ffmpeg`). The same
+      # binary the desktop's D5 tests need.
+      - name: The bench server's ffmpeg
+        uses: ./.github/actions/cached-apt
+        with:
+          line: mobile
+          packages: ffmpeg
+
+      - name: Install the bench server
+        run: pip install -e .
+
+      # `VERSION_CODE` IS the release's: with versionCode 1 (Gradle's default)
+      # Android answers `INSTALL_FAILED_VERSION_DOWNGRADE` BEFORE it compares the
+      # signatures, and the negative control would prove the wrong refusal.
+      - name: The debug APK — the control's other signer
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          gradle -p mobile/android :app:assembleDebug -PskipRust --no-daemon
+          # `splits.abi` is on for EVERY variant: the file is the universal one.
+          # The assertion is here so a renamed output fails in two minutes, not
+          # after the emulator has booted.
+          ls -l mobile/android/app/build/outputs/apk/debug
+          test -f mobile/android/app/build/outputs/apk/debug/app-universal-debug.apk
+
+      - name: The previous release tag
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
+          [[ -n "$tag" ]] || { echo "::error::no published release to install: the upgrade job has nothing to prove"; exit 1; }
+          echo "   previous release: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Start the emulator
+        run: |
+          set -euo pipefail
+          mobile/tools/emu.sh create
+          mobile/tools/emu.sh start --port 5580
+          mobile/tools/emu.sh wait --port 5580
+
+      # THE JOB ITSELF. `GH_TOKEN` is what lets the script download the previous
+      # tag's universal asset (`gh release download`); the keystore secrets the
+      # `apk` job used are the reason the two APKs share a signer at all.
+      - name: The previous release, installed over
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS: ${{ steps.previous.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mobile/tools/upgrade.sh --serial emulator-5580 --from "$PREVIOUS" \
+            --to mobile/android/app/build/outputs/apk/release/app-universal-release.apk \
+            --debug-apk mobile/android/app/build/outputs/apk/debug/app-universal-debug.apk
+
+      - name: Stop the emulator
+        if: always()
+        run: mobile/tools/emu.sh stop --port 5580 || true
