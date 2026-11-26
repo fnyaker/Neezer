@@ -20,6 +20,7 @@
     noteTranscript,
     pageInfo,
     reasonText,
+    retryAfterSeconds,
     segmentAt,
     transcribeSettings,
   } from "../lib/transcript.js";
@@ -99,6 +100,7 @@
   let actionError = "";
   let retryLeft = 0;
   let retryTimer = null;
+  let retryOnce = null; // the single automatic retry, fired when the wait ends
   let relaunchLanguage = "auto";
 
   $: admin = $isAdmin && CAN_ADMIN;
@@ -165,7 +167,7 @@
     clearTimeout(pollTimer);
     clearTimeout(searchTimer);
     clearTimeout(flashTimer);
-    stopRetryCountdown();
+    cancelRetry();
     pollTimer = null;
     pageSeq++;
     started = false;
@@ -697,6 +699,33 @@
     retryTimer = null;
   }
 
+  /** Abandon the countdown AND the retry it was going to fire. */
+  function cancelRetry() {
+    stopRetryCountdown();
+    clearTimeout(retryOnce);
+    retryOnce = null;
+    retryLeft = 0;
+  }
+
+  // The server's own answer to "when": a 429 carries `Retry-After`, and the app
+  // sends the SAME call once more when it expires instead of making the person
+  // press again. A second refusal is shown, never retried.
+  function retryOnceAfter(error, action) {
+    const seconds = retryAfterSeconds(error);
+    if (!error || error.status !== 429 || !seconds) return false;
+    cancelRetry();
+    actionError = `Trop de demandes. Nouvelle tentative dans ${seconds} s.`;
+    startRetryCountdown(seconds);
+    retryOnce = setTimeout(() => {
+      retryOnce = null;
+      stopRetryCountdown();
+      retryLeft = 0;
+      actionError = "";
+      action();
+    }, seconds * 1000);
+    return true;
+  }
+
   function describeFailure(error) {
     const code = (error && error.body && error.body.code) || (error && error.code) || "";
     const reason = error && error.body && error.body.reason;
@@ -724,7 +753,11 @@
     }
   }
 
-  async function startEpisode() {
+  function startEpisode() {
+    return performStart(true);
+  }
+
+  async function performStart(retry) {
     if (actionBusy || retryLeft > 0) return;
     actionBusy = true;
     actionError = "";
@@ -739,13 +772,18 @@
       status = before.status;
       setProgress(before.progress);
       noteTranscript(epId, { status, progress });
+      if (retry && retryOnceAfter(error, () => performStart(false))) return;
       handleActionFailure(error);
     } finally {
       actionBusy = false;
     }
   }
 
-  async function resumeEpisode() {
+  function resumeEpisode() {
+    return performResume(true);
+  }
+
+  async function performResume(retry) {
     if (actionBusy || retryLeft > 0) return;
     actionBusy = true;
     actionError = "";
@@ -756,6 +794,7 @@
       noteTranscript(epId, { status: "queued", progress });
       armPoll();
     } catch (error) {
+      if (retry && retryOnceAfter(error, () => performResume(false))) return;
       handleActionFailure(error);
     } finally {
       actionBusy = false;
@@ -778,7 +817,11 @@
     }
   }
 
-  async function relaunch() {
+  function relaunch() {
+    return performRelaunch(true);
+  }
+
+  async function performRelaunch(retry) {
     if (actionBusy || retryLeft > 0) return;
     actionBusy = true;
     actionError = "";
@@ -804,6 +847,7 @@
       noteTranscript(epId, { status: "queued", progress: 0, language: relaunchLanguage });
       armPoll();
     } catch (error) {
+      if (retry && retryOnceAfter(error, () => performRelaunch(false))) return;
       handleActionFailure(error);
     } finally {
       actionBusy = false;
@@ -868,7 +912,7 @@
     clearTimeout(pollTimer);
     clearTimeout(searchTimer);
     clearTimeout(flashTimer);
-    stopRetryCountdown();
+    cancelRetry();
     pollTimer = null;
   });
 </script>

@@ -94,9 +94,19 @@ SERVER_SETTINGS = {"runner"}
 META_PREFIX = "tr."
 BACKLOG_PREFIX = "tr.bl."
 
-mark_limiter = WindowLimiter(1, 600)
-start_limiter = WindowLimiter(3, 600)
-start_hour_limiter = WindowLimiter(10, 3600)
+# These three guard the calls that WRITE to the queue. They predate the
+# unlimited queue (2026-11-25): back then a 20-row cap meant a start could fail,
+# so a tight window was cheap insurance. Now a row is a few statements and the
+# runner still takes one job at a time, manual first, so the caps only stop a
+# runaway client. A batch in the SPA offers **20** starts at once
+# (`webapp/src/lib/transcript.js` `batchOptions`), and the old 3-per-10-minute
+# window refused the 4th POST of the app's own batch (measured: 429 on start
+# #4 of a 20-item batch, `Retry-After` up to 600 s). The caps are now 60 starts
+# or 60 show marks per 10 minutes (three full batches) and 300 starts an hour;
+# a loop is still stopped, a person restoring a library never sees the 429.
+mark_limiter = WindowLimiter(60, 600)
+start_limiter = WindowLimiter(60, 600)
+start_hour_limiter = WindowLimiter(300, 3600)
 search_limiter = WindowLimiter(30, 60)
 panel_search_limiter = WindowLimiter(60, 60)
 read_limiter = WindowLimiter(120, 60)
