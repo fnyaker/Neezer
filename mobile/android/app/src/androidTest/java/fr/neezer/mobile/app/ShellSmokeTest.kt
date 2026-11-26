@@ -1,6 +1,7 @@
 package fr.neezer.mobile.app
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
@@ -9,8 +10,14 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import fr.neezer.mobile.feature.nowplaying.NowPlayingState
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -98,5 +105,57 @@ class ShellSmokeTest {
         rule.onAllNodes(hasScrollAction()).onFirst().performScrollToNode(hasText("Assistance"))
         rule.onNode(hasText("Assistance") and hasClickAction()).performClick()
         rule.onNodeWithText("Noyau (Rust) :", substring = true).assertIsDisplayed()
+    }
+
+    /**
+     * **SB3 : le lecteur plein écran couvre la barre et se cale sous l'inset.**
+     *
+     * Le lecteur était monté dans le contenu de la `Scaffold` : sa couche
+     * s'arrêtait au haut de la barre (mini-lecteur 64 dp + onglets 64 dp + inset
+     * bas), et son `statusBarsPadding()` comptait l'inset une seconde fois
+     * puisque les `PaddingValues` de la `Scaffold` l'avaient déjà dépensé.
+     *
+     * Ici les insets sont les VRAIS (émulateur, job `emulator`), et les bornes
+     * sont mesurées : `assertIsNotDisplayed` ne voit pas l'occlusion.
+     */
+    @Test
+    fun thePlayerSitsUnderTheStatusBarAndCoversTheBar() {
+        try {
+            NowPlayingState.show()
+            rule.waitForIdle()
+            val surface = rule.onNodeWithContentDescription("Lecteur plein écran", substring = true)
+                .getUnclippedBoundsInRoot()
+            val root = rule.onRoot().getUnclippedBoundsInRoot()
+            println(
+                "MEASURE sb3 device: surface.bottom=${surface.bottom.value}dp " +
+                    "root.bottom=${root.bottom.value}dp",
+            )
+            assertEquals(
+                "le lecteur ne couvre pas la barre",
+                root.bottom.value,
+                surface.bottom.value,
+                1f,
+            )
+            val inset = ViewCompat.getRootWindowInsets(rule.activity.window.decorView)!!
+                .getInsets(WindowInsetsCompat.Type.statusBars()).top /
+                rule.activity.resources.displayMetrics.density
+            val collapse = rule.onNodeWithContentDescription("Réduire le lecteur")
+                .getUnclippedBoundsInRoot()
+            println("MEASURE sb3 device: collapse.top=${collapse.top.value}dp inset=${inset}dp")
+            // Le nœud que lit ce test est la CIBLE de 48 dp de `NzIconButton`, pas
+            // le glyphe de 24 : il commence AU padding de la rangée. Mesure JVM
+            // (`PlayerInsetsTest`, inset 0) : 2 dp, hauteur 48 dp. L'en-tête est
+            // donc à `inset + 2`, et `2 × inset + 4` sur le code d'avant — les
+            // 12 dp de centrage du glyphe que la spec ajoutait ne sont pas dans
+            // ces bornes.
+            assertTrue(
+                "l'en-tête n'est pas à 2 dp sous l'inset (${collapse.top.value} dp, inset $inset dp)",
+                collapse.top.value in (inset + 1f)..(inset + 3f),
+            )
+        } finally {
+            // L'état du lecteur est un objet du process : un test qui le laisse
+            // ouvert ferait échouer les autres cas de cette classe.
+            NowPlayingState.hide()
+        }
     }
 }

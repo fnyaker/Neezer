@@ -7346,7 +7346,8 @@ pastille d'accent sur l'item courant, 64 dp), et les quatre racines d'onglet dan
   `NavHost` reçoit `enter/exitTransition = None` (chaque écran possède son mouvement : rejouer une
   transition sur un onglet qui se pose est exactement ce que la personne sent comme « ça se
   réinitialise après le geste »). Le pager est hissé dans `NzApp`, donc la barre et le routeur lisent
-  le MÊME état.
+  le MÊME état. **SB3 a depuis sorti le lecteur plein écran de ce `Scaffold`** : il est monté en
+  `overlay`, au-dessus des barres (§SB3).
 - `feature/nowplaying/NowPlaying.kt` — `MiniPlayer` prend `shape` et porte ses propres marges
   (8 / 8 / 4 / 8), et la ligne de 2 dp passe DANS la carte arrondie : la coquille le monte nu, et un
   lecteur vide ne laisse pas de trou.
@@ -7421,6 +7422,73 @@ pastille d'accent sur l'item courant, 64 dp), et les quatre racines d'onglet dan
 **Hors portée.** Le geste de fermeture du lecteur (P2), les pochettes (P1), la mise en page interne
 des écrans (S2), le SPA, les panneaux en feuille (file/paroles/à propos gardent `NzSheet`), les
 colonnes de lecture du shell large.
+
+### SB3 — Le lecteur plein écran est au-dessus de la coquille, sous l'inset (delivered 2026-11-26)
+
+**Le besoin.** « La barre reste visible sous le lecteur plein écran » et « les boutons du haut sont
+trop bas » — les mots du propriétaire, 2026-11-26. Le lecteur (et ses panneaux : file, paroles, à
+propos, carte) doit couvrir TOUTE la fenêtre, mini-lecteur et barre d'onglets compris, et ses
+commandes du haut se poser 2 dp sous la barre d'état.
+
+**Ce qui a changé.**
+
+- `app/NavGraph.kt` — `ShellFrame` (**nouveau**, `internal` pour le test JVM) tient les deux
+  coquilles : `bottomBar` + `rail` + `backRow` + `content`, puis `overlay()` composé en DERNIER,
+  HORS de la `Scaffold`. `NzApp` lui passe `NowPlayingHost` en `overlay` — le lecteur couvre donc la
+  barre et, sur large, le rail. `Hosts`, la fonction privée qui montait les trois hôtes dans le
+  contenu, disparaît (le menu contextuel et les toasts restent dans `content`).
+- `app/NavGraph.kt` — la `Column` du contenu reçoit `padding(padding).consumeWindowInsets(padding)` :
+  la KDoc de `Scaffold` demande les deux, et sans la seconde un écran qui appelle
+  `statusBarsPadding()` (le lecteur le faisait) compte l'inset deux fois. L'inset est donc compté
+  UNE fois, par le lecteur lui-même.
+- `app/NavGraph.kt` — quand `NowPlayingState.open`, le mini-lecteur n'est plus monté : la barre est
+  couverte, et il n'a plus à lire la position quatre fois par seconde pour personne.
+- `feature/nowplaying/PlayerSheet.kt` — l'en-tête passe de `NzSpacing.xs` (4 dp) à `NzSpacing.xxs`
+  (2 dp), la valeur de M3 pour une barre haute (glyphe 14 dp sous l'inset, centre 26) ; la KDoc de
+  `PlayerColumn` dit la valeur et la raison.
+- `app/src/test/.../ShellChromeTest.kt` (**nouveau**, Robolectric) — la couche touche le bas de la
+  fenêtre (et son haut) sur téléphone, et commence au bord gauche sur large. Il ÉCHOUE sur le code
+  d'avant : la couche s'arrêtait au haut de la barre, et à droite du rail.
+- `feature/nowplaying/src/test/.../PlayerInsetsTest.kt` (**nouveau**) — « Réduire le lecteur » est à
+  **2 dp** avec un inset de 0 (Robolectric n'a pas d'inset : c'est la garde du jeton, pas la preuve
+  du doublon).
+- `app/src/androidTest/.../ShellSmokeTest.kt` — `thePlayerSitsUnderTheStatusBarAndCoversTheBar`
+  (émulateur, insets réels) : `surface.bottom == root.bottom` et l'en-tête sous l'inset, mesurés en
+  bornes. `assertIsNotDisplayed` ne voit pas l'occlusion.
+- `docs/agents/mobile.md` — cette section.
+
+**Ce que le lot a appris.**
+
+1. **Le nœud mesuré est la CIBLE de 48 dp, pas le glyphe de 24.** `NzIconButton` pose la
+   `contentDescription` sur l'`Icon` mais le nœud fusionné que lit le test commence au padding de la
+   rangée : avec 2 dp et un inset nul, `collapse.top` vaut **2 dp** (il valait **4 dp** avec le
+   jeton `xs`). Les chiffres de la spec (`2 × inset + 16` avant, `inset + 14` après) comptaient
+   12 dp de centrage du glyphe en plus ; la mesure JVM dit `2 × inset + 4` avant et `inset + 2`
+   après. L'assertion de l'émulateur garde donc `inset + 2` (± 1 dp), pas `inset + 14`.
+2. **Une couche hors `Scaffold` n'a plus besoin de `consumeWindowInsets` pour elle, mais le contenu
+   en a besoin pour les autres écrans.** Le `padding` de `Scaffold` reste consommé pour le contenu
+   (sinon un écran qui pose ses propres insets les compte deux fois) ; le lecteur, lui, n'est plus
+   dans ce contenu et son `statusBarsPadding()` est le seul compte.
+3. **Un mini-lecteur sous une couche opaque lit quand même.** `MiniPlayer` anime la position à
+   chaque image ; couvert, il ne doit plus être composé du tout — c'est une ligne
+   (`if (!NowPlayingState.open)`), pas un réglage de visibilité.
+
+**Mesuré (JVM, Robolectric `w360dp-h800dp-xhdpi`, JDK 17, Gradle 8.14.7).**
+
+- `ShellChromeTest` : `overlay.top = 0`, `overlay.bottom = 800 dp` = `root.bottom` (téléphone) ;
+  `overlay.left = 0` sur large. Avant : la couche s'arrêtait à `root.bottom − 64 dp` (téléphone) et
+  commençait à `80 dp` (large).
+- `PlayerInsetsTest` : `collapse.top = 2 dp` (inset 0). Avant : 4 dp.
+- **Six PNG** `nowplaying-lecteur-{360,412,600}dp-f{1.0,1.3}.png` réécrits (2 dp plus haut) ;
+  `nowplaying-file-360dp-f1.0.png` et tous les autres goldens inchangés (`git status
+  mobile/android/screenshots` ne liste que ces six).
+- Émulateur : le cas `thePlayerSitsUnderTheStatusBarAndCoversTheBar` est la preuve de comportement,
+  dans le job `emulator` de ce PR.
+
+**Hors portée.** Le geste de fermeture du lecteur, ses ressorts, `PlayerSheetFrame` ; le menu
+contextuel d'une ligne et les toasts (ils restent dans la zone de contenu, sous la barre) ; le rendu
+interne du lecteur ; ses colonnes sur large (elles couvrent le rail, c'est la conséquence voulue,
+elles ne changent pas de largeur).
 
 ### S2 — Les écrans alignés : la marge de page, le rythme des sections, la place sous la barre (delivered 2026-11-25)
 

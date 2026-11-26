@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -52,6 +53,7 @@ import fr.neezer.mobile.feature.lan.PeerSetsEntry
 import fr.neezer.mobile.feature.library.HistoryEntry
 import fr.neezer.mobile.feature.nowplaying.MiniPlayer
 import fr.neezer.mobile.feature.nowplaying.NowPlayingHost
+import fr.neezer.mobile.feature.nowplaying.NowPlayingState
 import fr.neezer.mobile.feature.onboarding.InviteEntry
 import fr.neezer.mobile.feature.onboarding.OnboardingEntry
 import fr.neezer.mobile.feature.party.PartyEntry
@@ -221,17 +223,87 @@ fun NzApp(graph: AppGraph) {
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 640.dp
+        ShellFrame(
+            wide = wide,
+            bottomBar = {
+                Column {
+                    // M6 : la barre « Contrôlé par X · Couper » se glisse
+                    // au-dessus du mini-lecteur, donc visible sur tous les
+                    // écrans de la coquille téléphone (audit, bloqueur 6).
+                    RemoteHostNotice()
+                    // The bar IS the door to the full-screen player on a
+                    // phone (the SPA's `PlayerBar#cardTap`): `MiniPlayer`'s
+                    // default `onClick` is a no-op, so mounting it bare left
+                    // the player unreachable from the bar (measured by MQ2,
+                    // 2026-11-24). `AppGraph.openPlayer()` is the shell's
+                    // one navigator, shared with a deep link.
+                    //
+                    // SB3 : plein écran, la barre est couverte ET le mini-lecteur
+                    // cesse de lire la position quatre fois par seconde pour
+                    // personne.
+                    if (!NowPlayingState.open) MiniPlayer(onClick = { graph.openPlayer() })
+                    TabBarHost(
+                        destination = destination,
+                        pager = pager,
+                        scope = scope,
+                        onOpenTab = { tab -> nav.open(tab) },
+                        onOpenSettings = { nav.openSettings() },
+                    )
+                }
+            },
+            rail = { WideShell(nav, destination) },
+            backRow = {
+                // La rangée du retour n'existe que si l'écran n'est pas une
+                // racine d'onglet (ni Réglages) ET qu'il y a quelque part où
+                // revenir : sur l'accueil, la flèche n'aurait rien à faire.
+                if (selectedIndexOf(destination) < 0 && nav.previousBackStackEntry != null) {
+                    DetailBackRow { graph.back() }
+                }
+            },
+            content = {
+                NavGraph(graph, nav, pager, startRoute)
+                TrackActionsHost()
+                // M2 : la SEULE surface où un toast est dessiné. Il y avait
+                // quarante appels à `NzToasts.show` sur master (réglages, file,
+                // album, party…) et aucune coquille ne montait `NzToastHost` :
+                // chaque phrase partait dans une liste que personne ne
+                // dessinait. Un toast est la moitié d'une règle 3 (un échec dit
+                // pourquoi) : la session expirée est la première à en dépendre
+                // vraiment.
+                NzToastHost(modifier = Modifier.fillMaxSize(), bottomPadding = NzSpacing.m)
+            },
+            overlay = { NowPlayingHost(nav = graph) },
+        )
+    }
+}
+
+/**
+ * Le cadre des deux coquilles, avec les surfaces plein écran AU-DESSUS des barres.
+ *
+ * [overlay] est composé en DERNIER, hors de la `Scaffold` : le lecteur plein
+ * écran (et ses panneaux) couvre donc la barre d'onglets et le mini-lecteur.
+ * Monté dans le contenu — ce qu'il faisait — il remplissait la zone entre l'inset
+ * haut et la `bottomBar` et laissait celle-ci visible en dessous (bug du
+ * propriétaire, 2026-11-26).
+ */
+@Composable
+internal fun ShellFrame(
+    wide: Boolean,
+    bottomBar: @Composable () -> Unit,
+    rail: @Composable () -> Unit,
+    backRow: @Composable () -> Unit,
+    content: @Composable () -> Unit,
+    overlay: @Composable () -> Unit,
+) {
+    Box(Modifier.fillMaxSize()) {
         if (wide) {
             Row(Modifier.fillMaxSize()) {
-                WideShell(nav, destination)
+                rail()
                 Column(Modifier.fillMaxSize()) {
                     // M6 : « quelqu'un pilote ce lecteur » se voit depuis N'IMPORTE
                     // quel écran, en haut de la colonne de contenu sur large.
                     RemoteHostNotice(Modifier.fillMaxWidth())
-                    Box(Modifier.fillMaxSize()) {
-                        NavGraph(graph, nav, pager, startRoute)
-                        Hosts(graph)
-                    }
+                    Box(Modifier.fillMaxSize()) { content() }
                 }
             }
         } else {
@@ -242,58 +314,20 @@ fun NzApp(graph: AppGraph) {
                 // is gone, its two words live on: « Retour » is the detail row
                 // below, « Réglages » is the bar's fifth item.
                 contentWindowInsets = ScaffoldDefaults.contentWindowInsets,
-                bottomBar = {
-                    Column {
-                        // M6 : la barre « Contrôlé par X · Couper » se glisse
-                        // au-dessus du mini-lecteur, donc visible sur tous les
-                        // écrans de la coquille téléphone (audit, bloqueur 6).
-                        RemoteHostNotice()
-                        // The bar IS the door to the full-screen player on a
-                        // phone (the SPA's `PlayerBar#cardTap`): `MiniPlayer`'s
-                        // default `onClick` is a no-op, so mounting it bare left
-                        // the player unreachable from the bar (measured by MQ2,
-                        // 2026-11-24). `AppGraph.openPlayer()` is the shell's
-                        // one navigator, shared with a deep link.
-                        MiniPlayer(onClick = { graph.openPlayer() })
-                        TabBarHost(
-                            destination = destination,
-                            pager = pager,
-                            scope = scope,
-                            onOpenTab = { tab -> nav.open(tab) },
-                            onOpenSettings = { nav.openSettings() },
-                        )
-                    }
-                },
+                bottomBar = bottomBar,
                 containerColor = MaterialTheme.colorScheme.background,
             ) { padding ->
-                Column(Modifier.fillMaxSize().padding(padding)) {
-                    // La rangée du retour n'existe que si l'écran n'est pas une
-                    // racine d'onglet (ni Réglages) ET qu'il y a quelque part où
-                    // revenir : sur l'accueil, la flèche n'aurait rien à faire.
-                    if (selectedIndexOf(destination) < 0 && nav.previousBackStackEntry != null) {
-                        DetailBackRow { graph.back() }
-                    }
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        NavGraph(graph, nav, pager, startRoute)
-                        Hosts(graph)
-                    }
+                // `padding` ET `consumeWindowInsets` : la KDoc de Scaffold demande
+                // les deux, et sans la seconde un écran qui appelle
+                // `statusBarsPadding()` (le lecteur) compte l'inset deux fois.
+                Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                    backRow()
+                    Box(Modifier.weight(1f).fillMaxWidth()) { content() }
                 }
             }
         }
+        overlay()
     }
-}
-
-/** The sheet hosts, placed once for the whole app. */
-@Composable
-private fun Hosts(graph: AppGraph) {
-    NowPlayingHost(nav = graph)
-    TrackActionsHost()
-    // M2 : la SEULE surface où un toast est dessiné. Il y avait quarante appels
-    // à `NzToasts.show` sur master (réglages, file, album, party…) et aucune
-    // coquille ne montait `NzToastHost` : chaque phrase partait dans une liste
-    // que personne ne dessinait. Un toast est la moitié d'une règle 3 (un échec
-    // dit pourquoi) : la session expirée est la première à en dépendre vraiment.
-    NzToastHost(modifier = Modifier.fillMaxSize(), bottomPadding = NzSpacing.m)
 }
 
 /**

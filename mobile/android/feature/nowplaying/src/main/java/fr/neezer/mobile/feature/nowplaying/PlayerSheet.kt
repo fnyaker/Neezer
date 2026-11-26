@@ -156,7 +156,14 @@ fun PlayerSurface(
  * **It sits inside the system bars** (M5). The surface is `enableEdgeToEdge`, so
  * without the two insets the header row was drawn under the status bar and the
  * « À propos » pill under the gesture bar; the insets come BEFORE this lot's own
- * 4 dp paddings, never instead of them.
+ * paddings, never instead of them.
+ *
+ * **SB3 : the inset is counted ONCE, and the header sits 2 dp under it.** The
+ * shell mounts the player OUTSIDE its `Scaffold` (`ShellFrame`'s `overlay`), so
+ * no `PaddingValues` has already spent the status bar when this column adds
+ * `statusBarsPadding()`. The 2 dp top is M3's value for a tall bar (glyph 14 dp
+ * under the inset, centre 26), not the 4 dp this lot used while it was inside
+ * the content.
  */
 @Composable
 private fun PlayerColumn(
@@ -192,10 +199,14 @@ private fun PlayerColumn(
             .semantics {
                 contentDescription = "Lecteur plein écran, glisser vers le bas pour réduire"
             }
+            // Le lecteur est monté HORS de la Scaffold (ShellFrame, overlay) : son
+            // `statusBarsPadding()` est désormais le seul compte de l'inset, et
+            // l'en-tête se colle sous la barre d'état — 2 dp, la valeur de M3 pour
+            // une barre haute (glyphe à 14 dp de l'inset, centre à 26).
             .statusBarsPadding()
             .navigationBarsPadding()
             .padding(horizontal = if (wide) NzSpacing.xl else NzSpacing.pageX)
-            .padding(top = if (wide) NzSpacing.xl else NzSpacing.xs, bottom = NzSpacing.xs),
+            .padding(top = if (wide) NzSpacing.xl else NzSpacing.xxs, bottom = NzSpacing.xs),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         PlayerHeader(state, model, nav, onClose, wide)
