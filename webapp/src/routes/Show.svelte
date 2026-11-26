@@ -24,6 +24,7 @@
     requestEpisodePanel,
     transcribeSettings,
     transcriptNote,
+    withRateLimitRetry,
   } from "../lib/transcript.js";
   import Cover from "../components/Cover.svelte";
   import GradientHeader from "../components/GradientHeader.svelte";
@@ -173,7 +174,12 @@
       const payload = on
         ? { auto: true, backlog: backlogMode, language: data.transcribe_language || "auto" }
         : { auto: false };
-      const r = await api.setShowTranscribe(data.id, payload);
+      const r = await withRateLimitRetry(() => api.setShowTranscribe(data.id, payload), {
+        onWait: (seconds) => {
+          data = before;
+          toasts.push(`Trop de demandes. Nouvelle tentative dans ${seconds} s.`);
+        },
+      });
       if (data?.id === r.id) {
         data = {
           ...data,
@@ -217,7 +223,12 @@
     setEpisodeTranscript(ep.id, { status: "queued", progress: 0 });
     transcribeBusy = { ...transcribeBusy, [ep.id]: true };
     try {
-      await api.startEpisodeTranscript(ep.id, {});
+      await withRateLimitRetry(() => api.startEpisodeTranscript(ep.id, {}), {
+        onWait: (seconds) => {
+          setEpisodeTranscript(ep.id, previous);
+          toasts.push(`Trop de demandes. Nouvelle tentative dans ${seconds} s.`);
+        },
+      });
       toasts.push("Épisode en file de transcription.");
       watchTranscript();
     } catch (error) {
@@ -244,7 +255,11 @@
       for (let index = 0; index < wanted.length; index++) {
         const ep = wanted[index];
         try {
-          await api.startEpisodeTranscript(ep.id, {});
+          await withRateLimitRetry(() => api.startEpisodeTranscript(ep.id, {}), {
+            onWait: (seconds) => {
+              toasts.push(`Trop de demandes. Nouvelle tentative dans ${seconds} s.`);
+            },
+          });
           accepted++;
         } catch (error) {
           const code = error?.body?.code || error?.code || "";

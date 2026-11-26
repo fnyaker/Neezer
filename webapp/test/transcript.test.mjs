@@ -16,10 +16,12 @@ import {
   panelRequest,
   reasonText,
   requestEpisodePanel,
+  retryAfterSeconds,
   segmentAt,
   takePanelRequest,
   transcriptNote,
   noteTranscript,
+  withRateLimitRetry,
 } from "../src/lib/transcript.js";
 import {
   MAX_BYTES,
@@ -436,4 +438,95 @@ test("a retry_in in the error body is readable by the screen", async () => {
       return true;
     },
   );
+});
+
+test("retryAfterSeconds reads the server's wait and invents none", () => {
+  assert.equal(retryAfterSeconds({ status: 429, retryIn: 30 }), 30);
+  assert.equal(retryAfterSeconds({ status: 429, body: { retry_in: 12 } }), 12);
+  assert.equal(retryAfterSeconds({ status: 429, retryIn: 0.2 }), 1);
+  assert.equal(retryAfterSeconds({ status: 429 }), 0);
+  assert.equal(retryAfterSeconds({ status: 500, retryIn: 9 }), 9);
+  assert.equal(retryAfterSeconds(null), 0);
+});
+
+test("withRateLimitRetry waits the server's delay and retries exactly once", async () => {
+  const waited = [];
+  let calls = 0;
+  const value = await withRateLimitRetry(
+    async () => {
+      calls += 1;
+      if (calls === 1) throw { status: 429, retryIn: 7 };
+      return "ok";
+    },
+    { wait: async (seconds) => waited.push(seconds) },
+  );
+  assert.equal(value, "ok");
+  assert.equal(calls, 2);
+  assert.deepEqual(waited, [7]);
+});
+
+test("withRateLimitRetry tells the caller how long it waits", async () => {
+  const notices = [];
+  const waited = [];
+  await withRateLimitRetry(
+    async () => {
+      throw { status: 429, body: { retry_in: 4 } };
+    },
+    {
+      wait: async (seconds) => waited.push(seconds),
+      onWait: (seconds) => notices.push(seconds),
+    },
+  ).catch(() => {});
+  assert.deepEqual(notices, [4]);
+  assert.deepEqual(waited, [4]);
+});
+
+test("withRateLimitRetry does not retry a second 429, a non-429 or a bare 429", async () => {
+  const waited = [];
+  const wait = async (seconds) => waited.push(seconds);
+  let calls = 0;
+  await assert.rejects(
+    withRateLimitRetry(
+      async () => {
+        calls += 1;
+        throw { status: 429, retryIn: 3 };
+      },
+      { wait },
+    ),
+    (error) => error.status === 429,
+  );
+  // One wait, two calls: the second refusal is the person's answer.
+  assert.deepEqual(waited, [3]);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  waited.length = 0;
+  await assert.rejects(
+    withRateLimitRetry(
+      async () => {
+        calls += 1;
+        throw { status: 500 };
+      },
+      { wait },
+    ),
+    (error) => error.status === 500,
+  );
+  assert.deepEqual(waited, []);
+  assert.equal(calls, 1);
+
+  calls = 0;
+  waited.length = 0;
+  await assert.rejects(
+    withRateLimitRetry(
+      async () => {
+        calls += 1;
+        throw { status: 429 };
+      },
+      { wait },
+    ),
+    (error) => error.status === 429,
+  );
+  // No Retry-After: no invented wait, no second call.
+  assert.deepEqual(waited, []);
+  assert.equal(calls, 1);
 });

@@ -94,6 +94,51 @@ export function isTerminalStatus(status) {
   return TERMINAL_STATUSES.includes(status);
 }
 
+/**
+ * The delay the server asked for when it refused a call, in whole seconds.
+ *
+ * `api.js` puts the JSON `retry_in` on `error.retryIn` (and keeps the body on
+ * `error.body`), so the same envelope is read either way. 0 means the server
+ * gave no delay: nobody invents one.
+ */
+export function retryAfterSeconds(error) {
+  const raw =
+    (error && error.retryIn) ||
+    (error && error.body && error.body.retry_in) ||
+    (error && error.retry_after) ||
+    0;
+  const seconds = Math.ceil(Number(raw));
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+}
+
+/** A real wait, in whole seconds. Injectable so a test never sleeps. */
+export function waitSeconds(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  return new Promise((resolve) => setTimeout(resolve, value * 1000));
+}
+
+/**
+ * Run `call`; when the server refuses it with a 429 that carries a
+ * `Retry-After`, wait exactly that long and run it ONCE more.
+ *
+ * One retry, never a loop: the server's delay answers "when", and a second
+ * refusal is real information for the person. `onWait(seconds)` lets the
+ * caller say it is waiting (a toast, the panel's countdown) without knowing
+ * the rest of the policy.
+ */
+export async function withRateLimitRetry(call, options = {}) {
+  const wait = options.wait || waitSeconds;
+  try {
+    return await call();
+  } catch (error) {
+    const seconds = retryAfterSeconds(error);
+    if (!error || error.status !== 429 || !seconds) throw error;
+    if (options.onWait) options.onWait(seconds);
+    await wait(seconds);
+    return call();
+  }
+}
+
 export function segmentAt(segments, seconds) {
   if (!Array.isArray(segments) || !segments.length) return -1;
   const at = Number(seconds);

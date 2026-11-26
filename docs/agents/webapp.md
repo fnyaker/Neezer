@@ -719,7 +719,10 @@ transcript costs **0 requests while listening**, 1 GET for the next page or an i
 is cached in IndexedDB `neezer-transcripts` (50 pages / 5 MB, 4 per episode, key
 `episode:limit:offset`, `ready` only, local search; never in `REMOTE`). A `queued|running` job polls
 once per 10 s with `limit=1`, never in `ready`; the status/error copy is French and the admin can
-start/stop/delete, while every account reads. A search hit opens the full-screen player **and** the
+start/stop/delete, while every account reads. A **429** on a start or a show mark carries
+`Retry-After`: the app waits exactly that delay and sends the same call **once** more
+(`withRateLimitRetry` in `lib/transcript.js`; a second refusal is shown, never retried), so the
+person never has to press again for a refusal that was only a window. A search hit opens the full-screen player **and** the
 About panel on the Transcription segment at the hit's timecode (`panelRequest` is consumed by the
 desktop/mobile shell with `segToken`, expiring after 3 s); the episode page has the same jump. The
 global Space shortcut ignores interactive targets (`button/a/input/textarea/select/[role=button]/

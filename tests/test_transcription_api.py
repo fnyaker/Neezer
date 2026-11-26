@@ -732,12 +732,12 @@ class TranscriptionApiTestCase(unittest.TestCase):
             PodcastTranscript.status == "queued").count(), 3)
         wake.assert_called()
 
+        # A second mark is idempotent and no longer refused: the old 1-per-10-min
+        # window answered 429 from the admin's second show.
         second = self.client.post(
             "/api/podcast/%s/transcribe" % channel.id, json={"auto": True}
         )
-        self.assertEqual(second.status_code, 429)
-        self.assertIn("retry_in", second.get_json())
-        self.assertIn("Retry-After", second.headers)
+        self.assertEqual(second.status_code, 202, second.get_json())
         self.assertEqual(PodcastTranscript.select().count(), 3)
 
         off = self.client.post(
@@ -764,6 +764,19 @@ class TranscriptionApiTestCase(unittest.TestCase):
         self.assertEqual(none.status_code, 202)
         self.assertEqual(none.get_json()["queued"], 0)
         self.assertEqual(PodcastTranscript.select().count(), 0)
+
+    def test_marking_a_library_of_shows_is_not_rate_limited(self):
+        # One person may mark show after show for automatic transcription; the
+        # old mark_limiter (1 per 10 min) answered 429 on the SECOND show.
+        for number in range(1, 21):
+            channel = self.channel(title="Show %d" % number)
+            self.episode(channel, number=number, duration=20)
+            response = self.client.post(
+                "/api/podcast/%s/transcribe" % channel.id,
+                json={"auto": True, "backlog": "recent"},
+            )
+            self.assertEqual(response.status_code, 202, response.get_json())
+            self.assertTrue(response.get_json()["auto_transcribe"])
 
     def test_the_daily_budget_stops_the_backlog_and_keeps_episodes_none(self):
         self.app.config["TRANSCRIBE"]["daily_minutes"] = 1
@@ -924,13 +937,47 @@ class TranscriptionApiTestCase(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 404, (value, suffix))
 
-    def test_a_start_is_rate_limited_and_creates_nothing_when_refused(self):
+    def test_the_webapps_largest_batch_is_not_rate_limited(self):
+        # `batchOptions` offers 5, 10 or 20 starts in one click. The old
+        # 3-per-10-minute window refused the 4th POST of the app's own batch;
+        # all 20 now answer 202 and every episode is queued (measured: 20 POSTs,
+        # 20 rows, 0 refusals; on `master` the 4th was 429 with Retry-After).
         channel = self.channel()
-        episodes = [self.episode(channel, number=n) for n in range(1, 4)]
-        for _ in range(3):
-            start_limiter.allow(str(self.alice.id))
+        episodes = [self.episode(channel, number=n) for n in range(1, 21)]
+        for episode in episodes:
+            response = self.client.post(
+                "/api/podcast/episode/%s/transcribe" % episode.id, json={}
+            )
+            self.assertEqual(response.status_code, 202, response.get_json())
+        self.assertEqual(
+            PodcastTranscript.select()
+            .where(PodcastTranscript.status == "queued")
+            .count(),
+            20,
+        )
+
+    def test_a_start_is_still_rate_limited_above_the_new_cap(self):
+        channel = self.channel()
+        episode = self.episode(channel)
+        for _ in range(60):
+            allowed, _retry = start_limiter.allow(str(self.alice.id))
+            self.assertTrue(allowed)
         response = self.client.post(
-            "/api/podcast/episode/%s/transcribe" % episodes[0].id, json={}
+            "/api/podcast/episode/%s/transcribe" % episode.id, json={}
+        )
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.get_json()["code"], "rate_limited")
+        self.assertIn("Retry-After", response.headers)
+        self.assertFalse(PodcastTranscript.select().exists())
+
+    def test_the_hourly_start_cap_still_stops_a_loop(self):
+        channel = self.channel()
+        episode = self.episode(channel)
+        for _ in range(300):
+            allowed, _retry = start_hour_limiter.allow(str(self.alice.id))
+            self.assertTrue(allowed)
+        response = self.client.post(
+            "/api/podcast/episode/%s/transcribe" % episode.id, json={}
         )
         self.assertEqual(response.status_code, 429)
         self.assertIn("Retry-After", response.headers)
