@@ -15,6 +15,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.advanceEventTime
 import androidx.compose.ui.test.down
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.moveBy
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -369,7 +370,7 @@ class NowPlayingDeviceTest {
                 }
             }
         }
-        rule.waitUntil(timeoutMillis = 20_000) {
+        awaitStep("the sheet is on screen") {
             rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().isNotEmpty()
         }
         // 5 × 8 % of the SHEET's height, 800 ms apart: 40 % of travel — a fraction,
@@ -383,13 +384,22 @@ class NowPlayingDeviceTest {
                 moveBy(Offset(0f, height * 0.08f))
             }
         }
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        val heldBounds = rule.onNodeWithTag(SHEET_TAG).getUnclippedBoundsInRoot()
+        val heldDp = heldBounds.top.value
+        val sheetDp = heldBounds.bottom.value - heldBounds.top.value
+        println("MEASURE p2 device drag: held at $heldDp dp of $sheetDp dp")
+        assertTrue(
+            "the finger moved the sheet past the 28 % threshold (held $heldDp of $sheetDp dp)",
+            heldDp > sheetDp * 0.28f,
+        )
         rule.onNodeWithTag(SHEET_TAG).performTouchInput { up() }
-        rule.waitUntil(timeoutMillis = 20_000) { !NowPlayingState.open }
+        awaitStep("the drag closed the player") { !NowPlayingState.open }
         InstrumentationRegistry.getInstrumentation().waitForIdleSync()
 
         assertEquals("the drag did not move the queue", index, player.snapshot().index)
         assertEquals("the drag did not change the queue", 3u, player.snapshot().len)
-        rule.waitUntil(timeoutMillis = 20_000) {
+        awaitStep("the mini player shows « $title »") {
             rule.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
         }
         println("MEASURE p2 device: sheet closed by a drag, mini player still « $title »")
@@ -666,6 +676,25 @@ class NowPlayingDeviceTest {
     }
 
     // -- the plumbing ---------------------------------------------------------
+
+    /**
+     * A `waitUntil` that NAMES its step when it times out: the emulator job's log
+     * shows the failure message and nothing else, so "which wait" has to be in it.
+     */
+    private fun awaitStep(what: String, timeoutMs: Long = 15_000, condition: () -> Boolean) {
+        try {
+            rule.waitUntil(timeoutMillis = timeoutMs, condition = condition)
+        } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+            val snapshot = NowPlayingCore.player()?.snapshot()
+            throw AssertionError(
+                "$what: still false after $timeoutMs ms (open=${NowPlayingState.open}, " +
+                    "sheets=${rule.onAllNodesWithTag(SHEET_TAG).fetchSemanticsNodes().size}, " +
+                    "player=${snapshot?.state} ${snapshot?.index}/${snapshot?.len} " +
+                    "« ${snapshot?.current?.title} »)",
+                timeout,
+            )
+        }
+    }
 
     /** The core over the bench, once per process (a phone installs one). */
     private fun install(bench: Bench): uniffi.nz_ffi.NzCore {
