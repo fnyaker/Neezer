@@ -19,6 +19,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::mixer::MixerShared;
 use crate::source::Quality;
+use crate::voice::VoiceStatus;
 
 /// A note from the output callback to the event thread. `Copy`, no `String`,
 /// so moving one through the ring can never allocate.
@@ -137,6 +138,7 @@ impl EventBus {
         stop: Arc<AtomicBool>,
         info: Arc<VoiceInfo>,
         shared: Arc<MixerShared>,
+        preloaded: Arc<Mutex<Option<Preloaded>>>,
     ) -> JoinHandle<()> {
         let mut consumer = self
             .note_consumer
@@ -156,6 +158,16 @@ impl EventBus {
                         got = true;
                         match note {
                             MixerNote::Started { generation } => {
+                                // The queued next voice just BECAME the current
+                                // one (a natural gapless handover, or the engine's
+                                // own promotion): it can no longer be promoted.
+                                if let Ok(mut slot) = preloaded.lock()
+                                    && slot
+                                        .as_ref()
+                                        .is_some_and(|pending| pending.generation == generation)
+                                {
+                                    *slot = None;
+                                }
                                 if let Some(v) = info.get(generation) {
                                     bus.emit(EngineEvent::Started {
                                         id: v.id,
@@ -189,6 +201,19 @@ impl EventBus {
             })
             .expect("spawn the audio event thread")
     }
+}
+
+/// The next voice a preload queued, as the engine remembers it: `skip_to_preloaded`
+/// compares its id and its quality, its generation is the mixer's ticket for
+/// `MixerCmd::PromoteNext`, and its status is what a later load stops.
+///
+/// The event thread CLEARS it when a `Started` for that generation arrives: the
+/// voice became the current one, so it is no longer promotable.
+pub(crate) struct Preloaded {
+    pub id: String,
+    pub quality: Quality,
+    pub generation: u64,
+    pub status: Arc<VoiceStatus>,
 }
 
 /// The `generation -> track` table the event thread reads. Inserted by loader threads,

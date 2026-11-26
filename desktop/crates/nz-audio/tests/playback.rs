@@ -472,3 +472,80 @@ fn changing_the_output_hands_the_mixer_over_and_the_music_keeps_playing() {
     assert!(bad.is_empty(), "nothing failed during the switch: {bad:?}");
     engine.pause();
 }
+
+/// **A manual skip never re-opens the source it already decoded.** The next
+/// voice is queued (`preload_next`); `skip_to_preloaded` promotes it only when
+/// the id AND the quality are the ones it was built with, and it says `false`
+/// for anything else so the caller falls back to a real load. A refused
+/// promotion must leave the queued voice intact.
+///
+/// Measured: a different id and a different quality both answer `false`, the
+/// queued `b` is still there, and the matching call answers `true` and names
+/// `b` as the current voice once its `Started` arrives.
+#[test]
+fn skip_to_preloaded_falls_back_when_the_id_differs() {
+    let dir = scratch("skip-fallback");
+    let first = dir.join("a.flac");
+    let second = dir.join("b.flac");
+    cosine_flac(&first, 440.0, 5.0, 48_000);
+    cosine_flac(&second, 610.0, 1.0, 48_000);
+    let (engine, mut sink, events) = offline(
+        &dir,
+        TestOpener::default()
+            .with_file("a", &first)
+            .with_file("b", &second),
+    );
+    engine.load("a", Quality::Flac, None);
+    wait_for(
+        &mut sink,
+        &events,
+        Duration::from_secs(5),
+        |event| matches!(event, EngineEvent::Started { id, .. } if id == "a"),
+    );
+    engine.preload_next("b", Quality::Flac);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while engine.preloaded_id().as_deref() != Some("b") && Instant::now() < deadline {
+        pump(&mut sink, 480);
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        engine.preloaded_id().as_deref(),
+        Some("b"),
+        "the preload never landed"
+    );
+
+    assert!(
+        !engine.skip_to_preloaded("c", Quality::Flac),
+        "a different id must not be promoted"
+    );
+    assert!(
+        !engine.skip_to_preloaded("b", Quality::Opus128),
+        "a different quality must not be promoted"
+    );
+    assert_eq!(
+        engine.preloaded_id().as_deref(),
+        Some("b"),
+        "a refused promotion must leave the queued voice intact"
+    );
+
+    assert!(
+        engine.skip_to_preloaded("b", Quality::Flac),
+        "the queued voice, at its own quality, must be promoted"
+    );
+    assert!(
+        engine.preloaded_id().is_none(),
+        "the promoted voice is no longer the queued one"
+    );
+    wait_for(
+        &mut sink,
+        &events,
+        Duration::from_secs(2),
+        |event| matches!(event, EngineEvent::Started { id, .. } if id == "b"),
+    );
+    assert_eq!(
+        engine.current_id().as_deref(),
+        Some("b"),
+        "the mixer must name the promoted voice"
+    );
+    engine.shutdown();
+}

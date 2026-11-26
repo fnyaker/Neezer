@@ -26,7 +26,7 @@ use crate::clock::AtomicF32;
 use crate::crossfade::FadeSettings;
 use crate::decode::{self, DecodeError};
 use crate::dsp::{Normalization, Settings};
-use crate::events::{EngineEvent, EventBus, VoiceInfo, VoiceInfoEntry};
+use crate::events::{EngineEvent, EventBus, Preloaded, VoiceInfo, VoiceInfoEntry};
 use crate::mixer::{MixerCmd, MixerShared};
 use crate::output::{self, ExternalSink, OfflineSink, Output, OutputChoice, OutputInfo};
 use crate::party::{PartyCmd, Segment};
@@ -201,6 +201,10 @@ struct Inner {
     output: Mutex<Output>,
     out_info: Mutex<OutputInfo>,
     state: Mutex<State>,
+    /// The voice queued as the next one, so a manual skip can PROMOTE it
+    /// instead of rebuilding it (`skip_to_preloaded`). The event thread clears
+    /// it when that voice becomes current (a natural gapless handover).
+    preloaded: Arc<Mutex<Option<Preloaded>>>,
     /// Bumped by every `load`/`seek`: a loader whose mark is stale installs
     /// nothing.
     load_gen: AtomicU64,
@@ -385,11 +389,13 @@ impl Engine {
             tap,
         );
         let info = Arc::new(VoiceInfo::default());
+        let preloaded = Arc::new(Mutex::new(None));
         let event_stop = Arc::new(AtomicBool::new(false));
         let event_thread = events.spawn_bridge(
             Arc::clone(&event_stop),
             Arc::clone(&info),
             Arc::clone(&shared),
+            Arc::clone(&preloaded),
         );
         let engine = Engine {
             inner: Arc::new(Inner {
@@ -406,6 +412,7 @@ impl Engine {
                 output: Mutex::new(output),
                 out_info: Mutex::new(out_info),
                 state: Mutex::new(State { current: None }),
+                preloaded,
                 load_gen: AtomicU64::new(0),
                 gen_seq: AtomicU64::new(0),
                 playing: AtomicBool::new(false),
@@ -454,11 +461,13 @@ impl Engine {
             latency_frames: 0,
         };
         let info = Arc::new(VoiceInfo::default());
+        let preloaded = Arc::new(Mutex::new(None));
         let event_stop = Arc::new(AtomicBool::new(false));
         let event_thread = events.spawn_bridge(
             Arc::clone(&event_stop),
             Arc::clone(&info),
             Arc::clone(&shared),
+            Arc::clone(&preloaded),
         );
         let engine = Engine {
             inner: Arc::new(Inner {
@@ -475,6 +484,7 @@ impl Engine {
                 output: Mutex::new(output),
                 out_info: Mutex::new(out_info),
                 state: Mutex::new(State { current: None }),
+                preloaded,
                 load_gen: AtomicU64::new(0),
                 gen_seq: AtomicU64::new(0),
                 playing: AtomicBool::new(false),
@@ -526,6 +536,7 @@ impl Engine {
     /// to); the player calls it for a command that replaces the queue or the row
     /// (before the transport resumes the old voice) and again in `play_rows`.
     pub fn stop_current(&self) {
+        self.inner.clear_preloaded();
         self.inner.send(MixerCmd::InstallCurrent(None));
     }
 
@@ -563,6 +574,45 @@ impl Engine {
                 }
             }
         });
+    }
+
+    /// The id of the voice the last `preload_next` queued, while it is still
+    /// queued: `None` once a natural handover consumed it or a newer preload
+    /// replaced it.
+    pub fn preloaded_id(&self) -> Option<String> {
+        self.inner
+            .preloaded
+            .lock()
+            .expect("preloaded poisoned")
+            .as_ref()
+            .map(|pending| pending.id.clone())
+    }
+
+    /// A manual skip onto the voice `preload_next` ALREADY decoded: when `id`
+    /// and `quality` are the ones it was built with, it becomes the current
+    /// voice in the mixer in the SAME buffer (the web player's 60 ms cut, no
+    /// `Ended` for the row left behind), `Started` is announced exactly like a
+    /// load, and no source is opened again.
+    ///
+    /// `false` when there is no such voice — a different id or quality, a
+    /// preload already consumed by a natural handover, or a voice that is
+    /// current already — and the caller falls back to [`Engine::load`].
+    pub fn skip_to_preloaded(&self, id: &str, quality: Quality) -> bool {
+        let Some(preloaded) = self.inner.take_preloaded(id, quality) else {
+            return false;
+        };
+        {
+            let mut state = self.inner.state.lock().expect("engine state poisoned");
+            if let Some(old) = state.current.replace(Slot {
+                status: Arc::clone(&preloaded.status),
+            }) {
+                old.status.stop();
+            }
+        }
+        self.inner.send(MixerCmd::PromoteNext {
+            generation: preloaded.generation,
+        });
+        true
     }
 
     pub fn play(&self) {
@@ -989,6 +1039,29 @@ impl Inner {
         self.gen_seq.fetch_add(1, Ordering::SeqCst) + 1
     }
 
+    /// Forget the queued next voice. Its decoder (if any) is stopped by the
+    /// mixer's own `InstallNext(None)`/`InstallCurrent(None)`; dropping the
+    /// status here only ends the engine's bookkeeping.
+    fn clear_preloaded(&self) {
+        let _ = self.preloaded.lock().expect("preloaded poisoned").take();
+    }
+
+    /// The queued next voice, when it is the one `id`/`quality` name AND it is
+    /// still promotable. A voice that is already the mixer's current one cannot
+    /// be (a natural handover happened, and the event thread may not have
+    /// cleared the record yet); the caller falls back to a real load.
+    fn take_preloaded(&self, id: &str, quality: Quality) -> Option<Preloaded> {
+        let mut slot = self.preloaded.lock().expect("preloaded poisoned");
+        let pending = slot.as_ref()?;
+        if pending.id != id || pending.quality != quality {
+            return None;
+        }
+        if self.shared.current_generation() == pending.generation {
+            return None;
+        }
+        slot.take()
+    }
+
     fn send(&self, command: MixerCmd) {
         let mut guard = self.mixer.lock().expect("mixer poisoned");
         let mut pending = command;
@@ -1042,6 +1115,7 @@ impl Inner {
         // Whatever was preloaded belongs to the old queue position: playing it
         // now would jump the queue.
         self.send(MixerCmd::InstallNext(None));
+        self.clear_preloaded();
         self.send(MixerCmd::InstallCurrent(Some(built.consumer)));
         if self.playing.load(Ordering::SeqCst) {
             self.shared.set_paused(false);
@@ -1066,7 +1140,14 @@ impl Inner {
         // its own; the engine keeps no second copy that could go stale at a
         // gapless handover.
         self.send(MixerCmd::InstallNext(Some(built.consumer)));
-        drop(built.status);
+        // Recorded AFTER the command: a skip that raced the preload sees no
+        // record and falls back to a real load, which is always correct.
+        *self.preloaded.lock().expect("preloaded poisoned") = Some(Preloaded {
+            id: id.to_string(),
+            quality,
+            generation: built.generation,
+            status: Arc::clone(&built.status),
+        });
     }
 
     /// Install the voice a seek produced, then announce it only once the clock

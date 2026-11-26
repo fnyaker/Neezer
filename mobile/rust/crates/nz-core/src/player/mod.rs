@@ -1407,11 +1407,22 @@ impl Player {
                 let meta = work.meta.get(&reference).copied().unwrap_or_default();
                 self.engine.set_track_meta(&reference, meta);
             }
-            self.engine.load(
-                &reference,
-                to_audio_quality(quality),
-                Some(position).filter(|at| *at > 0.0),
-            );
+            let audio_quality = to_audio_quality(quality);
+            // The row was ALREADY decoded by `preload_next`: a manual skip (the
+            // next button, a headset, MediaSession, the car) promotes that voice
+            // in the mixer instead of reopening the source it just paid for.
+            // `false` (another id or quality, or a natural handover already
+            // consumed it) falls back to a real load.
+            let promoted = position <= 0.001
+                && self.engine.preloaded_id().as_deref() == Some(reference.as_str())
+                && self.engine.skip_to_preloaded(&reference, audio_quality);
+            if !promoted {
+                self.engine.load(
+                    &reference,
+                    audio_quality,
+                    Some(position).filter(|at| *at > 0.0),
+                );
+            }
         }
         if autoplay {
             self.engine.play();

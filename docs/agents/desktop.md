@@ -1244,6 +1244,18 @@ Waves that can run in parallel (disjoint files):
   skip — the queue had already moved on, so no cause was ever shown and no retry could run
   (measured in `mixer::tests::a_failed_voice_is_not_handed_over_to_the_preloaded_next_one`: the
   next voice's first frame used to come out of that very buffer, with its `Started`).
+- **The rule, a manual skip consumes the voice it already decoded**: when the app skips to the row
+  `preload_next` was already building it calls `Engine::skip_to_preloaded(id, quality)` instead of
+  `load`. The mixer promotes the queued voice (`MixerCmd::PromoteNext`) in the SAME buffer, the
+  replaced voice keeps the web player's 60 ms cut in `outgoing`, `Started` names the promoted
+  generation, and no source is opened again. A different id or quality, a preload a natural handover
+  already consumed, or a voice that is current already answers `false` and leaves everything as it
+  was, so the caller falls back to `load`. Measured: in a 480-frame buffer the old voice is on frame
+  0, the new one is above 0.2 by the last frame, no 5 ms all-zero window crosses the switch, and
+  `outgoing` is empty after **2 880 frames = 60 ms**
+  (`mixer::tests::a_manual_skip_promotes_the_preloaded_voice_without_a_gap`); through the phone's own
+  queue, **0** source re-opens and **0.000000** worst sample difference from the next file's own
+  frames (`nz-core`, `a_manual_next_plays_the_preloaded_voice_without_a_silent_gap`).
 - **The rule, the trim**: a voice carries `trim.end_s` and the mixer **stops pulling at it**, even
   though its file goes on — so the 3 s of digital silence a master carries after its last note is
   never played, and the preloaded next voice starts in the same buffer. The bounds are the page's,
