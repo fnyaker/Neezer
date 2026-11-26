@@ -3,7 +3,7 @@
 // Two loops, both polling (neezer/webui/remote.py says why): one PUBLISHES
 // what the player is doing when it changes, one ASKS for commands and runs
 // them. Commands run through the player store's own methods — a remote "next"
-// is `player.next()` here, exactly what the owner's own button calls — so the
+// is `player.skipNext()` here, exactly what the owner's own button calls — so the
 // engine, the crossfade, the queue top-ups, the lock screen all follow without
 // knowing a remote was involved. The owner's own hand is never taken: their
 // taps work as they always did, and the last action wins whoever made it.

@@ -155,7 +155,7 @@
           <span class="glyph" in:swap={{ y: 0, scale: 0.85 }}><Icon name={$player.playing ? "pause" : "play"} size={18} /></span>
         {/key}
       </button>
-      <button class="next" on:click={() => player.next()} aria-label="Suivant"><Icon name="next" size={22} /></button>
+      <button class="next" on:click={() => player.skipNext()} aria-label="Suivant"><Icon name="next" size={22} /></button>
       {#if canQueue}
         <button class="sm rep" class:on={$player.repeat !== "off"} on:click={() => player.cycleRepeat()} aria-label="Répéter">
           <Icon name={repeatIconName} size={18} />

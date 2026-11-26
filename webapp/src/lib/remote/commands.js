@@ -1,10 +1,10 @@
 // What crosses between a remote control and the player it drives.
 //
 // The two sides run the SAME app, so a command is simply a player-store method
-// said over the wire: the controller turns `player.next()` into {op: "next"}
-// (commandFor), the controlled player turns it back into `player.next()` on its
-// own store (runCommand), and its engine does the rest exactly as if the owner
-// had tapped the button. Nothing here knows about audio.
+// said over the wire: the controller turns a `player.next()` into {op: "next"}
+// (commandFor), the controlled player turns it back into `player.skipNext()` on
+// its own store (runCommand), and its engine does the rest exactly as if the
+// owner had tapped the button. Nothing here knows about audio.
 //
 // Pure, on purpose — test/remote.test.mjs drives both halves on plain objects.
 
@@ -217,10 +217,15 @@ export function runCommand(cmd, env) {
     case "play":
     case "pause":
     case "toggle":
-    case "next":
     case "prev":
       player[cmd.op]();
       return cmd.op;
+    case "next":
+      // The owner's own button, not a blind advance: at the last title it
+      // bumps atEndSeq so the audio owner offers the continuation instead of
+      // leaving the remote with a dead "next".
+      player.skipNext();
+      return "next";
     case "seek": {
       const t = Math.max(0, +a.t || 0);
       const d = s.duration || 0;

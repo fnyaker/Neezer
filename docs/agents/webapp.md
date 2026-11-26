@@ -657,6 +657,15 @@ shuffle it leaves `_orig` alone. `player.clearUpcoming()` also switches `autopla
 queue five seconds after it was cleared is the opposite of the request — and a new queue (`playQueue`,
 `shufflePlay`) switches it back on. Both are remote commands (`move`, `clear`, read level, validated server-side).
 
+**The user's « suivant » is `player.skipNext()`; `player.next()` stays the natural-end verb.** `next()` still
+sets `playing: false` at the last title (crossfade and Flow depend on it) and returns `{moved, atEnd}`; `skipNext()`
+leaves `playing` and `index` alone and bumps the runtime-only `atEndSeq` (never in `player.session`), which
+`Player.svelte` answers with the same `nextBatch` continuation raced against 3 s, then « Fin de la file » with
+« Relancer » (`jump(0)`). Measured on a 12-title queue (phone, 390×844): the 12th tap showed the toast, index
+stayed 11, the audio kept playing (t 0 → 2.05 s), and « Relancer » landed back on index 0 playing. Every
+user-facing next (bar, both full-screen players, Ctrl+→, MediaSession, remote `next`) uses `skipNext()`; the
+Flow, the queue-end hook and the crossfade remain on `next()`.
+
 **The contextual menu is ONE spec, on every list** (`lib/trackmenu.js`). The same labels and the
 same actions — lire ensuite, ajouter à la file, playlist, remplacer, genre, télécharger, partager,
 radio, favori, je n'aime pas, crédits, artiste, album — are built once and opened from a track row,

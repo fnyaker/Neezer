@@ -3047,6 +3047,54 @@
     player.pause();
   }
 
+  // A "next" tapped on the LAST title has nowhere to go. skipNext() deliberately
+  // leaves the audio playing and bumps atEndSeq (so the tap never reads as a
+  // silent pause); this answers it like a natural end would — the same
+  // continuation nextBatch() — and, when that yields nothing (no autoplay,
+  // offline, empty source, error, or 3 s without an answer), says so with a way
+  // back instead of leaving a dead button. A late answer after the timeout is
+  // dropped. The initial 0 is ignored (only a change fires).
+  let lastAtEndSeq = $player.atEndSeq;
+  let endContinuationBusy = false;
+  async function continueAfterEnd() {
+    if (endContinuationBusy) return;
+    endContinuationBusy = true;
+    try {
+      const s = get(player);
+      const cur = s.queue[s.index];
+      if (s.autoplay && cur) {
+        let timedOut = false;
+        const timeout = new Promise((resolve) =>
+          setTimeout(() => {
+            timedOut = true;
+            resolve(null);
+          }, 3000)
+        );
+        const more = await Promise.race([
+          nextBatch(s)
+            .then((list) => (list || []).filter((t) => trackKey(t) !== trackKey(cur)))
+            .catch(() => null),
+          timeout,
+        ]);
+        if (!timedOut && more && more.length) {
+          player.autoExtend(more);
+          return;
+        }
+      }
+      toasts.push("Fin de la file", "info", 6000, {
+        label: "Relancer",
+        run: () => player.jump(0),
+      });
+    } finally {
+      endContinuationBusy = false;
+    }
+  }
+  $: if ($player.atEndSeq !== lastAtEndSeq) {
+    const seq = $player.atEndSeq;
+    lastAtEndSeq = seq;
+    if (seq > 0) continueAfterEnd();
+  }
+
   // What this listening session said, for the radio and the Flow refills:
   // the titles heard through and the ones skipped (under 30 s — the server's
   // own rule, neezer/listening.py). A new context is a new session.
@@ -3329,7 +3377,7 @@
     try {
       navigator.mediaSession.setActionHandler("play", () => player.play());
       navigator.mediaSession.setActionHandler("pause", () => player.pause());
-      navigator.mediaSession.setActionHandler("nexttrack", () => player.next());
+      navigator.mediaSession.setActionHandler("nexttrack", () => player.skipNext());
       navigator.mediaSession.setActionHandler("previoustrack", () => player.prev());
       // Scrubbing + skip from the OS notification / lock screen. All through
       // performSeek so live streams are chased instead of reset to 0.
