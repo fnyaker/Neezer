@@ -1452,7 +1452,8 @@ def save_run(run: dict, out: Path) -> None:
         summary_line(run),
         f"tool={run.get('tool')}",
         f"head_run={run.get('head')}",
-        f"apk={apk.get('name', '')} bytes={apk.get('bytes', '')} signer={apk.get('signer', '')}",
+        f"apk={apk.get('name', '')} bytes={apk.get('bytes', '')} signer={apk.get('signer', '')} "
+        f"sha256={apk.get('sha256', '')}",
     ]
     if summary(run)["stopped"]:
         lines.append(f"stopped={summary(run)['stopped']}")
@@ -1648,6 +1649,7 @@ def main(argv: list[str]) -> int:
         "name": os.environ.get("NEEZER_APK_NAME", ""),
         "bytes": os.environ.get("NEEZER_APK_BYTES", ""),
         "signer": os.environ.get("NEEZER_APK_SIGNER", ""),
+        "sha256": os.environ.get("NEEZER_APK_SHA256", ""),
     }
     (out / "device.txt").write_text(
         "\n".join(f"{key}={value}" for key, value in device.items()) + "\n", encoding="utf-8")

@@ -176,8 +176,12 @@ else
     note "apksigner introuvable sous $(nz_sdk_root)/build-tools : le signataire ne sera pas prouvé"
 fi
 bytes="$(stat -c %s "$apk")"
+apk_sha="$(sha256sum "$apk" | cut -c1-16)"
 apk_name="$(basename "$apk")"
-printf 'apk=%s bytes=%s signer=%s\n' "$apk_name" "$bytes" "${signer:-unknown}"
+# The three facts that say WHICH file was hunted: its name, its size and the
+# signature it carries. `bughunt.yaml` does not export the `mobile.yaml` run id
+# to us, so the sha256 is the provenance anchor a reader can compare by hand.
+printf 'apk=%s bytes=%s signer=%s sha256=%s\n' "$apk_name" "$bytes" "${signer:-unknown}" "$apk_sha"
 adb_dev install -r -g "$apk" 2>&1 | tail -2
 nz_launcher_component "$serial" | grep -qF 'fr.neezer.mobile/' ||
     { note "fr.neezer.mobile ne résout pas son lanceur après l'installation de $apk"; exit 1; }
@@ -206,6 +210,7 @@ explore() {
     NEEZER_APK_NAME="$apk_name" \
     NEEZER_APK_BYTES="$bytes" \
     NEEZER_APK_SIGNER="${signer:-unknown}" \
+    NEEZER_APK_SHA256="$apk_sha" \
         python3 "$here/explore.py" --serial "$serial" --out "$out" \
             --max-nodes "$max_nodes" --max-minutes "$max_minutes" "$@"
 }
