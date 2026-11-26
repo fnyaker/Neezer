@@ -2431,6 +2431,16 @@ and `fmt --check` clean; `nz-audio`'s own suite plus its new `tests/readahead.rs
   45 s title under the next row's index**; the next launch resumed 44 s into a title. The clock is
   stored only when the engine's `current_id` is that row, else 0.
 
+- **A manual skip plays the voice the preload already decoded.** `load` used to always call
+  `engine.load`, which throws the preloaded voice away and re-opens the source: a tap on « suivant »
+  paid exactly what `preload_next` had just paid. When the row is the preloaded one, at its own
+  quality and at position 0, `load` now calls `Engine::skip_to_preloaded` — the mixer promotes it in
+  the same buffer (no `Ended`; the replaced voice gets the web player's 60 ms cut) and no request is
+  made; any mismatch falls back to the real `load`. Measured:
+  `a_manual_next_plays_the_preloaded_voice_without_a_silent_gap` — `/api/stream/<suivant>` opened
+  **once** for the preload and **not again** after the skip, no 5 ms all-zero window across the
+  switch, and **0.000000** worst sample difference from the second file's own frames.
+
 **Still owed to a later lot**: MB3a/MB3c consume `Player::take_sink()` for the device output;
 MB10 feeds `NowPlaying.liked` (the queue's own rows carry no like flag, so it is `false` until a
 like/dislike patch says otherwise); MB12 reads `AudioRoute` through `output_stats`' `buffer_ms` and

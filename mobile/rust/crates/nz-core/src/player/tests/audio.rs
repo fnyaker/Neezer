@@ -397,3 +397,135 @@ fn wait_state_count(player: &crate::player::Player, len: u32) -> crate::player::
     }
     player.snapshot()
 }
+
+/// **A manual skip plays the voice that was already decoded.** After the first
+/// row is playing, the second one is preloaded; tapping next must promote that
+/// voice in the mixer instead of reopening its source, with no silent window
+/// across the switch and the second file's own samples from its first frame.
+///
+/// Measured: the preloaded voice is consumed, `/api/stream/<next>` was opened
+/// **once** before the skip and **once** after (the preload), and the samples
+/// past the 60 ms skip cut match the file's cosine.
+#[test]
+fn a_manual_next_plays_the_preloaded_voice_without_a_silent_gap() {
+    let dir = TempDir::new("manual-next");
+    let bench = Bench::start();
+    let first = Fixture::Tone440.write(dir.path());
+    let second = Fixture::Second.write(dir.path());
+    bench.track("first", &first);
+    bench.track("second", &second);
+
+    let player = player_for(&dir, bench.base());
+    let (_, mut sink) = player.take_sink().expect("the sink");
+    player.command(
+        Command::PlayQueue {
+            tracks: vec![track_ref_of("first", 3), track_ref_of("second", 1)],
+            start: 0,
+            context: None,
+        },
+        1,
+    );
+    let _ = pump_until_audio(&mut sink, &player, 30.0, 0.05);
+
+    // Let the preload of the second row land, exactly as a real player would
+    // during the first seconds of the track.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while player.engine.preloaded_id().as_deref() != Some("second")
+        && std::time::Instant::now() < deadline
+    {
+        let _ = pump(&mut sink, 0.01);
+    }
+    assert_eq!(
+        player.engine.preloaded_id().as_deref(),
+        Some("second"),
+        "the second row never landed in the preload voice"
+    );
+    let opens_before = stream_opens(&bench, "second");
+
+    // The skip happens MID-TRACK, where a rebuild is what used to be heard.
+    let _ = pump(&mut sink, 0.3);
+    player.command(Command::Next, 1);
+    // Collect buffer by buffer and note the buffer the promoted voice starts in:
+    // the mixer drains `PromoteNext` at the TOP of a callback, so the promoted
+    // voice's first frame is that buffer's first sample.
+    let mut after = Vec::new();
+    let mut switch_at = None;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while after.len() < 62_400 * 2 && std::time::Instant::now() < deadline {
+        let before = after.len();
+        let buffer = pump(&mut sink, 0.01);
+        after.extend_from_slice(&buffer);
+        if switch_at.is_none() && player.engine.current_id().as_deref() == Some("second") {
+            switch_at = Some(before);
+        }
+    }
+    let switch = switch_at.expect("the promoted voice never became the current one");
+    let from_start = &after[switch..];
+    assert!(
+        from_start.len() >= 60_000,
+        "the promoted voice did not play long enough: {} frames",
+        from_start.len() / 2
+    );
+
+    // The queued voice was consumed, and its source was NOT reopened.
+    assert_ne!(
+        player.engine.preloaded_id().as_deref(),
+        Some("second"),
+        "the promoted voice is still the queued one"
+    );
+    assert_eq!(
+        stream_opens(&bench, "second"),
+        opens_before,
+        "a manual skip reopened the source the preload had already decoded"
+    );
+
+    // No 5 ms (240 frames) of digital silence across the switch (the end of the
+    // 1 s file is its own, legitimate silence, so the scan stays at the seam).
+    let seam_end = (switch + (0.4 * 48_000.0) as usize * 2).min(after.len());
+    for window in after[switch.saturating_sub(960)..seam_end].chunks(240 * 2) {
+        assert!(
+            window.iter().any(|sample| *sample != 0.0),
+            "a 5 ms window is silent across the switch"
+        );
+    }
+
+    // Past the 60 ms skip cut, the samples are the second file's own, from its
+    // beginning: `Second` is `0.5*cos(2*pi*440*t)` cut at one whole second, so
+    // its frames are that cosine again.
+    let expected: Vec<f32> = (0..48_000)
+        .flat_map(|index| {
+            let value =
+                0.5 * (std::f64::consts::TAU * 440.0 * f64::from(index) / 48_000.0).cos() as f32;
+            [value, value]
+        })
+        .collect();
+    let start = (0.15 * 48_000.0) as usize * 2;
+    let end = (0.6 * 48_000.0) as usize * 2;
+    let mut worst = 0.0f32;
+    for (played, reference) in from_start[start..end].iter().zip(&expected[start..end]) {
+        worst = worst.max((played - reference).abs());
+    }
+    println!(
+        "manual next: {worst:.6} worst difference from the second file's own samples, {} stream opens",
+        stream_opens(&bench, "second")
+    );
+    assert!(
+        worst < 0.02,
+        "the second row did not start from its beginning: {worst:.6}"
+    );
+
+    // The queue really advanced.
+    let snapshot = wait_state_count(&player, 2);
+    assert_eq!(snapshot.index, Some(1), "the queue did not advance");
+    player.shutdown();
+}
+
+/// How many times `/api/stream/<id>` was opened (the query string excluded).
+fn stream_opens(bench: &Bench, id: &str) -> usize {
+    let path = format!("/api/stream/{id}");
+    bench
+        .recorded()
+        .iter()
+        .filter(|request| request.target() == path)
+        .count()
+}

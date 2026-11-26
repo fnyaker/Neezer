@@ -173,6 +173,12 @@ pub(crate) enum MixerCmd {
     InstallCurrent(Option<VoiceConsumer>),
     /// The preloaded next voice (gapless handover), or `None` to drop it.
     InstallNext(Option<VoiceConsumer>),
+    /// A MANUAL skip onto the preloaded voice: when `self.next` carries this
+    /// generation it becomes the current one in the SAME buffer, the voice it
+    /// replaces takes the web player's [`crossfade::SKIP_CUT_SECONDS`] ramp out,
+    /// and `Started` is announced for the promoted generation. A generation
+    /// that does not match is ignored (the caller falls back to a real load).
+    PromoteNext { generation: u64 },
     /// The trim end the server measured, arriving after the voice was built (the
     /// app asks for the bounds of the track it is playing as well as the next).
     SetCurrentEnd(Option<f64>),
@@ -358,47 +364,90 @@ impl Mixer {
     /// before a single sample is read — paused or not, so a track installed
     /// while the mixer is paused is the one that will be heard.
     fn drain(&mut self) {
+        // PromoteNext is applied BEFORE the other install commands of the same
+        // buffer: a manual skip and a load that would rebuild the same voice can
+        // arrive together, and the voice already decoded must win over a new
+        // opening. The ring holds eight commands and nothing is allocated here.
+        let mut pending: [Option<MixerCmd>; 8] = core::array::from_fn(|_| None);
+        let mut count = 0;
         while let Ok(cmd) = self.cmds.pop() {
-            match cmd {
-                MixerCmd::InstallCurrent(Some(voice)) => {
-                    self.install_current(voice);
+            if let Some(slot) = pending.get_mut(count) {
+                *slot = Some(cmd);
+                count += 1;
+            }
+        }
+        for slot in pending.iter_mut().take(count) {
+            // 1. The queued next voice lands first: a PromoteNext in the same
+            // drain consumes it.
+            if matches!(slot.as_ref(), Some(MixerCmd::InstallNext(_)))
+                && let Some(cmd) = slot.take()
+            {
+                self.apply(cmd);
+            }
+        }
+        for slot in pending.iter_mut().take(count) {
+            // 2. A manual skip is applied BEFORE the other install commands: a
+            // PromoteNext and a Load that would rebuild the same voice can
+            // arrive together, and the voice already decoded must win.
+            let promote = match slot.as_ref() {
+                Some(MixerCmd::PromoteNext { generation }) => Some(*generation),
+                _ => None,
+            };
+            if let Some(generation) = promote {
+                *slot = None;
+                self.promote_next(generation);
+            }
+        }
+        for slot in pending.iter_mut().take(count) {
+            if let Some(cmd) = slot.take() {
+                self.apply(cmd);
+            }
+        }
+    }
+
+    /// Every command but [`MixerCmd::PromoteNext`], which [`Mixer::drain`] has
+    /// already applied.
+    fn apply(&mut self, cmd: MixerCmd) {
+        match cmd {
+            MixerCmd::InstallCurrent(Some(voice)) => {
+                self.install_current(voice);
+            }
+            MixerCmd::InstallCurrent(None) | MixerCmd::Shutdown => {
+                self.drop_all();
+            }
+            MixerCmd::InstallNext(Some(voice)) => {
+                if let Some(old) = self.next.replace(voice) {
+                    old.stop();
                 }
-                MixerCmd::InstallCurrent(None) | MixerCmd::Shutdown => {
-                    self.drop_all();
+            }
+            MixerCmd::InstallNext(None) => {
+                if let Some(old) = self.next.take() {
+                    old.stop();
                 }
-                MixerCmd::InstallNext(Some(voice)) => {
-                    if let Some(old) = self.next.replace(voice) {
-                        old.stop();
+            }
+            MixerCmd::PromoteNext { .. } => {}
+            MixerCmd::SetCurrentEnd(end) => {
+                if let Some(current) = self.current.as_mut() {
+                    current.trim_end_s = end;
+                    if end.is_some() {
+                        current.fade_end_s = end;
                     }
                 }
-                MixerCmd::InstallNext(None) => {
-                    if let Some(old) = self.next.take() {
-                        old.stop();
-                    }
+            }
+            MixerCmd::SetCurrentLoudness(loudness) => {
+                // Only the field moves: the next buffer's `sync_gain` derives
+                // the gain from it and ramps over 10 ms, exactly like a level
+                // change (a step here would be a click).
+                if let Some(current) = self.current.as_mut() {
+                    current.loudness = loudness;
                 }
-                MixerCmd::SetCurrentEnd(end) => {
-                    if let Some(current) = self.current.as_mut() {
-                        current.trim_end_s = end;
-                        if end.is_some() {
-                            current.fade_end_s = end;
-                        }
-                    }
-                }
-                MixerCmd::SetCurrentLoudness(loudness) => {
-                    // Only the field moves: the next buffer's `sync_gain` derives
-                    // the gain from it and ramps over 10 ms, exactly like a level
-                    // change (a step here would be a click).
-                    if let Some(current) = self.current.as_mut() {
-                        current.loudness = loudness;
-                    }
-                }
-                MixerCmd::Meter(on) => {
-                    self.meter_on = on;
-                    self.master.set_meter(on);
-                }
-                MixerCmd::TapAttach(slot) => {
-                    self.tap.attach(slot);
-                }
+            }
+            MixerCmd::Meter(on) => {
+                self.meter_on = on;
+                self.master.set_meter(on);
+            }
+            MixerCmd::TapAttach(slot) => {
+                self.tap.attach(slot);
             }
         }
     }
@@ -483,6 +532,47 @@ impl Mixer {
             generation: incoming.voice.generation,
         });
         self.outgoing = Some(current);
+        self.current = Some(incoming);
+        true
+    }
+
+    /// A MANUAL skip onto the already-decoded next voice: it becomes the current
+    /// one here, in this very buffer, and the voice it replaces gets the web
+    /// player's 60 ms cut (`crossfade::SKIP_CUT_SECONDS`) instead of a rebuild.
+    /// No `Ended` is emitted for the old voice: the queue moved on, it did not
+    /// run out. `false` means the voice is no longer the queued one (a newer
+    /// preload replaced it), and the caller falls back to a real load.
+    fn promote_next(&mut self, generation: u64) -> bool {
+        if self.next.as_ref().map(|voice| voice.generation) != Some(generation) {
+            return false;
+        }
+        let Some(next) = self.next.take() else {
+            return false;
+        };
+        let mut incoming = Playing::new(next, self.sample_rate);
+        incoming.sync_gain(self.settings.normalization());
+        // The web player's skip cut: a short ramp out of the old track and into
+        // the new one, long enough to kill the click and short enough to hear
+        // the tap as immediate (`Player.svelte#SKIP_FADE`). A fade already in
+        // flight leaves room for one outgoing voice only: it is stopped, and the
+        // voice that was current takes its place.
+        let ms = crossfade::SKIP_CUT_SECONDS * 1_000.0;
+        if let Some(mut current) = self.current.take() {
+            current.fx.fade_to(0.0, ms);
+            if let Some(old) = self.outgoing.replace(current) {
+                old.voice.stop();
+            }
+        }
+        incoming.fx.fade_to(0.0, 0.0);
+        incoming.fx.fade_to(1.0, ms);
+        self.shared.clock.start_at(incoming.voice.start_s);
+        self.shared.note_current(incoming.voice.generation);
+        self.started = false;
+        self.ended_gen = None;
+        self.reported_media = 0;
+        let _ = self.notes.push(MixerNote::Started {
+            generation: incoming.voice.generation,
+        });
         self.current = Some(incoming);
         true
     }
@@ -919,6 +1009,84 @@ mod tests {
             vec![MixerNote::Started { generation: 1 }],
             "a failure must not emit Started for the next voice, nor an Ended to advance on"
         );
+    }
+
+    /// **A manual skip does not rebuild the voice it already has.** The next
+    /// title was decoded and queued: promoting it must put its samples in the
+    /// SAME buffer, announce `Started`, and leave no silent window across the
+    /// switch; the voice it replaces must stay in `outgoing` for the web
+    /// player's 60 ms cut (2 880 frames at 48 kHz), not stop dead.
+    ///
+    /// Measured before the fix: a skip re-opened the source and the preloaded
+    /// voice was thrown away — the `PromoteNext` path did not exist.
+    #[test]
+    fn a_manual_skip_promotes_the_preloaded_voice_without_a_gap() {
+        let shared = Arc::new(MixerShared::new(48_000, 1.0));
+        shared.set_paused(false);
+        let (note_tx, mut note_rx) = RingBuffer::new(64);
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
+            Arc::clone(&shared),
+            note_tx,
+            Settings::new(),
+            crate::tap::Tap::pair(crate::tap::TAP_FRAMES).0,
+            48_000,
+        );
+        let (mut a, a_consumer, _a_status) = voice_ring(48_000, 0.5, 1, 0.0);
+        let (mut b, b_consumer, _b_status) = voice_ring(48_000, 0.5, 2, 0.0);
+        // Two distinct levels: what is heard after the switch can only be B.
+        for _ in 0..24_000 {
+            a.push(&[0.1, 0.1]);
+            b.push(&[0.9, 0.9]);
+        }
+        cmds.push(MixerCmd::InstallCurrent(Some(a_consumer)))
+            .unwrap();
+        cmds.push(MixerCmd::InstallNext(Some(b_consumer))).unwrap();
+
+        let mut out = vec![0.0f32; 480 * 2];
+        mixer.render(&mut out);
+        assert_eq!(note_rx.pop().unwrap(), MixerNote::Started { generation: 1 });
+        // A plays for one buffer, so the skip happens mid-track.
+        mixer.render(&mut out);
+        assert!(out.iter().all(|s| (*s - 0.1).abs() < 1e-5));
+
+        // The person taps next: the preloaded voice is promoted, in this buffer.
+        cmds.push(MixerCmd::PromoteNext { generation: 2 }).unwrap();
+        out.fill(0.0);
+        mixer.render(&mut out);
+        assert_eq!(
+            note_rx.pop().ok(),
+            Some(MixerNote::Started { generation: 2 }),
+            "the promoted voice must announce itself in the render that drained PromoteNext"
+        );
+        // The old voice still sounds under the new one at the very first frame
+        // (gain 1 out, gain 0 in): nothing was cut dead.
+        assert!(
+            (out[0] - 0.1).abs() < 1e-5,
+            "first frame after the skip {:.4}, expected the old voice at 0.1",
+            out[0]
+        );
+        // B is audible in the SAME buffer (the fade-in is 10 ms in by the end).
+        let last = out[out.len() - 1];
+        assert!(
+            last > 0.2,
+            "the preloaded voice is not in this buffer (last sample {last:.4})"
+        );
+        // No 5 ms (240 frames) all-zero window across the switch.
+        for window in out.chunks(240 * 2) {
+            assert!(
+                window.iter().any(|sample| *sample != 0.0),
+                "a 5 ms window is silent across the switch"
+            );
+        }
+        assert!(
+            mixer.outgoing.is_some(),
+            "the replaced voice must be in outgoing for its 60 ms ramp"
+        );
+        // 60 ms later (2 880 frames) the ramp is over and A is gone.
+        let mut rest = vec![0.0f32; 3_000 * 2];
+        mixer.render(&mut rest);
+        assert!(mixer.outgoing.is_none(), "the 60 ms ramp out never ended");
+        assert_eq!(shared.underruns(), 0, "a promotion is not a gap");
     }
 
     #[test]
