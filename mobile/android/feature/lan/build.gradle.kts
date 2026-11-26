@@ -111,5 +111,4 @@ val repoRoot = rootProject.layout.projectDirectory.dir("../..")
 
 tasks.withType<Test>().configureEach {
     systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
-    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/lan/LN14").asFile.absolutePath)
 }

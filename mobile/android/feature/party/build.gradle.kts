@@ -101,12 +101,11 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
 }
 
-// The screenshot test writes the PNGs the lot commits under
-// `docs/agents/screenshots/mobile/MB20/` (the acceptance asks for them there).
+// T3: the goldens live in `mobile/android/screenshots`; `nz.repoRoot` stays
+// for the tests that read the SPA's own files.
 // Absolute paths, handed to the test: no test carries `../../..` arithmetic.
 val repoRoot = rootProject.layout.projectDirectory.dir("../..")
 
 tasks.withType<Test>().configureEach {
     systemProperty("nz.repoRoot", repoRoot.asFile.absolutePath)
-    systemProperty("nz.screenshots", repoRoot.dir("docs/agents/screenshots/mobile/MB20").asFile.absolutePath)
 }

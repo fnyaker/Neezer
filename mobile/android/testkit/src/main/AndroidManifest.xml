@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- T3's test-only module: it declares no component and ships no production
+     code. The manifest exists because an Android library has one and because a
+     consumer's Robolectric render needs a merged manifest to host a window. -->
+<manifest />

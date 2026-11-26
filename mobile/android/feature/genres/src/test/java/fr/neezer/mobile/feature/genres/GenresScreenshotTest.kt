@@ -1,29 +1,23 @@
 package fr.neezer.mobile.feature.genres
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.os.Looper
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
-import androidx.compose.ui.unit.Density
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.onNodeWithText
+import fr.neezer.mobile.testkit.AtfSuppressions
 import fr.neezer.mobile.designsystem.NzMotionLevel
-import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.testkit.ScreenGoldenRule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -31,256 +25,185 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import java.io.File
+import uniffi.nz_ffi.GenreRankedTag
 
 /**
- * Le studio rendu : ses quatre onglets en Encre et Papier à 360 dp (le téléphone)
- * et 600 dp (la colonne de lecture), plus l'échelle 200 % que l'acceptation
- * demande, sous `docs/agents/screenshots/mobile/MB18/`.
+ * Le studio de genres, rendu et VERIFIED : les douze puces de genre
+ * (`Chanson française`, `Hip-hop alternatif`, …) dans la feuille d'étiquetage et
+ * l'arbre, à 360 et 412 dp et aux échelles 1.0 et 1.3 (la matrice du plan T3).
  *
- * Le rendu est le backend NATIF de Robolectric (Skia sur l'hôte) : vraie mise en
- * page, vrai texte, vrais pixels, sur la JVM — aucun émulateur, aucune fenêtre sur
- * l'écran de la personne (règle 7). La recette que MB1 a mesurée et que MB5, MB6,
- * MB7, MB16 et MB17 réutilisent.
- *
- * Ce qui est dessiné est la VRAIE page ([GenresPage]) sur [FakeGenresService] :
- * une capture d'une maquette n'aurait pas attrapé les défauts de mise en page.
+ * T3 a remplacé les captures MB18 — qui écrivaient un PNG sans jamais le
+ * comparer — par ces goldens. Les deux autres défauts rapportés du studio sont
+ * des nombres que la puce doit tenir : chaque puce est une cible de 48 dp, les
+ * puces d'une rangée partagent leur ligne, et la première commence à la marge de
+ * contenu de la page.
  */
-abstract class GenresScreenshotBase(protected val width: Int) {
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w360dp-h900dp-xhdpi")
+class GenresGoldenTest {
+
     @get:Rule
-    val rule = createAndroidComposeRule<ComponentActivity>()
+    val rule = ScreenGoldenRule()
 
-    protected val outputDir: File
-        get() = File(
-            System.getProperty("nz.screenshots")
-                ?: error("nz.screenshots is not set: the screenshot test writes the lot's images"),
-        )
+    private val scope = CoroutineScope(Dispatchers.Main)
 
-    protected fun capture(
-        tab: String,
-        theme: NzThemeKind,
-        fontScale: Float = 1f,
-        service: FakeGenresService = prepared(),
-        name: String = "mb18-${slug(tab)}-${theme.name.lowercase()}-${width}dp" +
-            (if (fontScale > 1f) "-font${(fontScale * 100).toInt()}" else "") + ".png",
-        open: ((GenresModel) -> Unit)? = null,
-        before: ((GenresModel) -> Unit)? = null,
-    ) {
-        val scope = CoroutineScope(Dispatchers.Main)
-        val model = GenresModel(service, scope, io = Dispatchers.Main, toast = {})
-        model.open()
-        // The page's own reads land on the main looper: drain it BEFORE a test
-        // drives the screen, or it would open a sheet on an empty list.
-        shadowOf(Looper.getMainLooper()).idle()
-        before?.invoke(model)
-        model.selectTab(tab)
-        shadowOf(Looper.getMainLooper()).idle()
-        open?.invoke(model)
-        shadowOf(Looper.getMainLooper()).idle()
+    @Test
+    fun treeAt360() = shotTree(360, 1.0f)
 
-        rule.setContent {
-            NzTheme(kind = theme, accent = null, motion = NzMotionLevel.Full) {
-                val density = LocalDensity.current
-                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
-                    Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
-                        GenresPage(nav = null, model = model)
-                    }
-                }
-            }
-        }
-        shadowOf(Looper.getMainLooper()).idle()
-        rule.waitForIdle()
+    @Test
+    @Config(sdk = [35], qualifiers = "w360dp-h900dp-xhdpi", fontScale = 1.3f)
+    fun treeAt360At130Percent() = shotTree(360, 1.3f)
 
-        val view = rule.activity.window.decorView
-        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        view.draw(Canvas(full))
-        val bitmap = cropToContent(full, theme)
-        outputDir.mkdirs()
-        val file = File(outputDir, name)
-        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
+    @Test
+    @Config(sdk = [35], qualifiers = "w412dp-h900dp-xhdpi")
+    fun treeAt412() = shotTree(412, 1.0f)
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w412dp-h900dp-xhdpi", fontScale = 1.3f)
+    fun treeAt412At130Percent() = shotTree(412, 1.3f)
+
+    private fun shotTree(width: Int, scale: Float) {
+        render(tab = GenresCopy.TAB_TREE, fontScale = scale)
+        rule.capture("genres-arbre-${width}dp-f$scale.png")
         scope.cancel()
     }
 
-    /** A block rendered on its own (a page too tall for the window). */
-    protected fun captureContent(
-        theme: NzThemeKind,
-        name: String,
-        fontScale: Float = 1f,
-        content: @androidx.compose.runtime.Composable () -> Unit,
-    ) {
-        rule.setContent {
-            NzTheme(kind = theme, accent = null, motion = NzMotionLevel.Full) {
-                val density = LocalDensity.current
-                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
-                    Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
-                        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                            Box(
-                                Modifier.padding(
-                                    start = NzSpacing.pageX,
-                                    end = NzSpacing.pageX,
-                                    top = NzSpacing.l,
-                                ),
-                            ) { content() }
-                        }
-                    }
+    private fun render(tab: String, fontScale: Float = 1f) {
+        val model = GenresModel(service(), scope, io = Dispatchers.Main, toast = {})
+        model.open()
+        shadowOf(Looper.getMainLooper()).idle()
+        model.selectTab(tab)
+        shadowOf(Looper.getMainLooper()).idle()
+        rule.setContent(fontScale) {
+            NzTheme(kind = NzThemeKind.Encre, accent = null, motion = NzMotionLevel.Full) {
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    GenresPage(nav = null, model = model)
                 }
             }
         }
         shadowOf(Looper.getMainLooper()).idle()
-        rule.waitForIdle()
-        val view = rule.activity.window.decorView
-        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        view.draw(Canvas(full))
-        val bitmap = cropToContent(full, theme)
-        outputDir.mkdirs()
-        val file = File(outputDir, name)
-        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        println("SCREENSHOT $name ${bitmap.width}x${bitmap.height} ${file.absolutePath} ${file.length()} bytes")
-    }
-
-    private fun cropToContent(full: Bitmap, theme: NzThemeKind): Bitmap {
-        val background = Sillon.theme(theme).bg.toArgb()
-        var last = full.height - 1
-        val row = IntArray(full.width)
-        while (last > 0) {
-            full.getPixels(row, 0, full.width, 0, last, full.width, 1)
-            if (row.any { it != background }) break
-            last--
-        }
-        val height = (last + 24).coerceIn(1, full.height)
-        if (height <= 24) return full
-        return Bitmap.createBitmap(full, 0, 0, full.width, height)
-    }
-
-    // --- *Étiquetage* -------------------------------------------------------
-
-    @Test
-    fun taggingInEncre() = capture(GenresCopy.TAB_TAG, NzThemeKind.Encre)
-
-    @Test
-    fun taggingInPapier() = capture(GenresCopy.TAB_TAG, NzThemeKind.Papier)
-
-    @Test
-    fun taggingAtTwoHundredPercent() = capture(
-        GenresCopy.TAB_TAG,
-        NzThemeKind.Papier,
-        fontScale = 2f,
-    )
-
-    private fun slug(tab: String): String = when (tab) {
-        GenresCopy.TAB_LIBRARY -> "library"
-        GenresCopy.TAB_TREE -> "tree"
-        GenresCopy.TAB_MODEL -> "model"
-        else -> "tagging"
+        rule.composeRule.waitForIdle()
     }
 }
 
 /**
- * 360 dp: the phone the app is designed for first, and the ONE class that also
- * captures the states a tab does not always show (a failure, an empty page, a
- * trained head, the two sheets, the 200 % font). The tablet class keeps the four
- * tabs: a lot's images are a review cost, and 30 PNGs were 5.5 MB.
+ * The tag sheet's twelve chips, and the geometry they must keep.
+ *
+ * The one suppression: [NzSheet]'s tap-anywhere veil is a full-window clickable
+ * with no speakable text (ATF's `SpeakableTextPresentCheck`). It is a real
+ * finding in the design system's file — the veil only takes a tap, and a
+ * screen-reader user dismisses with the system back — but fixing it is a
+ * production change T3 does not own (plan T3: production layout out of scope).
+ * So the suppression is HERE, on this one screen's rule, and matches the exact
+ * shape of that node: the check, `android.view.View`, clickable, and no text or
+ * description. It is not global: every other golden class runs with none.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w360dp-h2400dp-xhdpi")
-class GenresScreenshotPhoneTest : GenresScreenshotBase(width = 360) {
-    /** A failed first read: the cause and « Réessayer », never a spinner. */
-    @Test
-    fun aFailedLoadNamesItsCause() = capture(
-        tab = GenresCopy.TAB_TAG,
-        theme = NzThemeKind.Encre,
-        service = prepared().apply { failures["candidates"] = "Le serveur ne répond pas" },
-        name = "mb18-failure-encre-${width}dp.png",
-    )
+@Config(sdk = [35], qualifiers = "w360dp-h900dp-xhdpi")
+class GenresChipsGoldenTest {
 
-    /** Nothing left to tag: the page says so instead of an empty card. */
-    @Test
-    fun nothingLeftToTag() = capture(
-        tab = GenresCopy.TAB_TAG,
-        theme = NzThemeKind.Papier,
-        service = prepared().apply { candidates = emptyList() },
-        name = "mb18-empty-papier-${width}dp.png",
-    )
+    @get:Rule
+    val rule = ScreenGoldenRule(accessibilitySuppressions = AtfSuppressions.sheetVeil)
 
-    // --- *Bibliothèque* -----------------------------------------------------
+    private val scope = CoroutineScope(Dispatchers.Main)
 
     @Test
-    fun libraryInEncre() = capture(GenresCopy.TAB_LIBRARY, NzThemeKind.Encre)
+    fun twelveChipsAt360() = shotChips(360, 1.0f)
 
     @Test
-    fun libraryInPapier() = capture(GenresCopy.TAB_LIBRARY, NzThemeKind.Papier)
+    @Config(sdk = [35], qualifiers = "w360dp-h900dp-xhdpi", fontScale = 1.3f)
+    fun twelveChipsAt360At130Percent() = shotChips(360, 1.3f)
 
     @Test
-    fun libraryAtTwoHundredPercent() = capture(
-        GenresCopy.TAB_LIBRARY,
-        NzThemeKind.Papier,
-        fontScale = 2f,
-    )
-
-    // --- *Arbre* ------------------------------------------------------------
+    @Config(sdk = [35], qualifiers = "w412dp-h900dp-xhdpi")
+    fun twelveChipsAt412() = shotChips(412, 1.0f)
 
     @Test
-    fun treeInEncre() = capture(GenresCopy.TAB_TREE, NzThemeKind.Encre)
+    @Config(sdk = [35], qualifiers = "w412dp-h900dp-xhdpi", fontScale = 1.3f)
+    fun twelveChipsAt412At130Percent() = shotChips(412, 1.3f)
 
+    /**
+     * T3's filter chips, as numbers: every chip of the genre row is a ≥ 48 dp
+     * target, they all sit on one line (equal bottoms — a clipped chip is the
+     * defect), and the first one starts on the page's 20 dp content padding.
+     */
     @Test
-    fun treeInPapier() = capture(GenresCopy.TAB_TREE, NzThemeKind.Papier)
+    fun everyChipIsATargetOnOneLineAtTheContentPadding() {
+        render(withSheet = false)
+        val chips = GenresCopy.TABS.map { rule.composeRule.onNodeWithText(it).getUnclippedBoundsInRoot() }
+        val bottoms = chips.map { it.bottom.value }
+        val heights = chips.map { (it.bottom - it.top).value }
+        println(
+            "MEASURE t3 puces: heights=$heights lefts=${chips.map { it.left.value }} " +
+                "bottoms=$bottoms",
+        )
+        heights.forEach { assertTrue("a chip is a 48 dp target ($it dp)", it >= 48f - 0.5f) }
+        bottoms.zipWithNext { a, b -> assertEquals("the chips share one line", a, b, 1f) }
+        assertEquals(
+            "the first chip starts at the page's content padding",
+            20f,
+            chips.first().left.value,
+            1f,
+        )
+        scope.cancel()
+    }
 
-    // --- *Modèle* -----------------------------------------------------------
+    private fun shotChips(width: Int, scale: Float) {
+        render(fontScale = scale)
+        rule.capture("genres-etiquettes-${width}dp-f$scale.png")
+        scope.cancel()
+    }
 
-    @Test
-    fun modelInEncre() = capture(GenresCopy.TAB_MODEL, NzThemeKind.Encre)
-
-    @Test
-    fun modelInPapier() = capture(GenresCopy.TAB_MODEL, NzThemeKind.Papier)
-
-    /** A trained head: the verdict, the per-class table, the confusions. */
-    @Test
-    fun aTrainedHead() = capture(
-        tab = GenresCopy.TAB_MODEL,
-        theme = NzThemeKind.Encre,
-        name = "mb18-head-encre-${width}dp.png",
-        before = { model ->
-            model.train()
-            shadowOf(Looper.getMainLooper()).idle()
-        },
-        open = { _ -> Unit },
-    )
-
-    // --- the sheets ---------------------------------------------------------
-
-    /** The bulk sheet: a disagreement arrives unticked. */
-    @Test
-    fun theBulkSheet() = capture(
-        tab = GenresCopy.TAB_MODEL,
-        theme = NzThemeKind.Papier,
-        name = "mb18-bulk-papier-${width}dp.png",
-        before = { model ->
-            model.openBulk(tag = "Frenchcore", scopeLabel = "Album « Al »", album = "42")
-        },
-    )
-
-    /** The tag sheet of one track. */
-    @Test
-    fun theTagSheet() = capture(
-        tab = GenresCopy.TAB_TAG,
-        theme = NzThemeKind.Encre,
-        name = "mb18-tag-sheet-encre-${width}dp.png",
-        before = { model ->
+    private fun render(withSheet: Boolean = true, fontScale: Float = 1f) {
+        val model = GenresModel(service(), scope, io = Dispatchers.Main, toast = {})
+        model.open()
+        // The page's own reads land on the main looper: drain it BEFORE the screen
+        // is driven, or the sheet opens on an empty list.
+        shadowOf(Looper.getMainLooper()).idle()
+        model.selectTab(GenresCopy.TAB_TAG)
+        shadowOf(Looper.getMainLooper()).idle()
+        if (withSheet) {
             model.openSheet("1001", "Premier titre")
-        },
-    )
-
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        rule.setContent(fontScale) {
+            NzTheme(kind = NzThemeKind.Encre, accent = null, motion = NzMotionLevel.Full) {
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    GenresPage(nav = null, model = model)
+                }
+            }
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+        rule.composeRule.waitForIdle()
+    }
 }
 
-/** 600 dp: the tablet shell's reading column. */
-@RunWith(RobolectricTestRunner::class)
-@GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w600dp-h1600dp-xhdpi")
-class GenresScreenshotTabletTest : GenresScreenshotBase(width = 600)
+private fun service(): FakeGenresService = prepared().apply {
+    ranking["1001"] = TWELVE_CHIPS
+}
 
-/** A fake service with the ranked vocabulary seeded: every capture needs it. */
+/**
+ * The matrix's twelve: real French genres, long enough that 1.3 has to either
+ * fit or wrap — never clip.
+ */
+private val TWELVE_CHIPS = listOf(
+    GenreRankedTag(101, "Chanson française", null, 24u, 0.42, 0.30, 0.50),
+    GenreRankedTag(102, "Hip-hop alternatif", null, 19u, 0.40, 0.28, 0.48),
+    GenreRankedTag(103, "Électro-pop", null, 17u, 0.38, 0.26, 0.46),
+    GenreRankedTag(104, "Rock français", null, 15u, 0.36, 0.24, 0.44),
+    GenreRankedTag(105, "Jazz manouche", null, 12u, 0.34, 0.22, 0.42),
+    GenreRankedTag(106, "Musique de chambre", null, 11u, 0.32, 0.20, 0.40),
+    GenreRankedTag(107, "Soul rétro", null, 10u, 0.30, null, null),
+    GenreRankedTag(108, "Ambient planant", null, 9u, 0.28, null, null),
+    GenreRankedTag(109, "Chanson engagée", null, 8u, 0.26, null, null),
+    GenreRankedTag(110, "Afrobeat contemporain", null, 7u, 0.24, null, null),
+    GenreRankedTag(111, "Punk mélodique", null, 6u, 0.22, null, null),
+    GenreRankedTag(112, "Bossa nova", null, 5u, 0.20, null, null),
+)
+
+/** A fake service with the ranked vocabulary seeded: every render needs it. */
 internal fun prepared(): FakeGenresService = FakeGenresService().apply {
     seedRanking()
     modelTab = modelTab.copy(

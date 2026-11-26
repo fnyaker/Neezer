@@ -14,6 +14,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.baselineprofile) apply false
     alias(libs.plugins.paparazzi) apply false
+    // T3: the golden plugin. `apply false` here and applied by :testkit and every
+    // module that hosts a golden, because `-Proborazzi.test.verify=true` is read
+    // by the plugin, module by module (without it the capture is a no-op).
+    id("io.github.takahirom.roborazzi") version "1.43.1" apply false
 }
 
 // A `@Composable` COMPILED WITHOUT THE COMPOSE COMPILER IS A CRASH, NOT A BUILD ERROR.
