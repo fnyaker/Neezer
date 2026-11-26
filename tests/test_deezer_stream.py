@@ -680,7 +680,9 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertTrue(wait_until(lambda: not live_threads(), timeout=5))
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
-    def test_a_reload_during_the_grace_reuses_the_same_download(self):
+    def test_a_reload_during_the_reuse_window_reuses_the_same_download(self):
+        """A skip, then the player's seek reload ~600 ms later: it must find the
+        `.part` still there and join it, not start a second download."""
         music = self._music_flac()
         opened = []
         resolved = []
@@ -699,8 +701,16 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         _mimetype, first = self._open()
         self.assertTrue(next(first))
         first.close()  # the chase reload drops the response...
-        _mimetype, second = self._open()  # ...and asks for the same track again
-        self.assertEqual(b"".join(second), music)
+        time.sleep(0.4)  # ...and the player asks again a moment later
+        started = time.monotonic()
+        _mimetype, second = self._open()
+        head = next(second)
+        elapsed = time.monotonic() - started
+        # Measured: first byte in 0.2 ms with the download 400 ms old, one
+        # producer, one Deezer resolve (a fresh download would pay the resolve
+        # plus the CDN's first bytes).
+        self.assertLess(elapsed, 0.5, f"a reload paid {elapsed * 1000:.0f} ms to rejoin")
+        self.assertEqual(head + b"".join(second), music)
         self.assertEqual(len(opened), 1, "the reload started a second download")
         self.assertEqual(len(resolved), 1, "the reload asked Deezer for the stream again")
         self.assertTrue(wait_until(lambda: os.path.exists(self.track.path)))
@@ -708,7 +718,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertEqual(self.aborted, 0)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
-    def test_an_abandoned_download_stops_after_the_grace_and_leaves_nothing(self):
+    def test_an_abandoned_download_stops_after_the_reuse_window_and_leaves_nothing(self):
         music = self._music_flac()
 
         def slow(url, tid):
@@ -721,12 +731,12 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self._resolve_to("http://127.0.0.1:1/never-read")
         _mimetype, stream = self._open()
         next(stream)
-        with mock.patch.object(archive, "LIVE_GRACE_SECONDS", 0.4):
+        with mock.patch.object(archive, "LIVE_REUSE_SECONDS", 0.4):
             stream.close()  # the person skipped to something else
             held = self._part_bytes()
             self.assertTrue(
                 wait_until(lambda: self._part_bytes() > held, timeout=5),
-                "the download stopped with the listener instead of finishing the grace",
+                "the download stopped with the listener instead of finishing the reuse window",
             )
             self.assertTrue(
                 wait_until(lambda: not self._leftovers(), timeout=20),
@@ -737,7 +747,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self.assertFalse(os.path.exists(self.track.path))
         self.assertEqual(Track[ids.track_uuid(self.SID)].last_modification, 0)
 
-    def test_an_abandoned_download_yields_the_link_to_the_next_track(self):
+    def test_an_abandoned_download_stops_and_frees_the_link_for_the_next_track(self):
         chunk = b"x" * 65536
         served = []
 
@@ -751,17 +761,15 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         self._resolve_to("http://127.0.0.1:1/never-read")
         _mimetype, stream = self._open()
         next(stream)
-        with mock.patch.object(archive, "LIVE_GRACE_SECONDS", 0.9), mock.patch.object(
-            archive, "LIVE_REUSE_SECONDS", 0.2
-        ), mock.patch.object(archive, "LIVE_ORPHAN_PACE", 0.3):
+        with mock.patch.object(archive, "LIVE_REUSE_SECONDS", 0.2):
             stream.close()
             self.assertTrue(wait_until(lambda: not live_threads(), timeout=20))
         self.assertLess(
             len(served),
             40,
-            "an abandoned download kept taking the link at full speed",
+            "an abandoned download kept taking the link after its reuse window",
         )
-        self.assertGreaterEqual(len(served), 2, "it stopped before its grace was over")
+        self.assertGreaterEqual(len(served), 2, "it stopped before the reuse window was over")
         self.assertEqual(self.aborted, 1)
 
     def test_a_file_that_already_exists_is_served_without_a_download(self):
@@ -811,7 +819,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
             self.assertFalse(live.running)
             self.assertIsNone(archive._live_lookup(live._key))
         finally:
-            with mock.patch.object(archive, "LIVE_GRACE_SECONDS", 0.2):
+            with mock.patch.object(archive, "LIVE_REUSE_SECONDS", 0.2):
                 stream.close()
                 self.assertTrue(wait_until(lambda: not live_threads(), timeout=20))
 
@@ -828,7 +836,7 @@ class LiveStreamTestCase(_CdnMixin, TestBase):
         _mimetype, stream = self._open()
         self.assertTrue(next(stream))
         with mock.patch.object(archive, "LIVE_STALL_SECONDS", 0.2), mock.patch.object(
-            archive, "LIVE_GRACE_SECONDS", 0.2
+            archive, "LIVE_REUSE_SECONDS", 0.2
         ):
             started = time.monotonic()
             with self.assertRaises(DeezerError):
@@ -1177,7 +1185,7 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
             download_ids=lambda ids, priority=None: self.queued.extend((i, priority) for i in ids)
         )
         self.app.config["DEEZER"]["archive_dir"] = self.archive_dir
-        self.prefetch_priority = Priority.PREFETCH
+        self.retry_priority = Priority.BULK
         patcher = mock.patch("neezer.deezer.analysis.queue_analysis", lambda *a, **k: None)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -1221,8 +1229,9 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
                 self.assertEqual(rv.status_code, 502)
                 self.assertEqual(rv.get_json(), {"error": "track unavailable"})
                 self.assertFalse(os.path.exists(self.track.path))
-                # It gets one more go in the background, ahead of bulk work.
-                self.assertEqual(self.queued, [(self.SID, self.prefetch_priority)])
+                # Nobody heard it: it gets one more go in the background,
+                # behind everything (BULK), never ahead of a track being played.
+                self.assertEqual(self.queued, [(self.SID, self.retry_priority)])
 
     def test_the_response_passes_everything_on_to_the_stream(self):
         from neezer.webui import _then
@@ -1276,6 +1285,72 @@ class StreamRouteTestCase(_CdnMixin, unittest.TestCase):
                 ]
             )
         )
+
+    def test_five_skipped_tracks_leave_no_producer_behind(self):
+        """Skipping five cold tracks in a row used to leave each download running
+        at full speed for a 10 s grace, then re-queue it at PREFETCH: five
+        producers competed with the track the person was actually hearing. Each
+        orphan must stop within 1.5 s of its last read, and go back to the queue
+        at BULK, where it yields to the playing stream."""
+        from neezer.deezer.workload import Priority
+
+        root = library.get_root_folder(self.archive_dir)
+        skipped = [f"41000{i}" for i in range(5)]
+        for n, sid in enumerate(skipped):
+            library.upsert_track(gw_info(sid, SNG_TITLE=f"Harder {n}"), root, "FLAC")
+
+        chunk = b"x" * 65536
+
+        def endless(url, tid):
+            while True:
+                yield chunk
+                time.sleep(0.02)
+
+        self.provider.iter_decrypted = endless
+        self.provider.resolve = lambda sng_id, quality=None: (
+            "http://127.0.0.1:1/never-read",
+            "FLAC",
+            gw_info(sng_id),
+            sng_id,
+        )
+
+        lives = {}
+        for sid in skipped:
+            rv = self.client.get(f"/api/stream/{sid}", buffered=False)
+            self.assertEqual(rv.status_code, 200)
+            self.assertTrue(next(iter(rv.response)), "the first block handed nothing on")
+            key = archive._live_key(self.provider, Track[ids.track_uuid(sid)])
+            lives[sid] = archive._live_downloads[key]
+            rv.close()  # the person skips to the next track
+
+        # Each abandoned producer stops within the bound (1.5 s, the reuse
+        # window is 1 s) and its `.part` is gone: nothing keeps taking the link.
+        # Measured: five skipped cold tracks, all five producers gone 1.02 s
+        # after the last skip (they used to run a 10 s grace, then re-queue at
+        # PREFETCH, five of them ahead of the track being heard).
+        stopped = time.monotonic()
+        self.assertTrue(
+            wait_until(
+                lambda: all(live.finished and not live.running for live in lives.values()),
+                timeout=1.5,
+            ),
+            "an orphaned producer outlived its reuse window",
+        )
+        self.assertLess(time.monotonic() - stopped, 1.5)
+        # Nobody is waiting for these bytes any more: each is given back to the
+        # background queue BEHIND everything (BULK), never at PREFETCH.
+        self.assertEqual(
+            sorted(self.queued),
+            sorted((sid, Priority.BULK) for sid in skipped),
+            "a skipped track was re-queued ahead of the one being played",
+        )
+        self.assertEqual(
+            [f for f in self._files(self.archive_dir) if ".part" in f],
+            [],
+            "an orphaned download left a .part behind",
+        )
+        for sid in skipped:
+            self.assertFalse(os.path.exists(Track[ids.track_uuid(sid)].path))
 
     def test_ready_and_a_seek_land_while_the_listener_stopped_reading(self):
         _need_ffmpeg()

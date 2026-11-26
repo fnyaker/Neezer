@@ -405,11 +405,11 @@ def import_show(provider, user, show_id, episode_limit=None) -> PodcastChannel:
     return channel
 
 
-LIVE_GRACE_SECONDS = 10.0
-
-LIVE_REUSE_SECONDS = 1.5
-
-LIVE_ORPHAN_PACE = 0.4
+#: How long an abandoned download keeps going, at full speed, so a seek reload of
+#: the SAME track can join it instead of starting over. The player's chase reads
+#: `/ready` at ~600 ms and then every second, so 1 s covers the reload; after
+#: that nobody is coming back and the producer stops at its next chunk.
+LIVE_REUSE_SECONDS = 1.0
 
 LIVE_PUBLISH_WAIT = 5.0
 
@@ -479,9 +479,10 @@ class _LiveArchive:
     renames it onto the archive path (readers keep reading the raw file and
     never see a half-tagged one), and finalises the row. Readers tail that
     ``.part``, each from the byte it needs. When the last reader leaves the
-    download keeps going for ``LIVE_GRACE_SECONDS`` so a seek reload of the same
-    track joins it instead of downloading it again; after the grace it stops and
-    hands what is left to ``on_abort`` (the background queue, at PREFETCH).
+    download keeps going for ``LIVE_REUSE_SECONDS`` so a seek reload of the same
+    track joins it instead of downloading it again; after that it stops at its
+    next chunk and hands what is left to ``on_abort`` (the background queue, at
+    BULK: the person already moved on).
     """
 
     def __init__(self, provider, track, url, fmt, info, used_id, on_abort):
@@ -617,29 +618,22 @@ class _LiveArchive:
         self._thread.start()
 
     def _stop_wanted(self) -> bool:
-        with self._cond:
-            abandoned = self._abandoned_at
-        if abandoned is None:
-            return False
-        return (time.monotonic() - abandoned) > LIVE_GRACE_SECONDS
-
-    def _orphan_pace(self) -> float:
-        """How long to wait between chunks once nobody is listening (0: full speed).
+        """True once nobody has listened for ``LIVE_REUSE_SECONDS``.
 
         The last listener leaving is usually a SKIP, and the next track must get
         the link — but a seek reload of the same track can land a moment later
-        (the player asks at 600 ms, then every second). So an abandoned download
-        keeps full speed for ``LIVE_REUSE_SECONDS`` (enough for a reload to join
-        and clear it), then hands back all but ~160 KB/s until the grace ends.
+        (the player asks at ~600 ms, then every second). So an abandoned
+        producer keeps full speed for ``LIVE_REUSE_SECONDS`` (enough for a reload
+        to join and clear it), then stops at its next chunk: the rest of the
+        file goes to the background queue at BULK (see ``_abort``). An orphan
+        must never keep taking the link from the track the person moved on to.
         """
         with self._cond:
             abandoned = self._abandoned_at
-        if abandoned is None:
-            return 0.0
-        if (time.monotonic() - abandoned) <= LIVE_REUSE_SECONDS:
-            return 0.0
-        self._decay()
-        return LIVE_ORPHAN_PACE
+            idle = self._readers <= 0
+        if not idle or abandoned is None:
+            return False
+        return (time.monotonic() - abandoned) > LIVE_REUSE_SECONDS
 
     def _wait_published(self, timeout: float) -> None:
         """Wait (bounded) for a download that is finished to be published."""
@@ -686,9 +680,6 @@ class _LiveArchive:
                             stopped = True
                             self._decay()
                             break
-                        pace = self._orphan_pace()
-                        if pace:
-                            time.sleep(pace)
             finally:
                 if closer is not None:
                     closer()
@@ -772,9 +763,9 @@ def open_live_stream(provider, track: Track, on_abort=None):
     The generator still hands its first block to the caller's first ``next()``,
     so a source that refuses (no stream, not audio, empty) is that route's 502
     rather than a response dying half-sent. A listener that leaves does not stop
-    the download: it runs ``LIVE_GRACE_SECONDS`` more so a seek reload of the
-    same track reuses it, and only then stops and calls ``on_abort`` (the
-    background queue takes the rest).
+    the download at once: it runs ``LIVE_REUSE_SECONDS`` more so a seek reload of
+    the same track reuses it, and only then stops at its next chunk and calls
+    ``on_abort`` (the background queue takes the rest, at BULK).
     """
     key = _live_key(provider, track)
     existing = _live_lookup(key)

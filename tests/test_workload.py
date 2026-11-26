@@ -207,14 +207,47 @@ class DownloadQueueTestCase(unittest.TestCase):
             pf.download_ids(["bulk"], Priority.BULK)
             pf.download_ids(["user"], Priority.USER)
             pf.download_ids(["next"], Priority.PREFETCH)
-            # Neither the user's own download nor the next track is held back —
-            # "within 2 s" is well under quiet_wait's 5 s cap, so a download
-            # that waited it out does not pass by being merely slow...
-            self._until(lambda: {"user", "next"} <= set(self.done), "the urgent ones", within=2.0)
+            # Only the person's own tap (USER) goes ahead; everything below it —
+            # including the next track's preload — waits while the stream they
+            # are hearing still needs the link.
+            self._until(lambda: "user" in self.done, "the user's own download", within=2.0)
             time.sleep(0.3)
-            # ...while the bulk one waits for as long as the foreground lasts.
+            self.assertNotIn("next", self.done, "a PREFETCH competed with a person's stream")
             self.assertNotIn("bulk", self.done)
-        self._until(lambda: "bulk" in self.done, "the bulk download once it is quiet", within=2.0)
+        self._until(
+            lambda: {"next", "bulk"} <= set(self.done),
+            "the preload and the bulk download once it is quiet",
+            within=2.0,
+        )
+
+    def test_prefetch_yields_to_the_track_the_person_is_hearing(self):
+        """The next track is preloaded at PREFETCH; while somebody's own stream
+        is downloading it must stand down, not split the one link."""
+        pf = self._prefetcher()
+        release = threading.Event()
+
+        def person_waiting():
+            with workload.foreground():
+                release.wait(WAIT)
+
+        t = threading.Thread(target=person_waiting)
+        t.start()
+        try:
+            pf.download_ids(["next"], Priority.PREFETCH)
+            time.sleep(0.4)
+            self.assertEqual(
+                self.calls,
+                [],
+                "a PREFETCH download started while the person's stream downloaded",
+            )
+        finally:
+            release.set()
+            t.join(WAIT)
+        self._until(
+            lambda: "next" in self.done,
+            "the preload once the stream is done",
+            within=2.0,
+        )
 
     def test_an_outage_is_waited_out_not_counted_as_a_failure(self):
         pf = self._prefetcher()
