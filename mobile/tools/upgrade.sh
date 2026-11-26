@@ -401,6 +401,29 @@ diagnose_download() {
         printf 'the app files dir:\n' >&2
         adb_dev shell "ls -la /data/data/$ui_package/files 2>&1 | head -20" >&2 || true
         adb_dev shell "df -k /data | tail -2" >&2 || true
+        # The store's OWN record. `downloads.error` is the sentence the worker
+        # wrote when it gave up — and the card draws NOTHING for it (measured:
+        # « 0 / 2 · 2 échec(s) » then the note then « Tout réessayer », with no
+        # cause line between), so the screen cannot answer this one.
+        db="$(adb_dev shell "find /data/data/$ui_package/files -name '*.db' 2>/dev/null | head -1" | tr -d '\r')"
+        if [[ -n "$db" ]]; then
+            printf 'the downloads table (%s):\n' "$db" >&2
+            adb_dev pull "$db" "$work/cache.db" >/dev/null 2>&1 || true
+            python3 - "$work/cache.db" <<'PY' >&2 || true
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+try:
+    rows = conn.execute("SELECT track, quality, state, error FROM downloads").fetchall()
+except sqlite3.Error as error:
+    print(f"  sqlite: {error}")
+    raise SystemExit(0)
+print(f"  {len(rows)} row(s)")
+for track, quality, state, error in rows:
+    print(f"  {track} {quality} {state} :: {error}")
+PY
+        else
+            printf 'no .db under the app files (find answered nothing)\n' >&2
+        fi
     fi
 }
 
