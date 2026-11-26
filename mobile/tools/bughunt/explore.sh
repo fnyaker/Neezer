@@ -49,7 +49,7 @@ out=""
 only=""
 scenario=""
 max_nodes=700
-max_minutes=25
+max_minutes=30
 start=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -154,10 +154,25 @@ resolve_apk() {
 }
 
 apksigner_bin() {
-    local latest
-    latest="$(find "$(nz_sdk_root)/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null |
-        sort -V | tail -1)"
-    printf '%s\n' "$latest"
+    # `command -v` first: the SDK's build-tools may be absent while apksigner is
+    # on the PATH (measured on the first CI run, 26/11: `signer=unknown`). Then
+    # every known SDK root, the one Gradle uses included.
+    local candidate latest root
+    candidate="$(command -v apksigner 2>/dev/null || true)"
+    if [[ -n "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    for root in "$(nz_sdk_root)" "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk"; do
+        [[ -d "$root/build-tools" ]] || continue
+        latest="$(find "$root/build-tools" -maxdepth 2 -name apksigner -type f 2>/dev/null |
+            sort -V | tail -1)"
+        if [[ -n "$latest" ]]; then
+            printf '%s\n' "$latest"
+            return 0
+        fi
+    done
+    printf '\n'
 }
 
 step "installer l'APK release"
@@ -166,14 +181,19 @@ resolve_apk || note "aucun APK : le workflow le passe en --apk, localement \`gra
 signer=""
 apksigner="$(apksigner_bin)"
 if [[ -n "$apksigner" ]]; then
-    certs="$("$apksigner" verify --print-certs "$apk" 2>/dev/null || true)"
+    if ! certs="$("$apksigner" verify --print-certs "$apk" 2>&1)"; then
+        # Never silent: on the first CI run the signer read `unknown` and the
+        # cause was nowhere in the log.
+        note "apksigner ($apksigner) n'a pas lu $apk : $(head -1 <<<"$certs")"
+        certs=""
+    fi
     signer="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$certs" | head -1 | cut -c1-16)"
     if grep -q 'CN=Android Debug' <<<"$certs"; then
         note "$apk est signé par la clé DEBUG : une chasse ne mesure pas un APK debug (plan §9.7)"
         exit 2
     fi
 else
-    note "apksigner introuvable sous $(nz_sdk_root)/build-tools : le signataire ne sera pas prouvé"
+    note "apksigner introuvable (PATH ni sous $(nz_sdk_root)/build-tools) : le signataire ne sera pas prouvé"
 fi
 bytes="$(stat -c %s "$apk")"
 apk_sha="$(sha256sum "$apk" | cut -c1-16)"

@@ -712,6 +712,16 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
   par chemin ; `precheck.Node` ne garde pas `resource-id`/`checkable`/`long-clickable`, donc le même
   dump est relu une seconde fois pour sa LISTE d'attributs avec les regex `TAG`/`ATTR` de precheck,
   zippée par ordre de document. Deux parseurs seraient deux vérités sur le même fichier ;
+- **le nom accessible se lit aussi sur un enfant, et l'identité le porte.** Un onglet Compose est un
+  `View` cliquable au `text`/`content-desc` VIDE, dont le libellé est un `TextView` enfant : avec le
+  nom lu sur le seul nœud, les quatre onglets partageaient une signature, trois étaient comptés
+  `duplicate` et la passe n'a jamais quitté l'accueil — `screens=1 elements=9 duplicates=20` au
+  premier run réel (26/11, run 45895651634). Le nom est donc le texte propre, le `content-desc`
+  propre, puis le texte du plus proche descendant, puis son `content-desc` : les onglets s'appellent
+  « Rechercher », « Biblio », « Réglages », le rapport est lisible, et `Réglages` redevient une porte
+  pour les scénarios. La règle du frère porte aussi le drapeau `checkable` dans la forme comparée,
+  sinon le bouton principal de l'accueil (« Lancer le Flow ») disparaissait comme doublon des six
+  cartes d'énergie qu'il ne remplace pas ;
 - **un conteneur défilable qui contient des contrôles n'est pas un élément** : ce sont ses enfants.
   Sans cette règle, le nœud racine de chaque écran devenait un `nothing` (mesuré sur le premier
   arbre factice : la racine de l'accueil et celle des Réglages, deux bugs `mineur` par écran qui
@@ -729,7 +739,7 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
 La **passe** part de l'accueil, explore en largeur les écrans par ordre de découverte, et se restaure
 par `BACK` (une fois après une navigation, jusqu'à 3 fois sinon) puis, en dernier recours, par
 `am force-stop` + `am start` + le **chemin de taps** enregistré à la découverte. Bornes : 700 nœuds,
-25 min, 15 s par nœud, un tap par nœud. Un élément hors écran est ramené par 3 glissements ; s'il
+30 min, 15 s par nœud, un tap par nœud. Un élément hors écran est ramené par 3 glissements ; s'il
 n'arrive pas, il est `unreachable` et compte **trouvé mais non cliqué** (`coverage=416/418 (99.5%)`
 reste honnête, §4.4). La règle du frère échantillonne 3 lignes sur ≥ 6 sœurs identiques (`duplicates=n`).
 

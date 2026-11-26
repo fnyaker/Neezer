@@ -294,7 +294,7 @@ class Adb:
 class Dump:
     """One screen, read once: the tree, its extra attributes, and its timing."""
 
-    __slots__ = ("text", "ms", "root", "nodes", "wraps", "kids")
+    __slots__ = ("text", "ms", "root", "nodes", "wraps", "kids", "by_id")
 
     def __init__(self, text: str | None, ms: int):
         self.text = text
@@ -303,6 +303,7 @@ class Dump:
         self.nodes: list = []
         self.wraps: list["W"] = []
         self.kids: dict[int, list["W"]] = {}
+        self.by_id: dict[int, "W"] = {}
         if text:
             self._parse()
 
@@ -332,8 +333,47 @@ class Dump:
         for node, attrs in zip(self.nodes, raw):
             wrap = W(node, attrs)
             self.wraps.append(wrap)
+            self.by_id[id(node)] = wrap
             if node.parent is not None:
                 self.kids.setdefault(id(node.parent), []).append(wrap)
+        self._resolve_names()
+
+    def _resolve_names(self) -> None:
+        """The accessible name of a control whose label lives on a CHILD.
+
+        Measured on the first real run (26/11, run 45895651634): a Compose tab
+        is a clickable `View` with an empty `text`/`content-desc`, and its label
+        is a child `TextView` (« Rechercher »). With the name read only from the
+        node itself, the four tabs shared ONE signature, three were dropped as
+        duplicates, and the pass never left the home screen
+        (`screens=1 elements=9 duplicates=20`). The name is the node's own text,
+        then its own desc, then the nearest descendant's text, then its desc —
+        the short word a screen reader speaks.
+        """
+        for wrap in self.wraps:
+            if not wrap.named:
+                wrap.named = self._descendant_name(wrap, 3)
+
+    def wrap_of(self, node) -> "W | None":
+        """The `W` of a `precheck.Node`, for the attributes T9's Node drops."""
+        return self.by_id.get(id(node))
+
+    def _descendant_name(self, wrap: "W", depth: int) -> str:
+        frontier = list(self.kids.get(id(wrap.n), []))
+        for _ in range(depth):
+            if not frontier:
+                return ""
+            for kid in frontier:
+                if (kid.n.text or "").strip():
+                    return kid.n.text.strip()
+            for kid in frontier:
+                if (kid.n.desc or "").strip():
+                    return kid.n.desc.strip()
+            below: list["W"] = []
+            for kid in frontier:
+                below.extend(self.kids.get(id(kid.n), []))
+            frontier = below
+        return ""
 
     # --- the semantic view a transition is judged on (§4.1) ----------------
 
@@ -418,18 +458,20 @@ class Dump:
 class W:
     """A `precheck.Node` plus the attributes T9's Node does not keep (§9.4)."""
 
-    __slots__ = ("n", "a", "dup_of")
+    __slots__ = ("n", "a", "dup_of", "named")
 
     def __init__(self, node, attrs: dict[str, str]):
         self.n = node
         self.a = attrs
         self.dup_of: str | None = None
+        # The accessible name, resolved by `Dump._parse` (see `resolve_names`).
+        self.named = (node.text or node.desc or "").strip()
 
     # --- the words -------------------------------------------------------
 
     @property
     def word(self) -> str:
-        return (self.n.text or self.n.desc or "").strip()
+        return self.named
 
     @property
     def rid(self) -> str:
@@ -503,11 +545,19 @@ class W:
 
     @property
     def signature(self) -> str:
-        """Stable identity: class | resource-id | text | content-desc (§9.4)."""
+        """Stable identity: class | resource-id | text | content-desc (§9.4).
+
+        A control with no text/desc of its own carries its label on a child (a
+        Compose tab), so the resolved name is part of the identity too — without
+        it, four tabs are one control (§9.4's "one identity per control").
+        """
         rid = VOLATILE_ID.sub("#", self.rid)
         text = COUNTER.sub("· #", self.n.text or "")
         desc = COUNTER.sub("· #", self.n.desc or "")
-        return short_sha("|".join((self.cls, rid, text, desc)))[:16]
+        parts = [self.cls, rid, text, desc]
+        if not (text or desc):
+            parts.append(COUNTER.sub("· #", self.named))
+        return short_sha("|".join(parts))[:16]
 
     @property
     def label(self) -> str:
@@ -589,10 +639,15 @@ def is_element(dump: Dump, wrap: W) -> bool:
 
 
 def clickable_ancestor(dump: Dump, wrap: W) -> bool:
-    """Is this node inside a row that is itself an element? Then the row is the control."""
+    """Is this node inside a row that is itself an element? Then the row is the control.
+
+    A `checkable` ancestor counts (measured on the real home, 26/11: the label
+    « Libre » was a second, clickable-looking row of the switch that owns it).
+    """
     parent = wrap.n.parent
     while parent is not None:
-        if parent.clickable and parent.package == PKG:
+        holder = dump.wrap_of(parent)
+        if parent.package == PKG and (parent.clickable or (holder is not None and holder.checkable)):
             return True
         parent = parent.parent
     return False
@@ -621,10 +676,14 @@ def elements(dump: Dump) -> tuple[list[W], int]:
         seen.add(sig)
         unique.append(wrap)
     # §4.4 the sibling rule: in one parent, ≥ 6 siblings of the same class and
-    # the same child-role set → click the first 3, the rest are `duplicate`.
+    # the same child-role set → click the first 3, the rest are `duplicate`. The
+    # `checkable` flag is part of the shape: without it the home's primary CTA
+    # (« Lancer le Flow », measured 26/11) grouped with the six energy cards and
+    # was dropped as a duplicate of a control it is not.
     groups: dict[tuple, list[W]] = defaultdict(list)
     for wrap in unique:
-        child_roles = tuple(sorted({kid.cls for kid in dump.kids.get(id(wrap.n), []) if kid.word})[:8])
+        child_roles = (wrap.checkable,
+                       tuple(sorted({kid.cls for kid in dump.kids.get(id(wrap.n), [])})[:8]))
         groups[(id(wrap.n.parent), wrap.cls, child_roles)].append(wrap)
     for members in groups.values():
         if len(members) < 6:
@@ -1093,36 +1152,77 @@ def open_settings(walker: Walker) -> bool:
     return False
 
 
+def door_of(walker: Walker) -> "W | None":
+    """The mini-bar's « Ouvrir le lecteur plein écran », when it is on screen."""
+    dump = walker.dump()
+    return next((w for w in dump.app_wraps
+                 if (w.n.desc or "").strip() == "Ouvrir le lecteur plein écran"
+                 and w.n.visible), None)
+
+
+def start_playback(walker: Walker) -> tuple["W | None", str]:
+    """Make a track play, the way a person would; returns (door, what was tried).
+
+    §9.8 says « ouvrir le lecteur, démarrer la lecture ». On a fresh install
+    nothing is playing, and the home offers no « Lire » (measured on the first
+    run, 26/11: `aucun « Ouvrir le lecteur plein écran » ni « Lire » sur
+    l'accueil`) — the door is then its own « Lancer le Flow », or the first row
+    of the library. Every attempt is named, so a FAIL says WHICH door was
+    missing instead of a sentence that hides it.
+    """
+    adb = walker.adb
+    door = door_of(walker)
+    if door is not None:
+        return door, "deja-en-lecture"
+    tried: list[str] = []
+    for label in ("Lire", "Lancer le Flow"):
+        dump = walker.dump()
+        target = next((w for w in dump.app_wraps if w.word.startswith(label) and w.n.visible), None)
+        if target is None:
+            continue
+        tried.append(label)
+        adb.tap(*walker.tap_point(target))
+        for _ in range(20):
+            door = door_of(walker)
+            if door is not None:
+                return door, tried[-1]
+    dump = walker.dump()
+    tab = next((w for w in dump.app_wraps if w.n.clickable and w.n.visible
+                and "biblio" in w.word.lower()), None)
+    if tab is not None:
+        tried.append(tab.word)
+        adb.tap(*walker.tap_point(tab))
+        for _ in range(6):
+            dump = walker.dump()
+            row = next((w for w in dump.app_wraps if w.n.clickable and w.n.visible and w.word
+                        and w is not tab and w.n.y1 > dump.height * 0.15), None)
+            if row is None:
+                adb.swipe_up(dump.width, dump.height)
+                continue
+            tried.append(f"ligne:{row.word[:24]}")
+            adb.tap(*walker.tap_point(row))
+            for _ in range(20):
+                door = door_of(walker)
+                if door is not None:
+                    return door, tried[-1]
+            break
+    return None, "|".join(tried) or "aucune-porte"
+
+
 def scenario_burst(walker: Walker) -> dict:
     """20 « Suivant » at 100 ms, then 20 alternating — the owner's first symptom."""
     adb = walker.adb
     result = {"name": SCENARIO_LABEL["burst"], "verdict": "FAIL", "numbers": "", "evidence": ""}
     started = time.monotonic()
 
-    def player_door() -> W | None:
-        dump = walker.dump()
-        return next((w for w in dump.app_wraps
-                     if (w.n.desc or "").strip() == "Ouvrir le lecteur plein écran"), None)
-
     if not walker.start_app():
         result["numbers"] = "l'app ne peint pas son accueil"
         return result
-    door = player_door()
+    door, tried = start_playback(walker)
     if door is None:
-        # Nothing is playing yet: press the first « Lire » the screen offers.
-        dump = walker.dump()
-        play = next((w for w in dump.app_wraps if w.word.startswith("Lire") and w.n.visible), None)
-        if play is None:
-            result["numbers"] = "aucun « Ouvrir le lecteur plein écran » ni « Lire » sur l'accueil"
-            return result
-        adb.tap(*walker.tap_point(play))
-        for _ in range(20):
-            door = player_door()
-            if door is not None:
-                break
-    if door is None:
-        result["numbers"] = "la mini-barre n'est jamais apparue après « Lire »"
+        result["numbers"] = f"aucune lecture n'a démarré (portes essayées : {tried})"
         return result
+    result["started_by"] = tried
     adb.tap(*walker.tap_point(door))
     dump = walker.dump()
     if not dump.ok:
@@ -1654,7 +1754,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--scenario", choices=("burst", "settings", "session"),
                         help="ne joue qu'un scénario (§9.8)")
     parser.add_argument("--max-nodes", type=int, default=700)
-    parser.add_argument("--max-minutes", type=int, default=25)
+    parser.add_argument("--max-minutes", type=int, default=30)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--check-routes", action="store_true")
     args = parser.parse_args(argv)
