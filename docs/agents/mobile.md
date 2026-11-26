@@ -7618,6 +7618,59 @@ de `mobile.yaml` — `docs/agents/screenshots/mobile/X1/README.md` dit ce qui re
 **Hors portée.** Le contenu des écrans (X3–X6), le pager (L1), l'hôte du lecteur (P2), la rangée
 retour (L1), la table de routes, `Hosts(graph)`.
 
+### X3 — Les écrans de rayons : le squelette s'efface, le contenu entre (delivered 2026-11-26)
+
+**Le besoin.** Accueil, Rechercher, Podcasts et les rayons de découverte remplaçaient leur squelette
+par le contenu, leur panneau par le panneau d'à côté, en **une image** : l'œil ne voyait pas que
+quelque chose venait d'arriver. X3 donne à ces sept écrans le preset d'entrée du design system, sans
+toucher à leur contenu, à leur géométrie ni à ce qu'ils demandent.
+
+**Ce qui a changé.** Chaque écran nomme maintenant son **état**, jamais une durée (M15), et le
+remplacement se fait sur place (M7 : A s'efface dans la même image, B entre en 140 ms avec 4 dp de
+montée, `sizeTransform = null`).
+
+| Écran | Phase (`NzSwap`) |
+|---|---|
+| `HomeScreen` | `homePhaseKey` : échec / rien encore (squelettes) / réponse. Le héros et le panneau de découverte restent **dehors** ; `EmptyHome` est un `NzAppear` sur `isHomeEmpty()`. |
+| `SearchScreen` | un `NzSwap` **par bloc** de la `LazyColumn` (`blockPhaseKey`) ; l'onglet change le panneau, pas la rangée de puces ni l'en-tête. |
+| `PodcastsEntry` | une phase pour les abonnements (`podcastsPhase`), une autre pour les résultats de recherche (`podcastsSearchPhase`). |
+| `ReleasesScreen` | `releasesPhase` : chargement / échec / vide / rayons. |
+| `ReleaseShelfScreen` | `shelfPhase` : chargement / échec / page ; le vide filtré est un `NzAppear`. |
+| `ExplorerStylesSection` | `explorerPhase` pour les tuiles, `stationsPhase` pour la feuille « Toutes les stations » ; les deux notes vides sont des `NzAppear`. |
+| `RecapScreen` | `recapPhase` : pas d'année / invalide / hors ligne / échec / squelette / année vide / récit. Le changement de carte **dans** le récit reste son pager. |
+
+**Ce que le lot a appris.**
+
+1. **Une `LazyColumn` ne se met pas dans un `NzSwap`.** Pour Rechercher, envelopper la page entière
+   aurait détruit et re-créé le champ de recherche et les puces à chaque phase — et la rangée de
+   puces doit survivre à un changement d'onglet (le test le fige). Le plan dit « `NzSwap(targetState =
+   block.key)` » : c'est donc **l'item** qui se remplace, et la clé de l'item est son **rang**
+   (`bloc:$index`) pour que le nœud soit réutilisé quand le type change — sinon `LazyColumn`
+   recréerait l'item et il n'y aurait rien à animer. Le contenu vient toujours du bloc à ce rang,
+   jamais d'un état périmé.
+2. **`AnimatedContent` empile ses enfants.** Une phase qui dessine plusieurs frères (les sections de
+   l'accueil, le récit, la grille + la note) a besoin d'une `Column` intérieure, sinon ils se
+   superposent. Cette `Column` reprend le rythme de la `Column` extérieure : la géométrie est
+   identique à l'image près (goldens T3 inchangés).
+3. **Une note « rien ici » qui est une phase n'a pas besoin d'un second `NzAppear`.** `AnimatedVisibility(visible = true)`
+   ne joue rien à la première composition ; le fondu vient donc du `NzSwap` de la phase. `NzAppear`
+   est réservé aux vrais bascules en flux (la note vide de l'accueil, le vide filtré d'une sortie),
+   où l'élément est déjà monté et devient visible.
+
+**Mesuré.** Huit cas Robolectric ajoutés aux classes de capture existantes (un par changement de
+phase, deux pour Rechercher dont le changement d'onglet qui garde la rangée de puces) : à `Off`, la
+phase sortante **n'est plus dans l'arbre dans la même image** et l'entrante y est ; une ré-émission
+de la même phase n'ajoute **aucun** nœud ; les specs sont celles de X0 (`inPlaceSpecs` : 140 ms et
+4 dp à Full, `None` à `Off`). Goldens T3 **inchangés** (`-Proborazzi.test.verify=true`), ce qui est la
+preuve que le repos ne bouge pas. Suite complète : **797 tests, 0 échec, 0 ignoré**, `lintDebug`
+**0 erreur**, APK debug produit. Une phase ne touche aucun chemin de données : **0 requête**
+ajoutée. Les captures à 50 % et le `FrameTimingMetric` (p95 ≤ 16,7 ms) restent **dus** sur une
+machine à KVM : cette worker n'en a pas (règle 8), la preuve émulateur vient du job `emulator` de
+`mobile.yaml` — `docs/agents/screenshots/mobile/X3/README.md` dit ce qui reste à prendre.
+
+**Hors portée.** Les écrans bibliothèque/fiches (X4), les réglages/mise en route (X6), les feuilles,
+le pager (L1), les gestes, la géométrie (S2), tout ce qu'un écran demande.
+
 ### P2 — Le lecteur : fermer au doigt (delivered 2026-11-25)
 
 **La règle.** Le lecteur plein écran se ferme au doigt : il suit le doigt **1:1**, le relâchement
