@@ -35,6 +35,11 @@ const MAX_PAUSE_MS = 20000; // the longest a trickled web read sleeps
 const elements = new Map(); // element -> wants the link
 const holds = new Set(); // tokens (prefetch)
 let waiters = [];
+// A prefetch read asleep on the trickle, waiting for the PLAYER to let go. It
+// is a separate list from `waiters` because its condition is different: a hold
+// is the prefetch's own (see `prefetchTrickle`), an element is not.
+let linkWaiters = [];
+let elementWant = false; // some watched element wants the link (holds ignored)
 let yielding = false;
 let renewedAt = 0;
 let renewTimer = null;
@@ -49,8 +54,17 @@ function nativeYield(ms) {
 }
 
 function recompute() {
-  let want = holds.size > 0;
-  if (!want) for (const w of elements.values()) if (w) { want = true; break; }
+  let elWant = false;
+  for (const w of elements.values()) if (w) { elWant = true; break; }
+  // The prefetch's own hold must not count as a reason for it to keep waiting:
+  // it reads while holding, so waiting on the hold would be waiting on itself.
+  if (elementWant && !elWant) {
+    const w = linkWaiters;
+    linkWaiters = [];
+    for (const fn of w) fn();
+  }
+  elementWant = elWant;
+  const want = holds.size > 0 || elWant;
   const now = Date.now();
   if (want !== yielding) {
     yielding = want;
@@ -204,6 +218,32 @@ export function trickle(n) {
   });
 }
 
+/** Whether the PLAYER (a watched element) needs the link right now, holds aside. */
+export function playerWantsLink() {
+  for (const w of elements.values()) if (w) return true;
+  return false;
+}
+
+/**
+ * The prefetch's own read pause: at once when nothing is playing off the
+ * network, else the trickle pace for `n` bytes, cut short the moment the
+ * player lets the link go. `trickle()` cannot serve here — a prefetch holds
+ * the link while it reads (its next track is about to be needed), so
+ * `isYielding()` is always true and the wait would never end.
+ */
+export function prefetchTrickle(n) {
+  if (!playerWantsLink()) return Promise.resolve();
+  return new Promise((r) => {
+    const t = setTimeout(done, tricklePause(n));
+    function done() {
+      clearTimeout(t);
+      linkWaiters = linkWaiters.filter((w) => w !== done);
+      r();
+    }
+    linkWaiters.push(done);
+  });
+}
+
 /** For tests: forget every element and hold. */
 export function resetNetYield() {
   elements.clear();
@@ -212,6 +252,10 @@ export function resetNetYield() {
   renewTimer = null;
   const w = waiters;
   waiters = [];
+  const lw = linkWaiters;
+  linkWaiters = [];
+  elementWant = false;
   yielding = false;
   for (const fn of w) fn();
+  for (const fn of lw) fn();
 }

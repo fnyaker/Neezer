@@ -23,7 +23,7 @@ import { logInfo } from "./log.js";
 import { primeGain } from "./gaincache.js";
 import { primeAnalyses } from "./analysis.js";
 import { migrateKey, trackKey, trackRef } from "./trackkey.js";
-import { holding } from "./netyield.js";
+import { holding, prefetchTrickle } from "./netyield.js";
 
 const DB_NAME = "nsupy-playcache";
 const DB_VERSION = 1;
@@ -144,7 +144,11 @@ async function touchAudio(id) {
 
 // Prefetch a track's audio (+ cover) into the cache. Skips a track that's
 // downloaded, already cached, or in flight. Best-effort and quiet.
-export async function prefetchTrack(track, quality) {
+//
+// `stillWanted(track)` is re-asked while the body is read, so a skip or a queue
+// edit abandons the download at once instead of filling the cache with a track
+// nobody is going to hear.
+export async function prefetchTrack(track, quality, stillWanted = () => true) {
   const id = trackKey(track);
   if (!id || !streamable(track)) return; // library tracks only (local files are on disk)
   if (isDownloaded(id) || isCached(id) || inFlight.has(id)) return;
@@ -155,15 +159,12 @@ export async function prefetchTrack(track, quality) {
     // caps background requests to a fraction of its pool, and answers 503 for a
     // track it would have had to download first (queueing it at prefetch
     // priority instead of holding a thread for the minute that takes). A
-    // refusal is not an error here — it means "not cached yet", and the next
-    // track change asks again.
-    const res = await fetch(api.streamUrl(trackRef(track), quality), {
-      credentials: "include",
-      headers: { "X-NS-Background": "1" },
-    });
-    if (!res.ok) return;
+    // refusal is not an error here — it means "not cached yet", and the retry
+    // in `fetchPrefetch` asks again once the archive has had time to land.
+    const res = await fetchPrefetch(track, quality, stillWanted);
+    if (!res) return;
     const type = res.headers.get("Content-Type") || "audio/ogg";
-    const blob = await res.blob();
+    const blob = await readPrefetchBody(res, track, stillWanted);
     if (!blob || !blob.size) return;
     await putAudio(id, blob, quality, type);
     await cacheCover(track.album && track.album.cover, trackRef(track));
@@ -214,11 +215,76 @@ export async function prefetchUpcoming(tracks, quality, stillWanted = () => true
     // The NEXT track is part of what the person is doing (it plays the moment
     // this one ends), so its preload holds the link against downloads; the
     // ones after it are background like them (lib/netyield.js).
-    if (track === tracks[0]) await holding(() => prefetchTrack(track, quality));
-    else await prefetchTrack(track, quality);
+    if (track === tracks[0]) await holding(() => prefetchTrack(track, quality, stillWanted));
+    else await prefetchTrack(track, quality, stillWanted);
     spent += Math.max(0, get(playCacheSize) - before);
     if (spent >= budget) return;
   }
+}
+
+const PREFETCH_ATTEMPTS = 4;
+
+/** Retry-After in ms: the server's own answer, 5 s when missing or odd, clamped 2–30 s. */
+function retryAfterMs(res) {
+  const s = Number(res.headers.get("Retry-After"));
+  return Math.min(30, Math.max(2, Number.isFinite(s) && s > 0 ? s : 5)) * 1000;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The stream request, retried while the server answers "not archived yet"
+ * (503 + `Retry-After`). A cold library answers 503 to a background request on
+ * purpose — it queues the archive at prefetch priority instead of holding a
+ * request thread for the minute that takes — so giving up on the first answer
+ * is why the prefetch never worked on a first pass. Four attempts at most, and
+ * only while the track is still wanted and the app is online.
+ */
+async function fetchPrefetch(track, quality, stillWanted) {
+  const url = api.streamUrl(trackRef(track), quality);
+  for (let attempt = 1; attempt <= PREFETCH_ATTEMPTS; attempt++) {
+    const res = await fetch(url, {
+      credentials: "include",
+      headers: { "X-NS-Background": "1" },
+    });
+    if (res.status !== 503) return res;
+    if (attempt === PREFETCH_ATTEMPTS || !stillWanted(track) || !get(online)) {
+      res.body?.cancel?.().catch(() => {});
+      return null;
+    }
+    await sleep(retryAfterMs(res));
+  }
+  return null;
+}
+
+/**
+ * Read the body chunk by chunk so the prefetch can yield: after each chunk it
+ * sleeps the trickle pace while the PLAYER needs the link (lib/netyield.js),
+ * and reads at full speed as soon as the player has enough in hand. `res.blob()`
+ * has no such seam — the whole file went down the wire at once, ahead of the
+ * track somebody is listening to. Returns null, with nothing written, as soon
+ * as the track stops being wanted.
+ */
+async function readPrefetchBody(res, track, stillWanted) {
+  const type = res.headers.get("Content-Type") || "audio/ogg";
+  if (!res.body || typeof res.body.getReader !== "function") return res.blob();
+  const reader = res.body.getReader();
+  const chunks = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!stillWanted(track)) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+    await prefetchTrickle(value.byteLength);
+    if (!stillWanted(track)) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+  }
+  return new Blob(chunks, { type });
 }
 
 async function putAudio(id, blob, quality, type) {
