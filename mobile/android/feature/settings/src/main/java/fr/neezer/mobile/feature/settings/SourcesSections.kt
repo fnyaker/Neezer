@@ -43,7 +43,9 @@ import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
+import fr.neezer.mobile.designsystem.NzAppear
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.feature.setup.DeezerAccountCard
@@ -81,14 +83,16 @@ private fun SourceOrderCard(model: SettingsModel, state: SettingsModel.State) {
         title = "Ordre des sources",
         subtitle = "La source principale sert la recherche, les pages et la musique. Quand elle n'a pas un titre, les sources de secours sont interrogées dans l'ordre ci-dessous.",
     ) {
-        when {
-            section.failure != null && section.data == null -> LoadFailed(cause = section.failure, onRetry = { model.retry("sources") })
-            section.data == null -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
+        NzSwap(targetState = settingsPhase(section), label = "ordre-sources") { phase ->
+        when (phase) {
+            SETTINGS_PHASE_FAILED -> LoadFailed(cause = section.failure.orEmpty(), onRetry = { model.retry("sources") })
+            SETTINGS_PHASE_LOADING -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
             else -> {
                 if (section.stale) StaleNote()
+                val data = section.data ?: return@NzSwap
                 val sources = state.orderedSources
                 val fallbacks = sources.filter { it.place == "fallback" }
-                val admin = section.data.admin
+                val admin = data.admin
                 if (sources.isEmpty()) {
                     Text(
                         text = "Aucune source de musique n'est installée sur ce serveur : seule la bibliothèque est lisible.",
@@ -132,6 +136,7 @@ private fun SourceOrderCard(model: SettingsModel, state: SettingsModel.State) {
                     )
                 }
             }
+        }
         }
     }
 }
@@ -256,12 +261,14 @@ private fun AccountsCard(model: SettingsModel, state: SettingsModel.State) {
         title = "Mes comptes",
         subtitle = "Reliez votre propre compte pour retrouver ici vos artistes suivis, vos titres aimés, vos albums et vos playlists. Chaque élément n'est importé qu'une fois, et rien n'est jamais écrit sur votre compte.",
     ) {
-        when {
-            section.failure != null && section.data == null -> LoadFailed(cause = section.failure, onRetry = { model.retry("sources") })
-            section.data == null -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
+        NzSwap(targetState = settingsPhase(section), label = "mes-comptes") { phase ->
+        when (phase) {
+            SETTINGS_PHASE_FAILED -> LoadFailed(cause = section.failure.orEmpty(), onRetry = { model.retry("sources") })
+            SETTINGS_PHASE_LOADING -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
             else -> {
                 if (section.stale) StaleNote()
-                val accounts = section.data.accounts
+                val data = section.data ?: return@NzSwap
+                val accounts = data.accounts
                 if (accounts.isNotEmpty()) {
                     Text("Plateforme par défaut", style = Sillon.type.label, color = colors.tx)
                     Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
@@ -276,12 +283,12 @@ private fun AccountsCard(model: SettingsModel, state: SettingsModel.State) {
                         NzChip(
                             text = "Aucune",
                             onClick = { model.chooseDefault(null) },
-                            selected = section.data.default == null,
+                            selected = data.default == null,
                             enabled = !state.busy,
                         )
                     }
                     Text(
-                        text = if (section.data.default != null) {
+                        text = if (data.default != null) {
                             "Ses favoris sont relus chaque jour et ce qui est nouveau est ajouté. Les autres comptes ne sont importés que lorsque vous le demandez."
                         } else {
                             "Aucun compte n'est relu automatiquement : vous importez quand vous le demandez."
@@ -291,7 +298,7 @@ private fun AccountsCard(model: SettingsModel, state: SettingsModel.State) {
                     )
                 }
                 accounts.forEach { account -> AccountBlock(model, state, account) }
-                if (section.data.canLink.isNotEmpty()) LinkAccountBlock(model, section.data.canLink)
+                if (data.canLink.isNotEmpty()) LinkAccountBlock(model, data.canLink)
                 if (accounts.none { it.provider == "youtube" }) {
                     Text(
                         text = "YouTube Music : reliez votre session dans Compte → Services de streaming ; elle sert aussi à l'import.",
@@ -300,6 +307,7 @@ private fun AccountsCard(model: SettingsModel, state: SettingsModel.State) {
                     )
                 }
             }
+        }
         }
     }
 }
@@ -411,60 +419,68 @@ private fun LinkAccountBlock(model: SettingsModel, canLink: List<String>) {
     val colors = Sillon.colors
     var open by remember { mutableStateOf(false) }
     var arl by remember { mutableStateOf("") }
-    if (!open) {
-        NzButton(
-            text = "Relier un compte",
-            onClick = { open = true },
-            glyph = NzGlyph.Plus,
-            kind = NzButtonKind.Secondary,
-        )
-        return
-    }
-    Text(
-        text = "ARL de votre session Deezer — la clé de votre compte : il reste chiffré sur le serveur et n'est montré à personne.",
-        style = Sillon.type.bodySmall,
-        color = colors.dim,
-    )
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(NzMinTouchTarget)
-                .background(colors.s2, RoundedCornerShape(NzRadius.field))
-                .border(1.dp, colors.ln, RoundedCornerShape(NzRadius.field))
-                .padding(horizontal = NzSpacing.m),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            if (arl.isEmpty()) {
-                Text("ARL de votre session Deezer", style = Sillon.type.body, color = colors.dim)
-            }
-            BasicTextField(
-                value = arl,
-                onValueChange = { arl = it },
-                singleLine = true,
-                textStyle = Sillon.type.body.copy(color = colors.tx),
-                cursorBrush = SolidColor(colors.acText),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "ARL de votre session Deezer" },
+    // The block's body appears IN FLOW on a tap (M7): the button gives way to the
+    // form with 140 ms + 4 dp, and nothing at eco. No height walk (`collapse`):
+    // the plan ships none, and the form is the only body here.
+    Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+        NzAppear(visible = !open) {
+            NzButton(
+                text = "Relier un compte",
+                onClick = { open = true },
+                glyph = NzGlyph.Plus,
+                kind = NzButtonKind.Secondary,
             )
         }
-        NzButton(
-            text = "Relier",
-            onClick = {
-                model.linkDeezer(arl)
-                arl = ""
-                open = false
-            },
-            enabled = arl.isNotBlank(),
-        )
-    }
-    if (canLink.none { it == "deezer" }) {
-        Text(
-            text = "Le compte Deezer du serveur tient déjà cette place ; ce formulaire relie VOTRE compte.",
-            style = Sillon.type.bodySmall,
-            color = colors.dim,
-        )
+        NzAppear(visible = open) {
+            Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+                Text(
+                    text = "ARL de votre session Deezer — la clé de votre compte : il reste chiffré sur le serveur et n'est montré à personne.",
+                    style = Sillon.type.bodySmall,
+                    color = colors.dim,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(NzMinTouchTarget)
+                            .background(colors.s2, RoundedCornerShape(NzRadius.field))
+                            .border(1.dp, colors.ln, RoundedCornerShape(NzRadius.field))
+                            .padding(horizontal = NzSpacing.m),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (arl.isEmpty()) {
+                            Text("ARL de votre session Deezer", style = Sillon.type.body, color = colors.dim)
+                        }
+                        BasicTextField(
+                            value = arl,
+                            onValueChange = { arl = it },
+                            singleLine = true,
+                            textStyle = Sillon.type.body.copy(color = colors.tx),
+                            cursorBrush = SolidColor(colors.acText),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "ARL de votre session Deezer" },
+                        )
+                    }
+                    NzButton(
+                        text = "Relier",
+                        onClick = {
+                            model.linkDeezer(arl)
+                            arl = ""
+                            open = false
+                        },
+                        enabled = arl.isNotBlank(),
+                    )
+                }
+                if (canLink.none { it == "deezer" }) {
+                    Text(
+                        text = "Le compte Deezer du serveur tient déjà cette place ; ce formulaire relie VOTRE compte.",
+                        style = Sillon.type.bodySmall,
+                        color = colors.dim,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -479,17 +495,19 @@ private fun AccessCard(model: SettingsModel, state: SettingsModel.State) {
         title = "Sources et accès",
         subtitle = "Tout ce qui est déjà sur le serveur est à tout le monde. Ici se règle le reste : qui peut chercher, écouter et ouvrir des pages chez chaque service, et avec quel compte.",
     ) {
-        when {
-            section.failure != null && section.data == null -> LoadFailed(cause = section.failure, onRetry = { model.retry("sources") })
-            section.data == null -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
+        NzSwap(targetState = settingsPhase(section), label = "sources-acces") { phase ->
+        when (phase) {
+            SETTINGS_PHASE_FAILED -> LoadFailed(cause = section.failure.orEmpty(), onRetry = { model.retry("sources") })
+            SETTINGS_PHASE_LOADING -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
             else -> {
                 if (section.stale) StaleNote()
-                val access = section.data
+                val access = section.data ?: return@NzSwap
                 access.providers.filter { it.role != "info" }.forEach { provider ->
                     ProviderBlock(model, state, access, provider, onWho = { who = it })
                 }
                 if (access.admin) GroupsBlock(model, access)
             }
+        }
         }
     }
     who?.let { target ->
@@ -742,12 +760,14 @@ private fun ServicesCard(model: SettingsModel, state: SettingsModel.State) {
         title = "Services de streaming",
         subtitle = "Pour envoyer une playlist vers vos propres comptes : chaque titre y est recherché et ceux qui manquent vous sont listés.",
     ) {
-        when {
-            section.failure != null && section.data == null -> LoadFailed(cause = section.failure, onRetry = { model.retry("account") })
-            section.data == null -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
+        NzSwap(targetState = settingsPhase(section), label = "services") { phase ->
+        when (phase) {
+            SETTINGS_PHASE_FAILED -> LoadFailed(cause = section.failure.orEmpty(), onRetry = { model.retry("account") })
+            SETTINGS_PHASE_LOADING -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
             else -> {
                 if (section.stale) StaleNote()
-                section.data.services.filter { it.id != "apple" }.forEach { service ->
+                val data = section.data ?: return@NzSwap
+                data.services.filter { it.id != "apple" }.forEach { service ->
                     Row(
                         modifier = Modifier.fillMaxWidth().height(NzMinTouchTarget),
                         verticalAlignment = Alignment.CenterVertically,
@@ -779,16 +799,16 @@ private fun ServicesCard(model: SettingsModel, state: SettingsModel.State) {
                         }
                     }
                 }
-                if (section.data.formats.isNotEmpty()) {
+                if (data.formats.isNotEmpty()) {
                     Text(
-                        text = "Formats de liste : ${section.data.formats.joinToString(", ")}",
+                        text = "Formats de liste : ${data.formats.joinToString(", ")}",
                         style = Sillon.type.bodySmall,
                         color = colors.dim,
                     )
                 }
                 // The operator's own Spotify app: only an administrator sets it.
                 if (state.access.data?.admin == true) {
-                    val current = section.data.services.firstOrNull { it.id == "spotify" }?.clientId.orEmpty()
+                    val current = data.services.firstOrNull { it.id == "spotify" }?.clientId.orEmpty()
                     val value = clientId ?: current
                     Text("Application Spotify (administrateur)", style = Sillon.type.label, color = colors.tx)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
@@ -826,6 +846,7 @@ private fun ServicesCard(model: SettingsModel, state: SettingsModel.State) {
                     }
                 }
             }
+        }
         }
     }
 }

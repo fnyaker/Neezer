@@ -48,6 +48,7 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import uniffi.nz_ffi.AdminCleanup
 import uniffi.nz_ffi.AdminCredits
@@ -146,11 +147,11 @@ private fun AdminCoreUnavailable(modifier: Modifier) {
 
 @Composable
 private fun UsersPage(model: AdminModel, state: AdminModel.State) {
-    val colors = Sillon.colors
     Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
         // A tap on a row opens a sheet, and the sheet IS the page until it is
         // closed: the SPA shows a modal, and a phone has no second column. The
-        // list behind it is one back tap away (`closeSheet`).
+        // list behind it is one back tap away (`closeSheet`). A pane is not a
+        // phase: it keeps its own entrance (`NzSheet`).
         val sheet = state.sheet
         val openUser = state.openUser
         if (sheet != null || openUser != null) {
@@ -161,115 +162,138 @@ private fun UsersPage(model: AdminModel, state: AdminModel.State) {
             }
             return@Column
         }
-        if (state.usersFailure != null && state.rows.users().isEmpty()) {
-            LoadFailed(cause = state.usersFailure, onRetry = model::retryUsers)
-            return@Column
-        }
-
-        // The SPA's head, re-flowed for a phone: the two actions on their own
-        // line (a count line squeezed beside them wrapped mid-phrase), then what
-        // the list is and when it was refreshed, full width.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(NzSpacing.s, Alignment.End),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NzButton(
-                text = "Inviter",
-                onClick = { model.openInvite() },
-                glyph = NzGlyph.PersonAdd,
-            )
-            NzIconButton(
-                glyph = NzGlyph.Refresh,
-                contentDescription = "Rafraîchir la liste",
-                onClick = model::refresh,
-                enabled = !state.usersLoading,
-            )
-        }
-        if (state.usersFailure == null) {
-            Text(
-                text = state.countLine(),
-                style = Sillon.type.bodySmall,
-                color = colors.dim,
-            )
-        }
-        state.refreshedAt?.let { at ->
-            Text(
-                text = "Actualisé à " + AdminCopy.clockTimeOf(at),
-                style = Sillon.type.bodySmall,
-                color = colors.dim,
-            )
-        }
-
-        if (state.usersStale) AdminStaleNote()
-
-        AdminSearchField(
-            value = state.query,
-            onValue = model::setQuery,
-            onDone = model::submitQuery,
-            onClear = model::clearQuery,
-        )
-        if (state.query.trim().length == 1) {
-            AdminHint("Saisissez au moins 2 caractères pour filtrer.")
-        }
-
-        AdminChips(
-            options = AdminCopy.FILTERS.map { it.id to it.label },
-            selected = state.filter.id,
-            onSelect = { model.setFilter(AccountFilter.of(it)) },
-        )
-        if (state.hasFilters) {
-            Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-                NzButton(
-                    text = "Effacer les filtres",
-                    onClick = model::clearFilters,
-                    kind = NzButtonKind.Secondary,
-                )
+        // The section's phase replaces in place (M7): its cause, then the head
+        // and the table. A re-emit of the same phase plays nothing (M6).
+        NzSwap(targetState = adminUsersPhase(state), label = "comptes") { phase ->
+            if (phase == ADMIN_USERS_FAILED) {
+                LoadFailed(cause = state.usersFailure.orEmpty(), onRetry = model::retryUsers)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
+                    UsersBody(model, state, phase as String)
+                }
             }
         }
-
-        state.actionError?.let { AdminError(it) }
-
-        when {
-            state.usersLoading && state.rows.isEmpty() -> AdminHint("Chargement des comptes…")
-            state.visible.isEmpty() -> EmptyAccounts(model, state)
-            else -> AccountTable(model, state)
-        }
-
-        if (state.invitesLoading) AdminHint("Chargement des invitations…")
-        state.invitesFailure?.let { cause ->
-            AdminCardFailure(cause = cause, onRetry = model::retryInvites)
-        }
-        state.moreFailure?.let { cause ->
-            AdminCardFailure(cause = cause, onRetry = model::loadMore)
-        }
-
-        if (state.showMore) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
-            ) {
-                Text(text = state.rangeLine(), style = Sillon.type.bodySmall, color = colors.dim)
-                Spacer(Modifier.weight(1f))
-                NzButton(
-                    text = if (state.moreLoading) "Chargement…" else "Charger plus",
-                    onClick = model::loadMore,
-                    kind = NzButtonKind.Secondary,
-                    enabled = !state.moreLoading,
-                )
-            }
-        } else if (state.visible.isNotEmpty()) {
-            Text(text = state.rangeLine(), style = Sillon.type.bodySmall, color = colors.dim)
-        }
-        if (state.capped) {
-            AdminHint("${AdminCopy.MAX_ROWS} comptes chargés. Affinez la recherche pour trouver les autres.")
-        }
-
     }
 }
 
-/** No row to draw: three different nothings, as the SPA distinguishes them. */
+/** The users page's phases, as the [NzSwap] target. */
+internal const val ADMIN_USERS_FAILED = "echec"
+internal const val ADMIN_USERS_LOADING = "chargement"
+internal const val ADMIN_USERS_EMPTY = "vide"
+internal const val ADMIN_USERS_LIST = "liste"
+
+internal fun adminUsersPhase(state: AdminModel.State): String = when {
+    state.usersFailure != null && state.rows.users().isEmpty() -> ADMIN_USERS_FAILED
+    state.usersLoading && state.rows.isEmpty() -> ADMIN_USERS_LOADING
+    state.visible.isEmpty() -> ADMIN_USERS_EMPTY
+    else -> ADMIN_USERS_LIST
+}
+
+/** The head, the filters and the table — what a non-failed phase draws. */
+@Composable
+private fun UsersBody(model: AdminModel, state: AdminModel.State, phase: String) {
+    val colors = Sillon.colors
+    // The SPA's head, re-flowed for a phone: the two actions on their own
+    // line (a count line squeezed beside them wrapped mid-phrase), then what
+    // the list is and when it was refreshed, full width.
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(NzSpacing.s, Alignment.End),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        NzButton(
+            text = "Inviter",
+            onClick = { model.openInvite() },
+            glyph = NzGlyph.PersonAdd,
+        )
+        NzIconButton(
+            glyph = NzGlyph.Refresh,
+            contentDescription = "Rafraîchir la liste",
+            onClick = model::refresh,
+            enabled = !state.usersLoading,
+        )
+    }
+    if (state.usersFailure == null) {
+        Text(
+            text = state.countLine(),
+            style = Sillon.type.bodySmall,
+            color = colors.dim,
+        )
+    }
+    state.refreshedAt?.let { at ->
+        Text(
+            text = "Actualisé à " + AdminCopy.clockTimeOf(at),
+            style = Sillon.type.bodySmall,
+            color = colors.dim,
+        )
+    }
+
+    if (state.usersStale) AdminStaleNote()
+
+    AdminSearchField(
+        value = state.query,
+        onValue = model::setQuery,
+        onDone = model::submitQuery,
+        onClear = model::clearQuery,
+    )
+    if (state.query.trim().length == 1) {
+        AdminHint("Saisissez au moins 2 caractères pour filtrer.")
+    }
+
+    AdminChips(
+        options = AdminCopy.FILTERS.map { it.id to it.label },
+        selected = state.filter.id,
+        onSelect = { model.setFilter(AccountFilter.of(it)) },
+    )
+    if (state.hasFilters) {
+        Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+            NzButton(
+                text = "Effacer les filtres",
+                onClick = model::clearFilters,
+                kind = NzButtonKind.Secondary,
+            )
+        }
+    }
+
+    state.actionError?.let { AdminError(it) }
+
+    when (phase) {
+        ADMIN_USERS_LOADING -> AdminHint("Chargement des comptes…")
+        ADMIN_USERS_EMPTY -> EmptyAccounts(model, state)
+        else -> AccountTable(model, state)
+    }
+
+    if (state.invitesLoading) AdminHint("Chargement des invitations…")
+    state.invitesFailure?.let { cause ->
+        AdminCardFailure(cause = cause, onRetry = model::retryInvites)
+    }
+    state.moreFailure?.let { cause ->
+        AdminCardFailure(cause = cause, onRetry = model::loadMore)
+    }
+
+    if (state.showMore) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+        ) {
+            Text(text = state.rangeLine(), style = Sillon.type.bodySmall, color = colors.dim)
+            Spacer(Modifier.weight(1f))
+            NzButton(
+                text = if (state.moreLoading) "Chargement…" else "Charger plus",
+                onClick = model::loadMore,
+                kind = NzButtonKind.Secondary,
+                enabled = !state.moreLoading,
+            )
+        }
+    } else if (state.visible.isNotEmpty()) {
+        Text(text = state.rangeLine(), style = Sillon.type.bodySmall, color = colors.dim)
+    }
+    if (state.capped) {
+        AdminHint("${AdminCopy.MAX_ROWS} comptes chargés. Affinez la recherche pour trouver les autres.")
+    }
+}
+
 @Composable
 private fun EmptyAccounts(model: AdminModel, state: AdminModel.State) {
     when {

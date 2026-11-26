@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -71,6 +72,7 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
 import fr.neezer.mobile.designsystem.NzSkeletonKind
@@ -146,17 +148,40 @@ fun OnboardingScreen(
         Header(state = state, actions = actions)
         statusLine(state)
         if (!state.online) OfflineBanner(account = state.step == OnboardingStep.ACCOUNT)
-        when {
-            state.loading && state.tiles.isEmpty() -> Skeleton(
-                modifier = Modifier.padding(NzSpacing.pageX),
-                kind = NzSkeletonKind.List,
-                count = 6,
-            )
-            state.failure != null -> LoadFailedBlock(cause = state.failure, onRetry = actions.retry)
-            state.step == OnboardingStep.ACCOUNT -> AccountPane(state, actions)
-            else -> ArtistsPane(state, actions)
+        // The step replaces in place (M7): the skeleton, the cause, the artists
+        // and the account. The header and the status stay outside — they are the
+        // screen's own bar, always painted.
+        NzSwap(targetState = onboardingPhase(state), label = "etape") { phase ->
+            when (phase) {
+                ONBOARDING_LOADING -> Skeleton(
+                    modifier = Modifier
+                        .padding(NzSpacing.pageX)
+                        .testTag(ONBOARDING_LOADING_TAG),
+                    kind = NzSkeletonKind.List,
+                    count = 6,
+                )
+                ONBOARDING_FAILED -> LoadFailedBlock(cause = state.failure.orEmpty(), onRetry = actions.retry)
+                ONBOARDING_ACCOUNT -> AccountPane(state, actions)
+                else -> ArtistsPane(state, actions)
+            }
         }
     }
+}
+
+/** The onboarding step as the [NzSwap] target (M6: a re-emit adds no node). */
+internal const val ONBOARDING_LOADING = "chargement"
+internal const val ONBOARDING_FAILED = "echec"
+internal const val ONBOARDING_ACCOUNT = "compte"
+internal const val ONBOARDING_ARTISTS = "artistes"
+
+/** The skeleton's node, for the phase test (`plan-mobile-addendum.md`, X6). */
+internal const val ONBOARDING_LOADING_TAG = "bienvenue-chargement"
+
+internal fun onboardingPhase(state: OnboardingModel.State): String = when {
+    state.loading && state.tiles.isEmpty() -> ONBOARDING_LOADING
+    state.failure != null -> ONBOARDING_FAILED
+    state.step == OnboardingStep.ACCOUNT -> ONBOARDING_ACCOUNT
+    else -> ONBOARDING_ARTISTS
 }
 
 // -- the bar ------------------------------------------------------------------

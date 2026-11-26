@@ -58,6 +58,7 @@ import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSegmented
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.NzToasts
@@ -508,49 +509,53 @@ private fun DislikesCard(model: SettingsModel, state: SettingsModel.State) {
         title = "Titres que vous n'aimez pas",
         subtitle = "Ils ne reviennent plus dans le Flow, les radios et les mixes. Vous pouvez toujours les chercher et les écouter vous-même.",
     ) {
-        when {
-            section.failure != null && section.data == null -> LoadFailed(
-                cause = section.failure,
-                onRetry = { model.retry("discovery") },
-            )
-            section.data == null -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
-            else -> {
-                if (section.stale) StaleNote()
-                val handle = section.data
-                val window = rememberListWindow(handle)
-                val listState = rememberLazyListState()
-                LaunchedEffect(listState, window) {
-                    snapshotFlow { listState.firstVisibleItemIndex to listState.isScrollInProgress }
-                        .collect { (first, scrolling) ->
-                            window.onVisible(first, first + VISIBLE_ROWS, scrolling)
-                        }
-                }
-                if (window.len == 0) {
-                    EmptyState(
-                        title = "Aucun pour l'instant",
-                        body = "Touchez « Je n'aime pas » dans le lecteur ou le menu d'un titre.",
-                        glyph = NzGlyph.ThumbsDown,
-                    )
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxWidth().height(DISLIKES_HEIGHT),
-                    ) {
-                        items(window.len, key = { index -> window.rowAt(index)?.key ?: "ligne-$index" }) { index ->
-                            val row = window.rowAt(index)
-                            if (row == null) {
-                                SkeletonRow()
-                            } else if (row.key in model.hiddenDislikes) {
-                                // Removed optimistically: the row is gone in the
-                                // same frame, and comes back if the server refuses.
-                            } else {
-                                TrackRowView(
-                                    row = row,
-                                    playing = false,
-                                    onClick = {},
-                                    onMore = { model.undislike(row) },
-                                    onSwipeQueue = {},
-                                )
+        // The card's phase replaces in place (M7): the cause, the loading line,
+        // the empty note or the window.
+        NzSwap(targetState = settingsPhase(section), label = "titres-aines") { phase ->
+            when (phase) {
+                SETTINGS_PHASE_FAILED -> LoadFailed(
+                    cause = section.failure.orEmpty(),
+                    onRetry = { model.retry("discovery") },
+                )
+                SETTINGS_PHASE_LOADING -> Text("Chargement…", style = Sillon.type.bodySmall, color = colors.dim)
+                else -> {
+                    if (section.stale) StaleNote()
+                    val handle = section.data ?: return@NzSwap
+                    val window = rememberListWindow(handle)
+                    val listState = rememberLazyListState()
+                    LaunchedEffect(listState, window) {
+                        snapshotFlow { listState.firstVisibleItemIndex to listState.isScrollInProgress }
+                            .collect { (first, scrolling) ->
+                                window.onVisible(first, first + VISIBLE_ROWS, scrolling)
+                            }
+                    }
+                    if (window.len == 0) {
+                        EmptyState(
+                            title = "Aucun pour l'instant",
+                            body = "Touchez « Je n'aime pas » dans le lecteur ou le menu d'un titre.",
+                            glyph = NzGlyph.ThumbsDown,
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxWidth().height(DISLIKES_HEIGHT),
+                        ) {
+                            items(window.len, key = { index -> window.rowAt(index)?.key ?: "ligne-$index" }) { index ->
+                                val row = window.rowAt(index)
+                                if (row == null) {
+                                    SkeletonRow()
+                                } else if (row.key in model.hiddenDislikes) {
+                                    // Removed optimistically: the row is gone in the
+                                    // same frame, and comes back if the server refuses.
+                                } else {
+                                    TrackRowView(
+                                        row = row,
+                                        playing = false,
+                                        onClick = {},
+                                        onMore = { model.undislike(row) },
+                                        onSwipeQueue = {},
+                                    )
+                                }
                             }
                         }
                     }
@@ -558,6 +563,20 @@ private fun DislikesCard(model: SettingsModel, state: SettingsModel.State) {
             }
         }
     }
+}
+
+/**
+ * A settings card's phase, as the [NzSwap] target: its cause, its loading line,
+ * its body. One rule for every panel this lot touches.
+ */
+internal const val SETTINGS_PHASE_FAILED = "echec"
+internal const val SETTINGS_PHASE_LOADING = "chargement"
+internal const val SETTINGS_PHASE_CONTENT = "contenu"
+
+internal fun <T> settingsPhase(section: SettingsModel.Section<T>): String = when {
+    section.failure != null && section.data == null -> SETTINGS_PHASE_FAILED
+    section.data == null -> SETTINGS_PHASE_LOADING
+    else -> SETTINGS_PHASE_CONTENT
 }
 
 /** An unloaded row: the design system's skeleton, never a blank line. */

@@ -50,6 +50,7 @@ import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSegmented
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.QualityBadge
 import fr.neezer.mobile.designsystem.Sillon
@@ -103,29 +104,55 @@ fun OfflineSettingsSection(
                 onSelect = { tab = it },
             )
         }
-        when {
-            state.failure != null && state.version == 0uL && tab == 0 -> LoadFailed(
-                cause = state.failure!!,
-                onRetry = model::refresh,
-                title = "Téléchargements indisponibles",
-            )
+        // The section's own phases replace in place (M7): a cause, the per-title
+        // page, the peers' tab, the settings cards.
+        NzSwap(
+            targetState = offlinePhase(state.failure, state.version, downloadsOpen, tab, peerSets != null),
+            label = "telechargements",
+        ) { phase ->
+            when (phase) {
+                OFFLINE_FAILED -> LoadFailed(
+                    cause = state.failure.orEmpty(),
+                    onRetry = model::refresh,
+                    title = "Téléchargements indisponibles",
+                )
 
-            downloadsOpen -> DownloadsPage(
-                model = model,
-                onBack = { downloadsOpen = false },
-            )
+                OFFLINE_DOWNLOADS -> DownloadsPage(
+                    model = model,
+                    onBack = { downloadsOpen = false },
+                )
 
-            tab == 1 && peerSets != null -> peerSets()
+                OFFLINE_PEERS -> peerSets?.invoke()
 
-            else -> {
-                QueueCard(model, state)
-                QualityCard(model, state)
-                StorageCard(model, state)
-                PlayCacheCard(model, state)
-                DownloadsRow(state) { downloadsOpen = true }
+                else -> Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.l)) {
+                    QueueCard(model, state)
+                    QualityCard(model, state)
+                    StorageCard(model, state)
+                    PlayCacheCard(model, state)
+                    DownloadsRow(state) { downloadsOpen = true }
+                }
             }
         }
     }
+}
+
+/** « Téléchargements »' own phases, as the [NzSwap] target. */
+internal const val OFFLINE_FAILED = "echec"
+internal const val OFFLINE_DOWNLOADS = "telecharges"
+internal const val OFFLINE_PEERS = "pairs"
+internal const val OFFLINE_SETTINGS = "reglages"
+
+internal fun offlinePhase(
+    failure: String?,
+    version: ULong,
+    downloadsOpen: Boolean,
+    tab: Int,
+    hasPeers: Boolean,
+): String = when {
+    failure != null && version == 0uL && tab == 0 -> OFFLINE_FAILED
+    downloadsOpen -> OFFLINE_DOWNLOADS
+    tab == 1 && hasPeers -> OFFLINE_PEERS
+    else -> OFFLINE_SETTINGS
 }
 
 /** The queue itself: what runs, how far, and every cause (rule 2). */
@@ -514,23 +541,38 @@ internal fun DownloadsPage(model: DownloadsModel, onBack: () -> Unit) {
             )
         }
 
-        when {
-            state.failure != null && handle == null -> LoadFailed(
-                cause = state.failure!!,
-                onRetry = model::openDownloads,
-                title = "Liste indisponible",
-            )
+        NzSwap(targetState = downloadsPagePhase(state.failure, handle), label = "liste-telecharges") { phase ->
+            when (phase) {
+                OFFLINE_DOWNLOADS_FAILED -> LoadFailed(
+                    cause = state.failure.orEmpty(),
+                    onRetry = model::openDownloads,
+                    title = "Liste indisponible",
+                )
 
-            handle == null || handle.len().toInt() == 0 -> EmptyState(
-                title = "Aucun titre téléchargé",
-                body = "Utilisez le bouton de téléchargement sur un titre, un album ou une " +
-                    "playlist pour les rendre disponibles hors ligne.",
-                glyph = NzGlyph.Download,
-            )
+                OFFLINE_DOWNLOADS_EMPTY -> EmptyState(
+                    title = "Aucun titre téléchargé",
+                    body = "Utilisez le bouton de téléchargement sur un titre, un album ou une " +
+                        "playlist pour les rendre disponibles hors ligne.",
+                    glyph = NzGlyph.Download,
+                )
 
-            else -> DownloadsList(model, state, handle)
+                else -> {
+                    val loaded = handle ?: return@NzSwap
+                    DownloadsList(model, state, loaded)
+                }
+            }
         }
     }
+}
+
+internal const val OFFLINE_DOWNLOADS_FAILED = "echec"
+internal const val OFFLINE_DOWNLOADS_EMPTY = "vide"
+internal const val OFFLINE_DOWNLOADS_LIST = "liste"
+
+internal fun downloadsPagePhase(failure: String?, handle: uniffi.nz_ffi.ListHandle?): String = when {
+    failure != null && handle == null -> OFFLINE_DOWNLOADS_FAILED
+    handle == null || handle.len().toInt() == 0 -> OFFLINE_DOWNLOADS_EMPTY
+    else -> OFFLINE_DOWNLOADS_LIST
 }
 
 @Composable

@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -39,6 +41,7 @@ import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzChip
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.nzDuration
 import kotlinx.coroutines.CoroutineDispatcher
@@ -94,29 +97,81 @@ fun ImportEntry(url: String?, nav: NzNavigator, modifier: Modifier = Modifier) {
     val state by model.state.collectAsState()
 
     // The shell's own top bar names the route; a second one would double it.
-    Column(modifier = modifier.fillMaxSize()) {
-        when {
-            state.failure != null && state.job == null -> LoadFailed(
-                cause = state.failure.orEmpty(),
-                onRetry = { model.start(state.link) },
-                modifier = Modifier.padding(NzSpacing.l),
-            )
+    ImportPhases(
+        state = state,
+        modifier = modifier.fillMaxSize(),
+        onLink = model::onLink,
+        onSubmit = model::submit,
+        onRetry = { model.start(state.link) },
+        onClear = model::clear,
+        onPlay = model::playAll,
+        onShuffle = model::shufflePlay,
+        onKeep = model::openKeep,
+        onTitle = model::onTitle,
+        onSave = model::save,
+        onCancelKeep = model::cancelKeep,
+        onAnother = model::clear,
+        onSearch = { line -> nav.go(uniffi.nz_ffi.AppLink.Search(q = line)) },
+        onOpen = { id -> nav.go(uniffi.nz_ffi.AppLink.Playlist(id)) },
+    )
+}
 
-            state.job == null -> ImportIntro(state, model::onLink, model::submit, model::clear)
-            else -> ImportBody(
-                state = state,
-                onPlay = model::playAll,
-                onShuffle = model::shufflePlay,
-                onKeep = model::openKeep,
-                onTitle = model::onTitle,
-                onSave = model::save,
-                onCancelKeep = model::cancelKeep,
-                onAnother = model::clear,
-                onSearch = { line ->
-                    nav.go(uniffi.nz_ffi.AppLink.Search(q = line))
-                },
-                onOpen = { id -> nav.go(uniffi.nz_ffi.AppLink.Playlist(id)) },
-            )
+/** The import's three phases: a failure, the link box, the job (M7). */
+internal const val IMPORT_FAILED = "echec"
+internal const val IMPORT_INTRO = "intro"
+internal const val IMPORT_BODY = "corps"
+
+internal fun importPhase(state: ImportModel.State): String = when {
+    state.failure != null && state.job == null -> IMPORT_FAILED
+    state.job == null -> IMPORT_INTRO
+    else -> IMPORT_BODY
+}
+
+/**
+ * The screen's phase, replace-in-place (M7): the cause gives way to the link box,
+ * which gives way to the job — 140 ms + 4 dp, and nothing at eco. Public to the
+ * module's own test, which renders a [ImportModel.State] with no core behind it.
+ */
+@Composable
+internal fun ImportPhases(
+    state: ImportModel.State,
+    modifier: Modifier = Modifier,
+    onLink: (String) -> Unit = {},
+    onSubmit: () -> Unit = {},
+    onRetry: () -> Unit = {},
+    onClear: () -> Unit = {},
+    onPlay: () -> Unit = {},
+    onShuffle: () -> Unit = {},
+    onKeep: () -> Unit = {},
+    onTitle: (String) -> Unit = {},
+    onSave: () -> Unit = {},
+    onCancelKeep: () -> Unit = {},
+    onAnother: () -> Unit = {},
+    onSearch: (String) -> Unit = {},
+    onOpen: (String) -> Unit = {},
+) {
+    Column(modifier = modifier) {
+        NzSwap(targetState = importPhase(state), label = "import") { phase ->
+            when (phase) {
+                IMPORT_FAILED -> LoadFailed(
+                    cause = state.failure.orEmpty(),
+                    onRetry = onRetry,
+                    modifier = Modifier.padding(NzSpacing.l),
+                )
+                IMPORT_INTRO -> ImportIntro(state, onLink, onSubmit, onClear)
+                else -> ImportBody(
+                    state = state,
+                    onPlay = onPlay,
+                    onShuffle = onShuffle,
+                    onKeep = onKeep,
+                    onTitle = onTitle,
+                    onSave = onSave,
+                    onCancelKeep = onCancelKeep,
+                    onAnother = onAnother,
+                    onSearch = onSearch,
+                    onOpen = onOpen,
+                )
+            }
         }
     }
 }
@@ -170,6 +225,7 @@ private fun ImportIntro(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ImportBody(
     state: ImportModel.State,
@@ -219,7 +275,17 @@ private fun ImportBody(
                         color = colors.dim,
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
+                // The row WRAPS: at 360 dp the three labelled buttons are wider
+                // than the page, and a plain `Row` squeezed the third to 111.5 dp,
+                // so « Enregistrer » was ellipsized to « Enregi… » (W-D2's native
+                // half — measured: the button stays on screen and its LABEL is
+                // cut, `NzButton` ellipsizes). `FlowRow` is the repo's own answer
+                // to this class of overflow (`AdminParts.kt`'s actions), not a
+                // second line of `Row`s.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+                    verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+                ) {
                     NzButton(text = "Lire", onClick = onPlay, glyph = NzGlyph.Play, enabled = job.percent > 0u)
                     NzButton(
                         text = "Mélanger",

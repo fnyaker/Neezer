@@ -7865,3 +7865,69 @@ lancé **une fois sur l'arbre d'avant** et échoue : il garde un vrai déplaceme
 **Hors portée.** Les gestes (le `SwipeRow` de G1, le réordonnancement par appui long de la file, P2),
 l'entrée des feuilles (`NzSheet`), le contenu (aucune ligne, aucune copie nouvelle), la politique de
 pagination de `ListWindow`.
+
+### X6 — Réglages, admin, mise en route, import, soirée : les derniers changements d'état (delivered 2026-11-26)
+
+**La règle.** Les écrans qui restaient (Réglages et ses panneaux, l'administration, la mise en route,
+l'import, la soirée) annoncent leurs changements d'état avec le vocabulaire de X0 — `NzSwap` pour une
+phase, `NzAppear` pour un corps qui s'ouvre — et l'import ne tronque plus ses actions à 360 dp. Aucune
+copie, aucune mise en page, aucun geste : les écrans demandent au design system de jouer ce qu'ils
+font déjà. La carte de section de Réglages est un **`NzSwap`** ; les panneaux qui ont une phase de
+lecture (Découverte, Sources ×4, Téléchargements, ses titres, les effets audio, les comptes de
+l'admin) la remplacent en fondu, et le formulaire ARL s'ouvre en `NzAppear` (pas de `collapse` : le
+plan n'en livre pas, et une hauteur animée paie une mise en page par image, M10).
+
+**Les deux écarts au plan, mesurés, dits plutôt que devinés.**
+
+1. **W-D2 côté natif : ce n'est pas « hors écran », c'est « tronqué ».** Le plan dit que le troisième
+   bouton de l'import est dessiné ~45 dp au-delà de la fenêtre. Mesuré sous Robolectric NATIVE, 360 dp :
+   l'ancienne `Row` posait les trois boutons à **82 / 118,5 / 111,5 dp**, tous **dans** la fenêtre
+   (droite à 344 dp = 360 − 16) ; le troisième libellé était **élidé** (« Enregi… »), parce que
+   `NzButton` impose `maxLines = 1, softWrap = false, ellipsis`. Le défaut est donc la lisibilité, pas
+   l'atteignabilité. Le `FlowRow` du plan le répare : **82 / 118,5 / 130,5 dp**, « Enregistrer » entier
+   sur une **seconde** ligne à 360 dp, les trois sur **une** ligne à 600 dp. Aucun écart de largeur
+   n'est dû ; l'assertion est un plancher de largeur par action (80 / 112 / 128 dp), qui échoue sur
+   l'ancienne `Row` (`111,5 < 128`) — vérifié en la remettant.
+2. **La ligne « job rows » de l'admin n'a pas de seam, et n'est pas faite.** `AdminSections.kt` ne
+   contient **aucun** `LazyColumn` ni `items()` (le parent Réglages défile déjà, et les tableaux de
+   l'admin sont explicitement hors portée) : `Modifier.animateItem` vit dans un `LazyItemScope` et ne
+   peut pas s'appliquer aux cartes d'un `Column`. Le lot fait donc la **phase** de la section
+   (`NzSwap` sur échec · chargement · vide · table) et **pas** « une ligne de job qui pousse celle du
+   dessous » ; la ligne du plan est à amender (ou à donner à un lot qui possède `AdminParts.kt`, où
+   vivent les lignes d'échec d'un job).
+
+**Mesuré** (Robolectric 360 dp, backend NATIVE, horloge Compose explicite, aucune lecture d'horloge
+murale) :
+
+| Cas | Avant | À `Off` | À `Full` |
+|---|---|---|---|
+| Import, actions, 360 dp | 82 / 118,5 / **111,5** dp, « Enregi… » | — | **82 / 118,5 / 130,5** dp, libellé entier, 2 lignes |
+| Import, actions, 600 dp | 3 boutons, 1 ligne | — | 3 boutons, 1 ligne |
+| Import, intro → corps | une image | le corps à l'image demandée, l'intro **sortie** | l'intro n'est plus dans l'arbre à 50 ms (pas tenue 140 ms) |
+| Réglages · Découverte / Sources | `Chargement…` puis corps, d'un coup | 0 ms, le corps est là | 140 ms + 4 dp |
+| Réglages · formulaire ARL | `if (open)` | le bouton et le corps échangent dans l'image | 140 ms + 4 dp |
+| Téléchargements · section et liste | 4 phases, d'un coup | la phase demandée est là | 140 ms + 4 dp |
+| Effets audio | « Lecture des réglages… » puis cartes | les cartes dans l'image | 140 ms + 4 dp |
+| Admin · Utilisateurs | « Chargement… » puis table | la table dans l'image | 140 ms + 4 dp |
+| Soirée · invité | chargement → accueil → en direct | la phase demandée est là | 140 ms + 4 dp |
+
+`inPlaceSpecs` est la courbe de chaque phase (140 ms, 4 dp, sortie `None`) ; une ré-émission de la
+même phase n'ajoute aucun nœud (M6). **0 requête** : ces chemins dessinent un état déjà lu (un import
+garde son polling de 700 ms, une section ses lectures d'ouverture) — rien de neuf ne part.
+
+**Tests.** `ImportScreenMotionTest` (4 : bornes + planchers à 360, une ligne à 600, phase à `Off` et
+la sortie de l'ancienne phase à `Full`, les trois phases), `OnboardingScreenMotionTest` (2),
+`SettingsPhaseTest` (3 : phase des Sources, formulaire ARL, la fonction de phase),
+`OfflinePhaseTest` (2), `AudioFxPhaseTest` (1), `AdminPhaseTest` (2), `PartyGuestPhaseTest` (2).
+Images : `docs/agents/screenshots/mobile/X6/` (avant/après de la rangée, 50 % des deux fondus).
+
+**Dû sur une machine à KVM.** Le `FrameTimingMetric` (p95 ≤ 16,7 ms) des changements de phase et les
+captures d'émulateur à 50 % ; ce worker n'a pas `/dev/kvm`, la preuve émulateur vient du job
+`emulator` de `mobile.yaml`. Les PNG du dossier sont des images Robolectric.
+
+**Sources** (comportement non spécifié par la personne) : `FlowRow` (Compose Foundation, la réponse
+du dépôt à ce débordement — `AdminParts.kt`) et `LazyItemScope.animateItem` (une clé stable et un
+scope paresseux, d'où l'écart 2) : <https://developer.android.com/develop/ui/compose/layouts/flow> et
+<https://developer.android.com/develop/ui/compose/lists#item-animations> ; `AnimatedContent`
+(`sizeTransform = null`, `ExitTransition.None`) : <https://developer.android.com/develop/ui/compose/animation/composables-modifiers> ;
+la table de `docs/agents/transitions.md` (*Le téléphone*, X0) pour les valeurs.

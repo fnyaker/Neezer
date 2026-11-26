@@ -56,6 +56,7 @@ import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.NzToasts
 import fr.neezer.mobile.designsystem.NzTopBar
 import fr.neezer.mobile.designsystem.Sillon
@@ -132,39 +133,62 @@ fun PartyGuestScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(NzSpacing.l),
         ) {
-            when {
-                state.loading && state.data == null -> Loading()
-                state.phase == PartyPhase.FAILED -> LoadFailed(
-                    cause = state.failure ?: PartyCopy.MISSING,
-                    onRetry = { model.retry() },
-                )
-                state.phase == PartyPhase.MISSING -> Dead(
-                    glyph = NzGlyph.Party,
-                    title = "Cette soirée n'existe plus",
-                    body = "Le lien a expiré, ou l'hôte l'a arrêtée. Demandez-lui un nouveau lien.",
-                )
-                state.phase == PartyPhase.ENDED -> Dead(
-                    glyph = NzGlyph.Party,
-                    title = "La soirée est terminée",
-                    body = "L'hôte l'a arrêtée. Merci d'avoir écouté.",
-                )
-                state.phase == PartyPhase.LEFT -> Dead(
-                    glyph = NzGlyph.Party,
-                    title = "Vous avez quitté la soirée",
-                    body = null,
-                    action = {
-                        NzButton(
-                            text = PartyCopy.REJOIN,
-                            onClick = { model.rejoin() },
-                            glyph = NzGlyph.Party,
-                        )
-                    },
-                )
-                state.phase == PartyPhase.LANDING -> Landing(model, state.data)
-                else -> Live(model, state.data, state.volume, state.trimMs, state.showTrim, liveReads)
+            // The guest's states replace in place (M7): the loading card, a
+            // failure, the three dead-link pages, the landing and the live view.
+            NzSwap(targetState = partyGuestPhase(state), label = "soiree") { phase ->
+                when (phase) {
+                    PARTY_LOADING -> Loading()
+                    PARTY_FAILED -> LoadFailed(
+                        cause = state.failure ?: PartyCopy.MISSING,
+                        onRetry = { model.retry() },
+                    )
+                    PARTY_MISSING -> Dead(
+                        glyph = NzGlyph.Party,
+                        title = "Cette soirée n'existe plus",
+                        body = "Le lien a expiré, ou l'hôte l'a arrêtée. Demandez-lui un nouveau lien.",
+                    )
+                    PARTY_ENDED -> Dead(
+                        glyph = NzGlyph.Party,
+                        title = "La soirée est terminée",
+                        body = "L'hôte l'a arrêtée. Merci d'avoir écouté.",
+                    )
+                    PARTY_LEFT -> Dead(
+                        glyph = NzGlyph.Party,
+                        title = "Vous avez quitté la soirée",
+                        body = null,
+                        action = {
+                            NzButton(
+                                text = PartyCopy.REJOIN,
+                                onClick = { model.rejoin() },
+                                glyph = NzGlyph.Party,
+                            )
+                        },
+                    )
+                    PARTY_LANDING -> Landing(model, state.data)
+                    else -> Live(model, state.data, state.volume, state.trimMs, state.showTrim, liveReads)
+                }
             }
         }
     }
+}
+
+/** The guest's phases, as the [NzSwap] target. */
+internal const val PARTY_LOADING = "chargement"
+internal const val PARTY_FAILED = "echec"
+internal const val PARTY_MISSING = "absente"
+internal const val PARTY_ENDED = "finie"
+internal const val PARTY_LEFT = "quittee"
+internal const val PARTY_LANDING = "accueil"
+internal const val PARTY_LIVE = "en-direct"
+
+internal fun partyGuestPhase(state: PartyGuestModel.State): String = when {
+    state.loading && state.data == null -> PARTY_LOADING
+    state.phase == PartyPhase.FAILED -> PARTY_FAILED
+    state.phase == PartyPhase.MISSING -> PARTY_MISSING
+    state.phase == PartyPhase.ENDED -> PARTY_ENDED
+    state.phase == PartyPhase.LEFT -> PARTY_LEFT
+    state.phase == PartyPhase.LANDING -> PARTY_LANDING
+    else -> PARTY_LIVE
 }
 
 @Composable
