@@ -7569,6 +7569,55 @@ il se lit avant `captureP1`, comme le fait `player()` dans le même fichier.
 **Hors portée.** Le geste de fermeture (P2), la rail de position, le transport, les panneaux, les
 colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fond du SPA (`lib/backdrop.js`).
 
+### X1 — L'écran qui entre : 200 ms, 8 dp, et rien pour un balayage d'onglet (delivered 2026-11-26)
+
+**Le besoin.** Une poussée de route (une carte → un album, une ligne → un titre) changeait d'écran
+en une image, sans que l'œil voie d'où il vient ; L1 avait posé quatre `EnterTransition.None` pour
+qu'un onglet qui se pose ne soit pas ré-animé par le routeur, et ce remède étouffait aussi les
+poussées. X1 garde la raison de L1 comme une **garde** (`isTabSwap()`), pas comme un blanc-seing.
+
+**Ce qui a changé.**
+
+- `app/Shell.kt` — les quatre transitions, publiques pour que le test les compare par identité :
+  `routeEnter(motion, risePx, tabSwap)` (fondu + 8 dp de montée, `motion.base()` = 200 ms), `routeExit()`
+  (`None` : la page sortante part dans la même image, M3), `routePopEnter` / `routePopExit`
+  (fondu 140 ms, `motion.fast()`), et `isTabSwap()` — un déplacement entre deux des quatre pages du
+  pager est le mouvement du PAGER, pas du routeur. La montée est `motion.moveM` : 0 dp à Reduced.
+- `app/NavGraph.kt` — le `NavHost` reçoit les quatre lambdas et `sizeTransform = { null }` (jamais de
+  marche de taille : un layout par image, et ça découpe, M10). Rien d'autre dans le fichier.
+
+**Ce que le lot a appris.**
+
+1. **Le pseudo-code du plan contredisait son propre test d'acceptation.** Il gardait sur
+   `!motion.moves`, vrai à Reduced comme à Off : le fondu aurait disparu en mouvement réduit, alors
+   que M14 garde l'opacité et que le test exige `routeEnter(reduced) !== None`. M14 et le test
+   d'acceptation priment (X0 avait déjà tranché pareil pour `displaceOffset`) : la garde est sur
+   `motion.level == Off`, et seule la montée tombe à 0 dp.
+2. **`slideInVertically` prend un `FiniteAnimationSpec<IntOffset>`, pas `motion.base()`** (un
+   `Float`) : le pseudo-code ne compilait pas tel quel. Le token est
+   `motion.displaceOffset(NzDur.Base, NzEase.Enter)` — la courbe d'entrée, et 0 à Reduced.
+3. **Navigation Compose garde l'entrée sortante dans `visibleEntries` deux images même avec `None`
+   des deux côtés** (mesuré : la cible apparaît à l'image 2, l'ancienne disparaît à l'image 4, à
+   16 ms par image). Ce n'est pas un mouvement du routeur mais sa comptabilité : le test d'un
+   balayage d'onglet asserte donc la cible montée **une** fois et une seule page à l'image 6 (un
+   fondu de 200 ms, la régression L1, ne le pourrait pas), et le retour, lui, exige les deux pages à
+   l'image 5 — un `None` les aurait séparées à l'image 4.
+
+**Mesuré.** `RouteMotionTest` (5 cas, Robolectric, aucun sleep) : les quatre transitions par
+identité (dont `routeEnter(reduced) !== None` et `routeEnter(off) === None`), le balayage d'onglet à
+Full et à Off (une page, cible montée une fois), le retour qui tient les deux pages pendant son
+fondu puis les sépare, et la première composition statique. Spécs : une poussée = `tween(200,
+NzEase.Enter)` pour le fondu **et** `tween(200, NzEase.Enter)` sur `IntOffset` pour la montée ; un
+retour = `tween(140)` deux fois (X0's matrix, citée). Une poussée n'ajoute **aucune requête**
+(`NzCore::stats()` delta 0 : rien dans une transition ne touche le réseau). Suite complète : **789
+tests, 0 échec, 0 ignoré**, `lintDebug` **0 erreur**, goldens T3 inchangés, APK debug et release
+produits. Les captures à 50 % et le `FrameTimingMetric` (p95 ≤ 16,7 ms) restent **dus** : cette
+machine n'a pas de `/dev/kvm` (règle 8 des règles de lot), la preuve émulateur vient du job `emulator`
+de `mobile.yaml` — `docs/agents/screenshots/mobile/X1/README.md` dit ce qui reste à prendre.
+
+**Hors portée.** Le contenu des écrans (X3–X6), le pager (L1), l'hôte du lecteur (P2), la rangée
+retour (L1), la table de routes, `Hosts(graph)`.
+
 ### P2 — Le lecteur : fermer au doigt (delivered 2026-11-25)
 
 **La règle.** Le lecteur plein écran se ferme au doigt : il suit le doigt **1:1**, le relâchement
