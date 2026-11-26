@@ -257,9 +257,14 @@ player_evidence() {
     else
         printf 'player=unavailable cause=the queue sheet never painted\n'
     fi
-    adb_dev shell input keyevent KEYCODE_BACK >/dev/null
+    # The queue is a SHEET, not an Activity: its own close control returns to the
+    # player. BACK closed the PLAYER instead (measured on run 45803188631), which
+    # is why the close button, not the key, is the path.
+    if ! tap_desc_prefix "Fermer la file d'attente" 5; then
+        adb_dev shell input keyevent KEYCODE_BACK >/dev/null
+    fi
     if ! await_text "Réduire le lecteur" 10; then
-        printf 'player=unavailable cause=BACK from the queue did not return to the player\n'
+        printf 'player=unavailable cause=the queue did not close back to the player\n'
         return 0
     fi
 
