@@ -4295,6 +4295,15 @@ behaviour; the party itself lives entirely in this lot's files.
   Measured: before it, every chunk was a `404` and the guest sat on « Chargement… »; after it, the
   guest plays.
 
+- **Une feuille ne se peint pas dans une porte de 48 dp.** `PartyButton` composait `PartySheet`
+  dans la case de 48 dp que lui donne la rangée du pouce ; `NzSheet` se dimensionne sur son parent
+  (`fillMaxSize`), donc la feuille naissait dans une colonne de 48 dp. Le patron de MB19 s'applique :
+  un `Dialog` transparent et non décoré (`DialogProperties(usePlatformDefaultWidth = false)`) avec un
+  `Box(Modifier.fillMaxSize())` autour de la feuille, et la porte lit `state.unsupported` au lieu
+  d'une copie prise avant la sonde. Tenu par `PartyDoorTest.theSheetIsNotConfinedToTheDoorsSlot`
+  (largeur du bouton « Démarrer la soirée » ≥ 200 dp dans la case de 48 dp) et
+  `PartyDoorTest.aServerWithoutTheRoutesHidesTheDoor`.
+
 **Measured on this machine** (Rust 1.99.1, `CARGO_BUILD_JOBS=4`, JDK 21, emulator API 35 x86_64
 `-no-window -no-audio` on this lot's own port 5586, `webapp/test/party/server.py` on the host):
 
