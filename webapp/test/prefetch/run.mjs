@@ -18,6 +18,23 @@
 // the preload reads at the trickle pace while the element playing needs the
 // link, and at full speed once it has enough in hand — so a slow link pays for
 // the preload at most what the player leaves, never more.
+//
+// Measured on 2026-11-26, median of 3, 40 s WAV tracks (320 KB), CDP 150 ms:
+//
+//   link      preload  next at 1 s        next at 14 s          preloaded
+//   LAN       off      0.3 s   1 req      0.3 s   1 req 313 KB   0
+//   LAN       on       0.3 s   1 req      0.3 s   0 req            313 KB
+//   16 KB/s   off     20.9 s   1 req     25.9 s   1 req 226 KB   0
+//   16 KB/s   on      29.5 s   1 req     87.7 s   1 req 177 KB   196 KB
+//   64 KB/s   off      3.9 s   1 req      4.2 s   1 req 235 KB   0
+//   64 KB/s   on       3.9 s   1 req      0.3 s   0 req            313 KB
+//
+// On LAN and at 64 KB/s the preload does what it is for (the whole blob on the
+// device, no stream request at the tap). At 16 KB/s a 320 KB track cannot be
+// preloaded inside the 14 s before the tap, so the trickle is pure cost: 4 KB/s
+// is 27 % of the link, the cold start goes past COLD_START_MS (30 s), the
+// watchdog reloads the stream four times from zero — and 25 s is already missed
+// by the run with no preload at all (25.9 s).
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
