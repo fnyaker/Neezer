@@ -2,11 +2,13 @@
 // useless on a slow link: it took the whole link from the track being played,
 // and it gave up for good on the server's first "not archived yet".
 //
-// It now reads the body chunk by chunk, and after each chunk sleeps the trickle
-// pace while the PLAYER needs the link (lib/netyield.js#prefetchTrickle) — never
-// on its own hold, which is always on while it reads. A 503 with Retry-After is
-// the server saying "queued, come back", not a refusal: it is retried, at most
-// four times, and only while the track is still wanted.
+// A prefetch now reads through `offline.js#fetchYielding` with the prefetch's
+// own rules: it never starts a request while a watched element wants the link,
+// and mid-body it steps aside ENTIRELY — the request aborted, then resumed with
+// `Range: bytes=<received>-` once the element lets go. It does NOT trickle: 4
+// KB/s of a 16 KB/s link still cost the playing track 27 %. A 503 with
+// Retry-After is the server saying "queued, come back", not a refusal: it is
+// retried, at most four times, and only while the track is still wanted.
 //
 // The bandwidth itself is measured in the browser bench (test/prefetch/run.mjs);
 // what is pinned here is the seam, on a fake IndexedDB and a fake body.
@@ -43,37 +45,49 @@ online.set(true);
 
 // --- the browser, as far as these modules reach ------------------------------
 const hdr = (o) => ({ get: (k) => o[String(k).toLowerCase()] ?? null });
-const bytes = (n) => new Uint8Array(n).fill(0x42);
-const chunks = [bytes(2048), bytes(2048)]; // 2 s of trickle in total, 4 KiB
-let streamRequests = 0;
 
-function streamBody(parts, { delay = 0 } = {}) {
+// 4 KiB, one byte per position, so a resumed file can be compared byte for byte.
+const TOTAL = 4096;
+const ALL = new Uint8Array(TOTAL);
+for (let i = 0; i < TOTAL; i++) ALL[i] = i & 0xff;
+const CHUNK = 1024;
+
+let requests = [];
+
+/** A resumable body of `ALL` from `offset` on, one chunk every 5 ms. */
+function streamResponse(offset, signal, onChunk) {
+  const rest = ALL.slice(offset);
   let i = 0;
   const reader = {
     async read() {
-      if (i >= parts.length) return { done: true, value: undefined };
-      if (delay) await new Promise((r) => setTimeout(r, delay));
-      return { done: false, value: parts[i++] };
+      if (i >= rest.length) return { done: true, value: undefined };
+      await new Promise((r) => setTimeout(r, 5));
+      if (signal && signal.aborted) {
+        const e = new Error("aborted");
+        e.name = "AbortError";
+        throw e;
+      }
+      const value = rest.slice(i, i + CHUNK);
+      i += CHUNK;
+      if (onChunk) onChunk(offset + i);
+      return { done: false, value };
     },
     async cancel() {
       reader.cancelled = true;
     },
     cancelled: false,
   };
-  return { getReader: () => reader, reader };
-}
-
-function ok(parts, headers = { "content-type": "audio/flac" }) {
-  const body = streamBody(parts);
-  return { ok: true, status: 200, headers: hdr(headers), body, bodyReader: body.reader };
-}
-
-function notArchived() {
+  const headers = {
+    "content-type": "audio/flac",
+    "accept-ranges": "bytes",
+    "content-length": String(rest.length),
+  };
+  if (offset) headers["content-range"] = `bytes ${offset}-${TOTAL - 1}/${TOTAL}`;
   return {
-    ok: false,
-    status: 503,
-    headers: hdr({ "retry-after": "2", "content-type": "application/json" }),
-    body: streamBody([]),
+    ok: true,
+    status: offset ? 206 : 200,
+    headers: hdr(headers),
+    body: { getReader: () => reader },
   };
 }
 
@@ -88,13 +102,29 @@ function other() {
   };
 }
 
-globalThis.fetch = async (url) => {
-  if (String(url).includes("/api/stream/")) {
-    streamRequests++;
-    return ok(chunks);
-  }
-  return other();
-};
+/** Install the stream: one resumable body, Range honoured, requests recorded. */
+function serveStream({ onChunk } = {}) {
+  requests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (!String(url).includes("/api/stream/")) return other();
+    const headers = init.headers || {};
+    const m = /^bytes=(\d+)-$/.exec(headers.Range || headers.range || "");
+    const offset = m ? +m[1] : 0;
+    const rec = { url: String(url), headers: { ...headers }, signal: init.signal, offset, aborted: false };
+    requests.push(rec);
+    if (init.signal) init.signal.addEventListener("abort", () => (rec.aborted = true));
+    return streamResponse(offset, init.signal, onChunk);
+  };
+}
+
+function notArchived() {
+  return {
+    ok: false,
+    status: 503,
+    headers: hdr({ "retry-after": "2", "content-type": "application/json" }),
+    body: { cancel: async () => {} },
+  };
+}
 
 class FakeEl extends EventTarget {
   constructor(src = "https://srv/api/stream/1") {
@@ -143,46 +173,85 @@ function stored(id) {
   return idb.dbs.get("nsupy-playcache")?.stores.get("audio").rows.get(id);
 }
 
-test("a prefetch read sleeps the trickle between chunks while the element wants the link", async () => {
-  const el = playing();
-  const t = track();
+async function waitFor(cond, ms = 3000) {
   const t0 = Date.now();
-  await playcache.prefetchTrack(t, "FLAC");
-  const elapsed = Date.now() - t0;
-  // Two 2 KiB chunks at 4 KiB/s: 500 ms each. Anything near zero means the read
-  // took the whole link, which is what made a skip slower than no prefetch.
-  assert.ok(elapsed >= 800, `yielded for ${elapsed} ms, expected the trickle pace`);
-  assert.equal(get(cachedIds).has(t.id), true);
-  assert.equal(stored(t.id).size, 4096, "the whole body is written, in order");
-  // ...and the moment the player has enough in hand, the rest is not slowed.
-  el.ranges = [[0, 39]];
-  el.fire("progress");
-  assert.equal(ny.playerWantsLink(), false);
-  const t2 = track();
-  const t1 = Date.now();
-  await playcache.prefetchTrack(t2, "FLAC");
-  assert.ok(Date.now() - t1 < 200, `read at full speed (${Date.now() - t1} ms)`);
+  while (!cond()) {
+    if (Date.now() - t0 > ms) throw new Error("timed out waiting");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+test("with nothing playing, the prefetch is a single request and is never aborted", async () => {
   ny.resetNetYield();
+  serveStream();
+  const t = track();
+  await playcache.prefetchTrack(t, "FLAC");
+  assert.equal(requests.length, 1, "one request, no resume");
+  assert.equal(requests[0].aborted, false);
+  assert.equal(stored(t.id).size, TOTAL, "the whole body is written");
+  assert.deepEqual(new Uint8Array(await stored(t.id).blob.arrayBuffer()), ALL);
 });
 
-test("with nothing playing, the prefetch does not pause at all", async () => {
+test("an element that wants the link mid-body aborts the request, then resumes it with Range", async () => {
   ny.resetNetYield();
+  // The element starts with its file all in hand (it does not want the link),
+  // then wants it again after the first chunk of the prefetch.
+  const el = new FakeEl();
+  ny.watchElement(el);
+  el.paused = false;
+  el.ranges = [[0, 39]];
+  el.fire("play");
+  assert.equal(ny.playerWantsLink(), false);
+  let flipped = false;
+  serveStream({
+    onChunk: () => {
+      if (flipped) return;
+      flipped = true;
+      el.ranges = [[0, 2]];
+      el.fire("progress");
+    },
+  });
   const t = track();
-  const t0 = Date.now();
-  await playcache.prefetchTrack(t, "FLAC");
-  assert.ok(Date.now() - t0 < 200, `took ${Date.now() - t0} ms`);
-  assert.equal(stored(t.id).size, 4096);
+  const p = playcache.prefetchTrack(t, "FLAC");
+  await waitFor(() => requests.length === 1 && requests[0].aborted);
+  assert.equal(ny.playerWantsLink(), true);
+  assert.equal(requests.length, 1, "no new request while the element wants the link");
+  assert.equal(stored(t.id), undefined, "nothing is written from a half read");
+  // The element lets go: the read resumes at the byte it had, not from zero.
+  el.ranges = [[0, 39]];
+  el.fire("progress");
+  await p;
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].headers.Range, `bytes=${CHUNK}-`, "resumed at the received byte");
+  assert.equal(stored(t.id).size, TOTAL);
+  assert.deepEqual(new Uint8Array(await stored(t.id).blob.arrayBuffer()), ALL, "identical to the source");
+});
+
+test("no request is started while the element wants the link; it starts when free", async () => {
+  const el = playing();
+  serveStream();
+  const t = track();
+  const p = playcache.prefetchTrack(t, "FLAC");
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(requests.length, 0, "the prefetch waits for the element to let go");
+  el.ranges = [[0, 39]];
+  el.fire("progress");
+  await p;
+  assert.equal(requests.length, 1);
+  assert.equal(stored(t.id).size, TOTAL);
+  ny.resetNetYield();
 });
 
 test("a track that stops being wanted is abandoned, and nothing is written", async () => {
   ny.resetNetYield();
+  serveStream();
   const t = track();
   let asked = 0;
-  // The first check (after the first chunk) still passes; the next one says a
-  // skip happened, and the read must cancel rather than fill the cache.
-  const p = playcache.prefetchTrack(t, "FLAC", () => ++asked <= 1);
-  await p;
-  assert.ok(asked >= 2, "the read asked again after a chunk");
+  // The check before the request and the one before the first read pass; the
+  // one after the first chunk says a skip happened.
+  await playcache.prefetchTrack(t, "FLAC", () => ++asked <= 2);
+  assert.ok(asked >= 3, "the read asked again after a chunk");
+  assert.equal(requests[0].aborted, true, "the request is aborted, not left running");
   assert.equal(stored(t.id), undefined, "an abandoned read writes nothing");
   assert.equal(get(cachedIds).has(t.id), false);
 });
@@ -194,13 +263,13 @@ test("a 503 « pas encore archivé » is retried after Retry-After, not given up
   globalThis.fetch = async (url) => {
     if (!String(url).includes("/api/stream/")) return other();
     attempts++;
-    return attempts === 1 ? notArchived() : ok(chunks);
+    return attempts === 1 ? notArchived() : streamResponse(0, null, null);
   };
   const t0 = Date.now();
   await playcache.prefetchTrack(t, "FLAC");
   assert.equal(attempts, 2, "asked again once the archive had time to land");
   assert.ok(Date.now() - t0 >= 1900, "waited the Retry-After it was given");
-  assert.equal(stored(t.id).size, 4096, "and the retry wrote the file");
+  assert.equal(stored(t.id).size, TOTAL, "and the retry wrote the file");
 });
 
 test("a 503 that never clears stops after four attempts", async () => {
@@ -210,16 +279,10 @@ test("a 503 that never clears stops after four attempts", async () => {
   globalThis.fetch = async (url) => {
     if (!String(url).includes("/api/stream/")) return other();
     attempts++;
-    return {
-      ok: false,
-      status: 503,
-      headers: hdr({ "retry-after": "2" }),
-      body: streamBody([]),
-    };
+    return notArchived();
   };
   await playcache.prefetchTrack(t, "FLAC");
   assert.equal(attempts, 4, "four attempts in total, then quiet");
   assert.equal(stored(t.id), undefined);
-  globalThis.fetch = async (url) =>
-    String(url).includes("/api/stream/") ? (streamRequests++, ok(chunks)) : other();
+  serveStream();
 });

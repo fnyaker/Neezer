@@ -445,21 +445,37 @@ function setDownloading(id, on) {
 // at the same byte once the link is free. A body that cannot be resumed (a live
 // transcode) is read at a trickle instead. A connection that drops under a
 // download (a phone changing networks) resumes too, rather than failing it.
-async function fetchYielding(url, onProgress) {
+//
+// `opts` is how the PREFETCH (lib/playcache.js) reuses the same reader: it
+// yields on the ELEMENT's need (holds aside), waits for the element to let go,
+// gives up as soon as the track stops being wanted, and — since a trickle of
+// 4 KB/s still took 27 % of a 16 KB/s link — never trickles a non-resumable
+// body: it aborts, drops what it has and asks again from byte 0. The defaults
+// are the download path, unchanged.
+export async function fetchYielding(url, onProgress, opts = {}) {
+  const {
+    headers: baseHeaders = {},
+    mustYield = isYielding,
+    whenFree = whenClear,
+    stillWanted = () => true,
+  } = opts;
   const chunks = [];
   let received = 0;
   let total = 0;
   let type = "audio/flac";
   let failures = 0;
   for (;;) {
-    const headers = received ? { Range: `bytes=${received}-` } : {};
+    // Never start a request while the player needs the link.
+    if (mustYield()) await whenFree();
+    if (!stillWanted()) return null;
+    const headers = { ...baseHeaders, ...(received ? { Range: `bytes=${received}-` } : {}) };
     const ctl = new AbortController();
     let res;
     try {
       res = await fetch(url, { credentials: "include", headers, signal: ctl.signal });
     } catch (e) {
       if (!received || ++failures > RESUMES) throw e;
-      await whenClear();
+      await whenFree();
       continue;
     }
     if (received) {
@@ -469,7 +485,19 @@ async function fetchYielding(url, onProgress) {
         received = 0;
       }
     }
-    if (!res.ok) throw new Error("stream " + res.status);
+    if (!res.ok) {
+      // Release the connection: a refusal's body is never wanted.
+      try {
+        res.body?.cancel?.();
+      } catch {
+        /* ignore */
+      }
+      const err = new Error("stream " + res.status);
+      err.status = res.status;
+      const ra = Number(res.headers.get("Retry-After"));
+      err.retryAfter = Number.isFinite(ra) && ra > 0 ? ra : null;
+      throw err;
+    }
     if (!received) {
       total = +res.headers.get("Content-Length") || 0;
       type = res.headers.get("Content-Type") || type;
@@ -482,7 +510,11 @@ async function fetchYielding(url, onProgress) {
     const reader = res.body.getReader();
     try {
       for (;;) {
-        if (resumable && isYielding()) {
+        if (!stillWanted()) {
+          ctl.abort();
+          return null;
+        }
+        if (resumable && mustYield()) {
           ctl.abort();
           break;
         }
@@ -491,12 +523,29 @@ async function fetchYielding(url, onProgress) {
         chunks.push(value);
         received += value.length;
         if (onProgress) onProgress(total ? received / total : null);
-        if (isYielding() && !resumable) await trickle(value.length);
+        if (!stillWanted()) {
+          ctl.abort();
+          return null;
+        }
+        if (mustYield() && !resumable) {
+          if (mustYield === isYielding) {
+            // The download path keeps its trickle: it cannot restart cheaply.
+            await trickle(value.length);
+          } else {
+            // A prefetch never trickles. Stop, drop what it has and ask again
+            // from zero once the element lets go — counted against RESUMES.
+            ctl.abort();
+            chunks.length = 0;
+            received = 0;
+            if (++failures > RESUMES) return null;
+            break;
+          }
+        }
       }
     } catch (e) {
       if (!received || ++failures > RESUMES) throw e;
     }
-    await whenClear();
+    await whenFree();
   }
 }
 const RESUMES = 3;

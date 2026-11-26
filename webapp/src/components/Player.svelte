@@ -3231,10 +3231,10 @@
   // gives the CURRENT track's buffering first claim on the bandwidth, and it
   // means skipping through a playlist doesn't fire a full audio download per
   // skip — only a "next" that survives the delay gets fetched. Three seconds,
-  // not twelve: the read now yields to the element that is playing
-  // (lib/netyield.js#prefetchTrickle), so starting earlier can no longer cost
-  // the current track anything, and the next one has that much more of its
-  // file in hand when the person taps.
+  // not twelve: the read steps aside entirely (abort + Range) while an element
+  // wants the link (lib/playcache.js#prefetchTrack), so starting earlier can no
+  // longer cost the current track anything, and the next one has that much more
+  // of its file in hand when the person taps.
   const PREFETCH_DELAY = 3000;
   // Still the upcoming track at fire time? A skip meanwhile changed `next`
   // (and rescheduled us).

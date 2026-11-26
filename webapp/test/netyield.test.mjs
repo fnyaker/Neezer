@@ -158,50 +158,37 @@ test("a trickled read averages 4 KB a second, and wakes when the link is free", 
   assert.ok(Date.now() - t1 < 20, "nothing holds: no pause at all");
 });
 
-test("a prefetch read while the element wants the link goes at the trickle, and wakes when it lets go", async () => {
+test("the prefetch waits for the PLAYER to let go, and a hold does not count", async () => {
   fresh();
+  // `prefetchUpcoming` holds the link while it fetches the next track — so
+  // isYielding() is true for the whole read, and waiting on it would wait for
+  // ever. Only the ELEMENT's need counts.
+  const release = ny.hold();
+  assert.equal(ny.isYielding(), true);
+  const t0 = Date.now();
+  await ny.whenPlayerFree();
+  assert.ok(Date.now() - t0 < 20, "a hold is not a reason to wait");
+  release();
+
+  // An element that wants the link makes it wait; it resumes when it lets go.
   const el = new FakeEl();
   ny.watchElement(el);
   el.paused = false;
   el.ranges = [[0, 2]];
   el.fire("play");
   assert.equal(ny.playerWantsLink(), true);
-  // 8 KiB is two seconds at the trickle. The element gets its 30 s in hand
-  // after 40 ms: the read must be let through then, not two seconds later.
-  const t0 = Date.now();
-  const p = ny.prefetchTrickle(8192);
-  await new Promise((r) => setTimeout(r, 40));
+  let free = false;
+  const p = ny.whenPlayerFree().then(() => (free = true));
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(free, false, "the element still wants the link");
   el.ranges = [[0, 31]];
   el.fire("progress");
   assert.equal(ny.playerWantsLink(), false);
   await p;
-  assert.ok(Date.now() - t0 < 1000, "woken by the player letting go");
-  // Nothing playing: no pause at all (the full link is the prefetch's).
+  assert.equal(free, true, "woken by the player letting go");
+  // Nothing playing: no wait at all.
   const t1 = Date.now();
-  await ny.prefetchTrickle(1 << 20);
+  await ny.whenPlayerFree();
   assert.ok(Date.now() - t1 < 20);
-});
-
-test("the prefetch's own hold never makes its read wait on itself", async () => {
-  fresh();
-  // `prefetchUpcoming` holds the link while it fetches the next track — so
-  // isYielding() is true for the whole read, and using it here would sleep for
-  // ever. Only the ELEMENT's need counts.
-  const release = ny.hold();
-  assert.equal(ny.isYielding(), true);
-  const t0 = Date.now();
-  await ny.prefetchTrickle(1 << 20);
-  assert.ok(Date.now() - t0 < 20, "a hold is not a reason to yield");
-  release();
-  // While an element really wants it, a read really waits — the trickle pace.
-  const el = new FakeEl();
-  ny.watchElement(el);
-  el.paused = false;
-  el.fire("play");
-  const t1 = Date.now();
-  await ny.prefetchTrickle(2048); // half a second at 4 KB/s
-  const waited = Date.now() - t1;
-  assert.ok(waited >= 350, `waited ${waited} ms for 2 KiB`);
-  assert.ok(waited < 2000, `waited ${waited} ms, not a stuck timer`);
   ny.resetNetYield();
 });
