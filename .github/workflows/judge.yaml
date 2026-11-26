@@ -1,0 +1,116 @@
+name: Judge
+
+# THE JUDGE'S GATE (plan-mobile-tests, lot T9).
+#
+# A Sonnet agent (`Coder-Claude`, `mobile/tools/judge/trigger.md`) looks at the
+# screens the RELEASE APK painted — the artifact `mobile.yaml`'s `emulator` job
+# uploads as `mobile-journey-evidence` — beside the web app's own captures
+# (`mobile/tools/judge/reference/`), and posts ONE review whose body starts with
+# `Verdict : PASS|BLOCK|INCOMPLETE` plus a label. This workflow is what turns
+# that verdict into a check a merge policy can read: `judge:block` fails,
+# `judge:ok` passes, neither is a red "waiting for the judge".
+#
+# WHY THE VERDICT IS NOT A `REQUEST_CHANGES` REVIEW: every agent pushes and
+# reviews with the same GitHub account, and GitHub refuses to request changes on
+# your own pull request. The label plus this check are the blocking mechanism
+# (the rubric's "Verdict et libellés" says so in full).
+#
+# ONLY LABELLED PRs ARE JUDGED — the owner's rule, and the reason the judge is
+# cheap (~3 runs a week, 8-12 min of Sonnet). A PR without `ui` has this check
+# SKIPPED, never green and never red: an unlabelled PR must not look judged.
+#
+# WHY A SECOND JOB FOR THE NOTICE: the gate itself is skipped on an unlabelled
+# PR, so none of its steps can run there — and step 3 of the lot asks for a
+# notice when such a PR touches `mobile/android/**/src/main/**`. So the notice
+# lives in its own tiny job (no checkout, ~5 s) that runs ONLY when `ui` is
+# absent. It NEVER edits the PR: adding `ui` would send the judge by itself, and
+# that is the person's decision (`trigger.md`).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # --- the gate -------------------------------------------------------------
+  judge:
+    name: Judge gate
+    runs-on: ubuntu-latest
+    # Bounded: four `gh` calls, no build, no browser — measured ~10 s per event.
+    timeout-minutes: 5
+    # The owner's rule: unlabelled PRs are not judged. `skipped`, not green.
+    if: contains(github.event.pull_request.labels.*.name, 'ui')
+    steps:
+      # A NEW COMMIT WITHDRAWS THE PREVIOUS VERDICT. `judge:ok` names a head: a
+      # push makes it a lie, so it is removed here and the same run then reads
+      # the labels fresh and fails with « En attente du juge ». (A label edit
+      # made with the workflow's own token triggers no new run — the spec's own
+      # note — which is why this step must also reach the verdict step below,
+      # not rely on the `unlabeled` event.)
+      - name: A new commit withdraws the previous verdict
+        if: github.event.action == 'synchronize'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels="$(gh pr view "$PR" --json labels --jq '.labels[].name')"
+          if grep -qx 'judge:ok' <<<"$labels"; then
+            echo "::notice::Nouveau commit sur #$PR : judge:ok retiré, la PR n'est plus jugée jusqu'à la nouvelle revue."
+            gh pr edit "$PR" --remove-label judge:ok
+          else
+            echo "no judge:ok to withdraw (the head changed, so an older verdict is already stale)"
+          fi
+
+      # READ THE LABELS FRESH, never from the event payload: the step above may
+      # have removed `judge:ok` a second ago, and a payload captured before the
+      # run would still carry it.
+      - name: Verdict present
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          labels="$(gh pr view "$PR" --json labels --jq '.labels[].name')"
+          printf 'labels: %s\n' "$(tr '\n' ' ' <<<"$labels")"
+          if grep -qx 'judge:block' <<<"$labels"; then
+            echo "::error::Le juge a bloqué cette PR : lis sa revue."
+            exit 1
+          fi
+          if grep -qx 'judge:ok' <<<"$labels"; then
+            echo "judge:ok — le juge a passé cette tête ; la porte est verte."
+            exit 0
+          fi
+          echo "::error::En attente du juge : envoie la tâche (mobile/tools/judge/trigger.md), ne fusionne pas."
+          exit 1
+
+  # --- the notice for an unlabelled PR that changes the interface -----------
+  notice:
+    name: Label notice
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ui') }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # Never a failure: only labelled PRs are judged, and the person decides
+      # whether a screen change is one. `gh pr diff` reads the API, so there is
+      # no checkout and no build in this job.
+      - name: Ask for the ui label when this PR changes what a person sees
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if gh pr diff "$PR" --name-only | grep -qE '^mobile/android/.*/src/main/'; then
+            echo "::notice::Cette PR change l'interface : ajoute le label ui."
+          else
+            echo "no ui label, and no mobile/android/**/src/main/** file: nothing to judge"
+          fi

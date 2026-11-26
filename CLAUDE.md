@@ -101,7 +101,9 @@ And the architecture's own rules, detailed in the area notes:
 
 ## CI and merging
 
-Nine workflows (`tests`, `webapp`, `docker`, `network`, `android`, `desktop`, `mobile`, `release`, `security`).
+Ten workflows (`tests`, `webapp`, `docker`, `network`, `android`, `desktop`, `mobile`, `release`,
+`judge`, `security`). A `ui`-labelled PR also needs the `Judge gate` check to pass: the visual judge's
+verdict, not a build (`docs/agents/mobile.md`, *Le juge*).
 **Fully green means every job of every workflow that ran, including the security scanners.** `security.yaml`
 (CodeQL, Semgrep, Bandit, Trivy, Gitleaks) is `continue-on-error`, so its check can show green with
 findings: read each job's log and fix every finding the change introduced (or mark a false positive

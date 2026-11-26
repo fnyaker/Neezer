@@ -449,7 +449,15 @@ fi
 # the server's Python packages (the workflow installs them); measured on v1.6.5
 # and v1.6.6 it fails at the sign-in, and on the car fix's parent at the car
 # door (the PR says with which line).
-"$here/release-journey.sh" --serial "$serial"
+# `NEEZER_EVIDENCE_DIR` is the judge's evidence (lot T9): the workflow sets it,
+# so the same walk also leaves the screenshots, the trees and the buffers the
+# artifact `mobile-journey-evidence` carries. Unset on a developer machine, in
+# which case the journey behaves exactly as T1 wrote it.
+if [[ -n "${NEEZER_EVIDENCE_DIR:-}" ]]; then
+    "$here/release-journey.sh" --serial "$serial" --evidence "$NEEZER_EVIDENCE_DIR"
+else
+    "$here/release-journey.sh" --serial "$serial"
+fi
 check_alive "the release journey"
 
 # The instrumented step builds the DEBUG app, which links the Rust library: it

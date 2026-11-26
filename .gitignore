@@ -124,3 +124,10 @@ mobile/android/local.properties
 mobile/rust/target/
 **/jniLibs/
 bridge/build/generated/
+
+# The judge's evidence (mobile/tools/judge/trigger.md): the screenshots, trees
+# and buffers a local `release-journey.sh --evidence` leaves. The CI run uploads
+# the same directory as the `mobile-journey-evidence` artifact; keeping it out
+# of the tree is what stops a local run from dirtying a checkout. The
+# REFERENCES (`mobile/tools/judge/reference/`) are committed, never ignored.
+/mobile/tools/judge/evidence/

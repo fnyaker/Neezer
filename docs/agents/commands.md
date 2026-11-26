@@ -98,6 +98,12 @@ cd webapp && node test/volume/run.mjs                # the player bar's volume: 
 cd webapp && node test/mobile/run.mjs                # the phone shell at 360/390/639/640/641 px: no sideways overflow, tab bar 64 + mini
                                                      # player 64 floating 8 above it, the library tab, the full-screen player, the theme kept
                                                      # (needs npm run build; PLAYWRIGHT=/path/to/playwright-core CHROMIUM=/usr/bin/chromium)
+cd webapp && node test/screens/run.mjs               # the judge's web references: the ten screens of mobile/tools/judge/reference/ at the
+                                                     # emulator's own dp size (411x866 @2.625), same seeded library as the phone (needs npm run build)
+cd webapp && node test/screens/run.mjs --check       # every reference is present (no browser, no build)
+python mobile/tools/judge/precheck.py <evidence>     # the judge's countable checks on a mobile-journey-evidence directory: one line per
+                                                     # check, `precheck: ok=<n> fail=<n>`, exit 0 whatever the result
+gh run download <run-id> --name mobile-journey-evidence --dir /tmp/judge-<n>   # the artifact the judge reads (14 days)
 cd webapp && node test/player/run.mjs                # the sleep timer and the podcast speed on the audio elements the browser really plays (a fake page clock)
 cd webapp && node test/output/run.mjs                # the audio path: routed by the full-screen player, the fault simulated (the element's clock 8% fast): convicted
                                                      # in one window, DIRECT on a fresh element and a fresh context, retried at a track change, forgotten when clean
@@ -257,7 +263,7 @@ Note: the upstream `tests/` are unittest-based; there is no pytest config.
 argon2 for cheap parameters (hashing was half the wall clock; `tests.managers.test_manager_user`
 pins the production defaults), and it compiles each distinct werkzeug URL builder once per process
 instead of once per rule per app (~95% of every `create_application`; `tests.test_harness` checks
-every rule's URLs against a fresh werkzeug compilation). CI runs nine workflows:
+every rule's URLs against a fresh werkzeug compilation). CI runs ten workflows:
 ### CI: the Actions cache budget is a hard constraint
 
 Measured 2026-11-18: `gh api /repos/fnyaker/Neezer/actions/caches` → **30 entries, 16.9 GB**, for the
@@ -354,4 +360,11 @@ second copy of it.
 - `release.yaml` — **the same `concurrency` block as the other workflows** (three runs had waited
   3464, 2167 and 2103 s behind superseded PR runs); tags and `master` are never cancelled. On a
   `v*` tag, attaches `docker-compose.yml` (image pinned to the tag's version, since the checked-in file follows `:latest`) and `.env.example` to the GitHub release; `android.yaml` attaches the APK to the same one, and whichever runs first creates the release. The five desktop packages are built in parallel from ONE release build (`binaries`); the **Arch job compiles its own on purpose** (`makepkg` on Arch, P1) and that build was the workflow's critical path — **median 21.47 min, max 36.53 min** over 8 successful runs, from scratch every time. It is cached now: `Swatinem/rust-cache` carries `desktop/packaging/arch/src/target` (the PKGBUILD's `CARGO_TARGET_DIR`, the same path on every run), and its prefix names the `rustc` `pacman -Syu` installed (not the runner's CPU: two attempts of run 44302526625 landed on two EPYC models, so a CPU-keyed entry matched neither — 29.12 then 28.1 min, both cold; the floor stays in the prefix, and `check_cpu_floor.sh` runs on the binary extracted from the package before anything is attached). It saves only the dependencies — which is what a fresh checkout can reuse — and rebuilds the workspace's own crates.
+- `judge.yaml` — the visual judge's GATE (plan-mobile-tests, lot T9), not a build: `Judge gate` is
+  SKIPPED unless the PR carries the `ui` label, fails on `judge:block`, fails with « En attente du
+  juge » when neither verdict label is set, and passes on `judge:ok`; a `synchronize` event removes
+  `judge:ok` first, so a push cannot ride an old verdict. A second, tiny `Label notice` job reads
+  `gh pr diff --name-only` on an unlabelled PR and only prints a notice when it touches
+  `mobile/android/**/src/main/**`. ~10 s per event, no checkout in the notice job, no build in
+  either: the judge itself runs in Claude's quota (`mobile/tools/judge/trigger.md`, ≤3 runs/week).
 - `security.yaml` — advisory scanners side by side (CodeQL, Semgrep, Bandit, Trivy over every lockfile + Dockerfile, Gitleaks over the history); each job is `continue-on-error`, so a finding never gates a merge. SARIF goes to the Security tab. `cargo-audit` is the exception: on `master`, dispatch and weekly, and **not** `continue-on-error` (it never runs on a PR, so its red blocks no merge and must stay visible).
