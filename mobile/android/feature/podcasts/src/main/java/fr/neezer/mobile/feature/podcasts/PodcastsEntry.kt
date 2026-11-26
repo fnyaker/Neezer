@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -47,6 +48,7 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.Skeleton
@@ -165,39 +167,49 @@ fun PodcastsScreen(
                 )
             }
 
-            when {
-                state.loading && state.shows.isEmpty() && !state.searchActive -> {
-                    Skeleton(
-                        modifier = Modifier.padding(NzSpacing.pageX),
-                        kind = NzSkeletonKind.Shelf,
-                        count = 6,
-                    )
+            // The main phase replaces itself in place (M7): skeleton → grid,
+            // failure → retry, the search panel or the empty note. Four flags,
+            // one phase (the plan's `(loading, failure!=null, shows.isEmpty(),
+            // searchActive)`); a re-emit of the same phase animates nothing.
+            NzSwap(
+                targetState = podcastsPhase(state),
+                modifier = Modifier.weight(1f),
+                label = "podcasts",
+            ) { phase ->
+                // `AnimatedContent` stacks its content; a Column keeps the
+                // `weight(1f)` of the grid and the search results.
+                Column(Modifier.fillMaxSize()) {
+                    when (phase) {
+                        PODCASTS_LOADING -> Skeleton(
+                            modifier = Modifier
+                                .padding(NzSpacing.pageX)
+                                .testTag(PODCASTS_LOADING_TAG),
+                            kind = NzSkeletonKind.Shelf,
+                            count = 6,
+                        )
+                        PODCASTS_FAILED -> LoadFailed(
+                            cause = state.failure.orEmpty(),
+                            onRetry = actions.retry,
+                            modifier = Modifier.padding(NzSpacing.pageX),
+                            title = "Les podcasts n'ont pas pu être chargés",
+                        )
+                        PODCASTS_SEARCH -> SearchResults(state, actions)
+                        PODCASTS_EMPTY -> EmptyState(
+                            title = "Aucun abonnement",
+                            body = if (isAdmin) {
+                                "${PodcastsCopy.NO_SUBSCRIPTION} ${PodcastsCopy.NO_SUBSCRIPTION_HINT}"
+                            } else {
+                                PodcastsCopy.NO_SUBSCRIPTION
+                            },
+                            glyph = NzGlyph.Mic,
+                        )
+                        else -> ShowGrid(
+                            shows = state.shows,
+                            onOpen = actions.openShow,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
-                state.failure != null && state.shows.isEmpty() -> {
-                    LoadFailed(
-                        cause = state.failure,
-                        onRetry = actions.retry,
-                        modifier = Modifier.padding(NzSpacing.pageX),
-                        title = "Les podcasts n'ont pas pu être chargés",
-                    )
-                }
-                state.searchActive -> SearchResults(state, actions)
-                state.shows.isEmpty() -> {
-                    EmptyState(
-                        title = "Aucun abonnement",
-                        body = if (isAdmin) {
-                            "${PodcastsCopy.NO_SUBSCRIPTION} ${PodcastsCopy.NO_SUBSCRIPTION_HINT}"
-                        } else {
-                            PodcastsCopy.NO_SUBSCRIPTION
-                        },
-                        glyph = NzGlyph.Mic,
-                    )
-                }
-                else -> ShowGrid(
-                    shows = state.shows,
-                    onOpen = actions.openShow,
-                    modifier = Modifier.weight(1f),
-                )
             }
         }
         state.message?.let { message ->
@@ -212,57 +224,87 @@ fun PodcastsScreen(
 private fun SearchResults(state: PodcastsModel.State, actions: PodcastsActions) {
     val colors = Sillon.colors
     Column(Modifier.fillMaxSize()) {
-        when {
-            state.searching && state.results.isEmpty() -> {
-                Skeleton(
-                    modifier = Modifier.padding(NzSpacing.pageX),
-                    kind = NzSkeletonKind.List,
-                    count = 4,
-                )
-            }
-            state.searchFailure != null -> {
-                LoadFailed(
-                    cause = state.searchFailure,
-                    onRetry = actions.retrySearch,
-                    modifier = Modifier.padding(NzSpacing.pageX),
-                    title = "La recherche a échoué",
-                )
-            }
-            state.results.isEmpty() -> {
-                Text(
-                    text = PodcastsCopy.noSearchResult(state.trimmedQuery),
-                    style = Sillon.type.body,
-                    color = colors.dim,
-                    modifier = Modifier.padding(
-                        start = NzSpacing.pageX,
-                        end = NzSpacing.pageX,
-                        top = NzSpacing.l,
-                    ),
-                )
-            }
-            else -> {
-                Text(
-                    text = "Résultats",
-                    style = Sillon.type.titleSmall,
-                    color = colors.tx,
-                    modifier = Modifier.padding(
-                        start = NzSpacing.pageX,
-                        end = NzSpacing.pageX,
-                        top = NzSpacing.m,
-                        bottom = NzSpacing.s,
-                    ),
-                )
-                ShowGrid(
-                    shows = state.results,
-                    onOpen = actions.openShow,
-                    onSubscribe = actions.subscribe,
-                    subscribing = state.subscribing,
-                    modifier = Modifier.weight(1f),
-                )
+        // The search's own phase replaces in place, exactly like the list's
+        // (M7): the skeleton, the failure, the empty note and the grid.
+        NzSwap(
+            targetState = podcastsSearchPhase(state),
+            modifier = Modifier.weight(1f),
+            label = "podcasts-recherche",
+        ) { phase ->
+            Column(Modifier.fillMaxSize()) {
+                when (phase) {
+                    PODCASTS_LOADING -> Skeleton(
+                        modifier = Modifier.padding(NzSpacing.pageX),
+                        kind = NzSkeletonKind.List,
+                        count = 4,
+                    )
+                    PODCASTS_FAILED -> LoadFailed(
+                        cause = state.searchFailure.orEmpty(),
+                        onRetry = actions.retrySearch,
+                        modifier = Modifier.padding(NzSpacing.pageX),
+                        title = "La recherche a échoué",
+                    )
+                    PODCASTS_EMPTY -> Text(
+                        text = PodcastsCopy.noSearchResult(state.trimmedQuery),
+                        style = Sillon.type.body,
+                        color = colors.dim,
+                        modifier = Modifier.padding(
+                            start = NzSpacing.pageX,
+                            end = NzSpacing.pageX,
+                            top = NzSpacing.l,
+                        ),
+                    )
+                    else -> {
+                        Text(
+                            text = "Résultats",
+                            style = Sillon.type.titleSmall,
+                            color = colors.tx,
+                            modifier = Modifier.padding(
+                                start = NzSpacing.pageX,
+                                end = NzSpacing.pageX,
+                                top = NzSpacing.m,
+                                bottom = NzSpacing.s,
+                            ),
+                        )
+                        ShowGrid(
+                            shows = state.results,
+                            onOpen = actions.openShow,
+                            onSubscribe = actions.subscribe,
+                            subscribing = state.subscribing,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
         }
     }
 }
+
+/** The subscriptions' four phases, as the [NzSwap] target (the plan's flags). */
+internal fun podcastsPhase(state: PodcastsModel.State): String = when {
+    state.loading && state.shows.isEmpty() && !state.searchActive -> PODCASTS_LOADING
+    state.failure != null && state.shows.isEmpty() -> PODCASTS_FAILED
+    state.searchActive -> PODCASTS_SEARCH
+    state.shows.isEmpty() -> PODCASTS_EMPTY
+    else -> PODCASTS_GRID
+}
+
+/** A search's four outcomes, as the inner [NzSwap] target. */
+private fun podcastsSearchPhase(state: PodcastsModel.State): String = when {
+    state.searching && state.results.isEmpty() -> PODCASTS_LOADING
+    state.searchFailure != null -> PODCASTS_FAILED
+    state.results.isEmpty() -> PODCASTS_EMPTY
+    else -> PODCASTS_GRID
+}
+
+internal const val PODCASTS_LOADING = "chargement"
+internal const val PODCASTS_FAILED = "echec"
+private const val PODCASTS_SEARCH = "recherche"
+private const val PODCASTS_EMPTY = "vide"
+private const val PODCASTS_GRID = "grille"
+
+/** The subscriptions' loading skeleton, for the phase test. */
+internal const val PODCASTS_LOADING_TAG = "podcasts-chargement"
 
 /** The grid of show cards (`Podcasts.svelte`'s `.grid`, 160 px cells). */
 @Composable
