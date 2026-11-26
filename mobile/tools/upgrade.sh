@@ -336,7 +336,20 @@ step "one title downloaded, before the upgrade"
 adb_dev shell am start -W -a android.intent.action.VIEW -d "neezer://album/$album_id" >/dev/null
 await_text "Télécharger" 30 || fail_screen "the album page did not paint its « Télécharger » action"
 tap_text "Télécharger" || fail_screen "the « Télécharger » action is not tappable"
-await_text "Téléchargé" 180 || fail_screen "the download of album $album_id did not finish in 180 s (the button never said « Téléchargé »)"
+# The button reads « 0 / 2 » while the set is queued: the queue itself is the
+# proof that the tap landed, and the two lines below name WHY it did not move.
+# A download that makes no progress is either a request the server never saw
+# (nothing in its access log beyond the resolve) or one it answered `503` +
+# `Retry-After` (the background admission, six per pool): the log says which,
+# and the app's own lines say what it thought of the answer.
+if ! await_text "Téléchargé" 180; then
+    printf 'the server answered (last 25 /api requests):\n' >&2
+    grep -E '"(GET|POST) /(api|rest)/' "$access_log" | tail -n 25 >&2 || true
+    printf 'the app said (downloads, offline, queue):\n' >&2
+    adb_dev logcat -d -t 2000 2>/dev/null |
+        grep -iE 'download|télécharg|offline|hors ligne|bulk|nz_offline' | tail -n 25 >&2 || true
+    fail_screen "the download of album $album_id did not finish in 180 s (the button never said « Téléchargé »)"
+fi
 printf 'downloaded=1 album=%s\n' "$album_id"
 check_alive "the download"
 
