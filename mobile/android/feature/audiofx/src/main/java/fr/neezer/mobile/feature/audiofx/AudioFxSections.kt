@@ -104,6 +104,13 @@ internal fun AudioFxPanel(model: AudioFxModel, modifier: Modifier = Modifier) {
     ) {
         // The panel's phase replaces in place (M7): the first read's line, then
         // the five cards.
+        //
+        // The inner `Column` is not decoration: `AnimatedContent` lays its
+        // children in a BOX, so five cards given to it directly are all painted
+        // at the same bounds (measured on `06-lecture-et-son`, run 45939410793:
+        // five siblings at `[85,860][995,1903]`, `precheck overlap=1 targets=1`
+        // — the equaliser's switch read 48 × 22 dp). Every other `NzSwap` call
+        // site stacks its rows in a `Column`; this one forgot it in X6.
         NzSwap(
             targetState = if (state == null) AUDIOFX_LOADING else AUDIOFX_CONTENT,
             label = "effets-audio",
@@ -117,11 +124,13 @@ internal fun AudioFxPanel(model: AudioFxModel, modifier: Modifier = Modifier) {
                     color = Sillon.colors.dim,
                 )
             } else if (state != null) {
-                OutputCard(model, state)
-                PanCard(model, state)
-                AudioCard(model, state)
-                EqualizerCard(model, state)
-                TransitionsCard(model, state)
+                Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
+                    OutputCard(model, state)
+                    PanCard(model, state)
+                    AudioCard(model, state)
+                    EqualizerCard(model, state)
+                    TransitionsCard(model, state)
+                }
             }
         }
     }

@@ -77,17 +77,16 @@ shot() {
     [[ -n "$evidence" ]] || return 0
     local name="$1" tree="" previous=""
     mkdir -p "$evidence/screens"
-    # Wait for the push's enter motion to FINISH before capturing. `await_text`
-    # returns on the motion's FIRST frame, and uiautomator reads a tree that is
-    # still animating, so a fixed sleep is a guess: 350 ms was not enough on run
-    # 45944324915, where `06-lecture-et-son` still had the Réglages rows behind
-    # the cards being painted (« Transitions » at ~50 %) and its equaliser row
-    # read 48 × 22 dp — one overlapping clickable pair, one target under 48 dp,
-    # both artefacts of the fade (precheck: fail=2). The screen is settled when
-    # the TREE stops changing: two identical dumps in a row, bounded at 12
-    # attempts (≈2,4 s of motion, then capture anyway rather than hang).
+    # Capture the SETTLED screen, not the push's first frame: `await_text`
+    # returns on that frame, and uiautomator reads a tree that is still animating.
+    # The screen is settled when the TREE stops changing — two identical dumps in
+    # a row, bounded at 6 tries (≈1,2 s), then capture anyway rather than hang.
+    # (This wait was added while chasing `06-lecture-et-son`; that screen's
+    # overlay was NOT a fade — X6 handed five cards to an `AnimatedContent`, see
+    # `AudioFxSections.kt` — but the judge reads these images, so a capture taken
+    # mid-fade would still be a lie.)
     previous="$(dump_ui || true)"
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    for _ in 1 2 3 4 5 6; do
         sleep 0.2
         tree="$(dump_ui || true)"
         [[ -n "$tree" && "$tree" == "$previous" ]] && break

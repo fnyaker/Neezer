@@ -80,20 +80,6 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
-    /** DIAGNOSTIC (temporary): does the window receive the gesture at all? */
-    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
-        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN ||
-            ev.actionMasked == android.view.MotionEvent.ACTION_UP ||
-            ev.actionMasked == android.view.MotionEvent.ACTION_CANCEL
-        ) {
-            android.util.Log.i(
-                "NZTOUCH",
-                "act=${ev.actionMasked} x=${ev.x.toInt()} y=${ev.y.toInt()} pointers=${ev.pointerCount}",
-            )
-        }
-        return super.dispatchTouchEvent(ev)
-    }
-
     /** A share or a deep link, whichever the intent carries. */
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return

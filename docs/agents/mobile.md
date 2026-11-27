@@ -8122,6 +8122,19 @@ plan n'en livre pas, et une hauteur animée paie une mise en page par image, M10
    dessous » ; la ligne du plan est à amender (ou à donner à un lot qui possède `AdminParts.kt`, où
    vivent les lignes d'échec d'un job).
 
+**Le piège de l'`AnimatedContent`, mesuré sur l'émulateur.** `NzSwap` est un `AnimatedContent` : il
+pose ses enfants dans une **boîte**, pas dans une colonne. Cinq cartes données directement à son
+lambda sont donc toutes peintes aux **mêmes bornes** — `06-lecture-et-son` du run `45939410793` (master
+`385d1f9b`) montre cinq frères à `[85,860][995,1903]`, `precheck: overlap=1 targets=1` (l'interrupteur
+de l'égaliseur lit 48 × 22 dp), et les textes de deux cartes se superposent à l'écran. `AudioFxPanel`
+enveloppe donc ses cinq cartes dans un `Column`, et `AudioFxPhaseTest` le tient :
+`theFiveCardsStackInsteadOfPilingUpInTheSameBox` mesure les hauts **24 / 455 / 1338 / 2204 / 4204 px**
+avec la colonne, **24 / 24 / 24 / 24 / 24 px** sans elle. Tout autre `NzSwap` fait de même
+(`HomeScreen.kt:177` et `PodcastsEntry.kt:181` le disent en commentaire). **Restent deux branches de
+`SourcesSections.kt`** (`SourceOrderCard` ligne 86, `AccountsCard` ligne 264) qui empilent encore
+plusieurs enfants dans la boîte : Réglages → Sources et Mes comptes se recouvrent ; trouvé en passant,
+hors du lot JF, à corriger de la même façon.
+
 **Mesuré** (Robolectric 360 dp, backend NATIVE, horloge Compose explicite, aucune lecture d'horloge
 murale) :
 
