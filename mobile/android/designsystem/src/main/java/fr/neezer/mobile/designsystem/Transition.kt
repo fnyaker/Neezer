@@ -9,12 +9,19 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.TweenSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -207,5 +214,95 @@ fun NzGlyphSwap(
             tint = tint,
             contentDescription = contentDescription,
         )
+    }
+}
+
+/**
+ * The panel of a `LazyColumn` that replaces another (a library leaf, an artist
+ * tab, a phase): [NzSwap] cannot wrap lazy items, so every item of the panel
+ * carries [nzPaneEnter] and reads one shared progress. Same specs as
+ * [inPlaceSpecs]: 140 ms fade + 4 dp rise at Full, fade only at Reduced, nothing
+ * at Off. The first composition does not animate (the screen's own enter, X1,
+ * covers it); only a CHANGE of the key does.
+ *
+ * Why a modifier and not a wrapper: the body of a pane here is a set of
+ * `LazyListScope` items, and an `AnimatedContent` around a `LazyColumn` would
+ * fade the page's head and its tab strip with it (and re-enter the artist's band
+ * on every tab tap). A `graphicsLayer` read in the draw phase also costs no
+ * recomposition and no re-layout per frame (M10).
+ */
+@Stable
+class NzPaneEnter internal constructor(
+    private val anim: Animatable<Float, AnimationVector1D>,
+    internal val risePx: Float,
+) {
+    /** 0 at the start of a pane change, 1 once it has landed. */
+    val progress: Float get() = anim.value
+}
+
+/**
+ * The shared progress of a pane, keyed on what replaced what (`leaf to phase`,
+ * `tab to phase`, `phase`).
+ *
+ * The new panel's FIRST frame is already at 0, so nothing flashes at full opacity
+ * for one frame: `remember(key)` builds the new [Animatable] in the very
+ * composition that sees the new key.
+ */
+@Composable
+fun rememberPaneEnter(key: Any): NzPaneEnter {
+    val motion = Sillon.motion
+    val preset = inPlaceSpecs(motion)
+    val risePx = with(LocalDensity.current) { motion.moveS.toPx() }
+    val first = remember { PaneKeyHolder(key) }
+    if (key != first.initial) first.changed = true
+    // remember(key) builds the new Animatable IN the composition that sees the new key, so the
+    // new panel's first frame is already at 0 (no one-frame flash at full opacity).
+    val anim = remember(key) { Animatable(if (first.changed && !preset.isNone) 0f else 1f) }
+    LaunchedEffect(key) { if (anim.value < 1f) anim.animateTo(1f, preset.fade) }
+    return remember(anim, risePx) { NzPaneEnter(anim, risePx) }
+}
+
+/** What the pane's first key was, and whether it has moved since. */
+private class PaneKeyHolder(val initial: Any) {
+    var changed: Boolean = false
+}
+
+/**
+ * The pane's entrance, drawn from [NzPaneEnter]'s progress. Read in the draw
+ * layer only: a running enter never recomposes nor re-lays out a row.
+ */
+fun Modifier.nzPaneEnter(pane: NzPaneEnter): Modifier = graphicsLayer {
+    val p = pane.progress
+    alpha = p
+    translationY = (1f - p) * pane.risePx
+}
+
+/**
+ * An element that fades in when it is ADDED to the tree (an empty note), enter
+ * only. [NzAppear] cannot do it: `AnimatedVisibility(Boolean)` shows its content
+ * WITHOUT animation on first composition. At Off the content is present in
+ * frame 0.
+ */
+@Composable
+fun NzAppearOnMount(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val motion = Sillon.motion
+    val preset = appearSpecs(motion)
+    val swapPx = with(LocalDensity.current) { motion.moveS.roundToPx() }
+    val move = preset.move
+    val enter: EnterTransition = when {
+        preset.isNone -> EnterTransition.None
+        move != null -> fadeIn(preset.fade) + slideInVertically(move) { swapPx }
+        else -> fadeIn(preset.fade)
+    }
+    // MutableTransitionState, not a Boolean: it is what starts the enter on the
+    // frame the composable joins the tree (Android's Animations in Compose guide).
+    val state = remember { MutableTransitionState(preset.isNone) }.apply { targetState = true }
+    AnimatedVisibility(
+        visibleState = state,
+        modifier = modifier,
+        enter = enter,
+        exit = ExitTransition.None,
+    ) {
+        content()
     }
 }

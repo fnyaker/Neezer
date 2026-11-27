@@ -43,11 +43,14 @@ import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.ListWindow
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.NzItemSpecs
+import fr.neezer.mobile.designsystem.NzPaneEnter
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.SwipeRow
 import fr.neezer.mobile.designsystem.asRowSource
+import fr.neezer.mobile.designsystem.nzPaneEnter
 import uniffi.nz_ffi.LibraryArtist
 import uniffi.nz_ffi.TrackRow
 import uniffi.nz_ffi.UploadUsageData
@@ -490,9 +493,23 @@ internal fun Gap(height: Int = 12) {
 /**
  * The track rows of a windowed list, as `LazyColumn` items.
  *
- * Every row is keyed by its key (Compose's own contract for a list whose rows
- * move), and a page that has not landed yet draws nothing rather than a phantom
- * row.
+ * **The key is the track's own identity** (`<source>:<id>`, `lists.rs`'s
+ * documented contract), not its index: an indexed key makes every row below a
+ * removal a NEW item, so `animateItem` has nothing to move (measured in X5:
+ * `276 → 220 dp` at frame 0). These three lists hold each track ONCE
+ * (`/api/me/favorites`, `/api/me/local`, the unavailable list — one row per
+ * track), so the identity is unique; a page that has not landed yet draws a
+ * skeleton under its own `pending-<index>` key.
+ *
+ * A removal plays `itemSpecs()`: no mount fade (M4), a 200 ms placement at Full,
+ * a 140 ms fade-out. A skeleton's replacement fades nothing out (`fadeOutSpec =
+ * null`): the skeleton's key leaves as the row's arrives, and its exit would be
+ * drawn over the row.
+ *
+ * @param pane the leaf's shared entrance (`rememberPaneEnter` in the screen), or
+ *   `null` for a row outside a pane.
+ * @param specs `Sillon.motion.itemSpecs()`, read by the caller: this extension
+ *   runs in the `LazyColumn`'s scope, where a `CompositionLocal` cannot be read.
  */
 internal fun LazyListScope.trackRows(
     window: ListWindow,
@@ -500,11 +517,20 @@ internal fun LazyListScope.trackRows(
     onPlay: (TrackRow) -> Unit,
     onMore: (TrackRow) -> Unit,
     onQueue: (TrackRow) -> Unit,
+    pane: NzPaneEnter?,
+    specs: NzItemSpecs,
 ) {
-    items(window.len) { index ->
+    items(window.len, key = { index -> window.rowAt(index)?.key ?: "pending-$index" }) { index ->
         val row = window.rowAt(index)
+        val enter = if (pane == null) Modifier else Modifier.nzPaneEnter(pane)
         if (row == null) {
-            SkeletonRow()
+            SkeletonRow(
+                modifier = enter.animateItem(
+                    fadeInSpec = null,
+                    placementSpec = specs.placement,
+                    fadeOutSpec = null,
+                ),
+            )
         } else {
             LibraryTrackRow(
                 row = row,
@@ -512,6 +538,7 @@ internal fun LazyListScope.trackRows(
                 onClick = { onPlay(row) },
                 onMore = { onMore(row) },
                 onSwipeQueue = { onQueue(row) },
+                modifier = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut),
             )
         }
     }
@@ -603,9 +630,9 @@ internal fun LibraryTrackRow(
 
 /** What a page that has not landed yet draws: a row-shaped skeleton. */
 @Composable
-private fun SkeletonRow() {
+private fun SkeletonRow(modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(56.dp)
             .padding(horizontal = NzSpacing.s, vertical = NzSpacing.s),

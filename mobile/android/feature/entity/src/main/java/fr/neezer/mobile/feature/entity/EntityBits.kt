@@ -38,6 +38,7 @@ import fr.neezer.mobile.designsystem.Avatar
 import fr.neezer.mobile.designsystem.CoverImage
 import fr.neezer.mobile.designsystem.Icon
 import fr.neezer.mobile.designsystem.ListWindow
+import fr.neezer.mobile.designsystem.NzAppearOnMount
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzRadius
@@ -119,15 +120,24 @@ internal fun FactsLine(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** A dim sentence, for a section that has nothing to show. */
+/**
+ * A dim sentence, for a section that has nothing to show.
+ *
+ * It ENTERS when it joins the tree (`NzAppearOnMount`, 140 ms + 4 dp at Full,
+ * nothing at eco) instead of popping: the empty note of a list appears once its
+ * phase says so, and every caller inherits the one definition (lot X4). A pane's
+ * `nzPaneEnter` is NOT applied to an item that is only a note — two fades
+ * multiplied would play a sharper 140 ms (the decision note's D2).
+ */
 @Composable
 internal fun MutedNote(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        style = Sillon.type.bodySmall,
-        color = Sillon.colors.dim,
-        modifier = modifier,
-    )
+    NzAppearOnMount(modifier = modifier) {
+        Text(
+            text = text,
+            style = Sillon.type.bodySmall,
+            color = Sillon.colors.dim,
+        )
+    }
 }
 
 /**

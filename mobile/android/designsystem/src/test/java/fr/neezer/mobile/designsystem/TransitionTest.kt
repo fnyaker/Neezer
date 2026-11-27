@@ -6,6 +6,7 @@ import androidx.compose.animation.core.TweenSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -187,4 +188,140 @@ class TransitionTest {
     }
 
     private fun glyphLabel(glyph: NzGlyph): String = if (glyph == NzGlyph.Play) "Lecture" else "Pause"
+
+    /**
+     * A pane's progress, held where the test can read it: the composable hands the
+     * [NzPaneEnter] out, and every read below is `anim.value` — the value the draw
+     * layer reads, not a copy taken at composition time. [composed] is the value at
+     * the moment the composition that saw the new key applied (a `SideEffect` read,
+     * so it never subscribes the composition to the animation).
+     */
+    private var pane: NzPaneEnter? = null
+    private var composed: Float = 1f
+
+    /** The host's key setter, so a test changes the key OUTSIDE the composition. */
+    private var taker: ((String) -> Unit)? = null
+
+    /** A re-emit of the same key: read by the host so a bump recomposes it. */
+    private var tick by mutableIntStateOf(0)
+
+    private fun hostPane(level: NzMotionLevel, initial: String, tag: String) {
+        var key by mutableStateOf(initial)
+        taker = { next -> key = next }
+        rule.setContent {
+            NzTheme(motion = level) {
+                val current = key
+                val entered = rememberPaneEnter(current)
+                pane = entered
+                SideEffect { composed = entered.progress }
+                Box(Modifier.nzPaneEnter(entered).testTag("$tag-$current-$tick"))
+            }
+        }
+    }
+
+    /**
+     * One FRAME, composed AND applied. `waitForIdle` alone returns BEFORE the
+     * recomposition that sees the new key (measured: the pane object was still the
+     * previous one), and a 1 ms advance crosses no frame boundary. Measured on this
+     * tree: the state write composes on the SECOND frame, and the animation's own
+     * first frame reads 0.
+     */
+    private fun frame() {
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+    }
+
+    @Test
+    fun paneEnterDoesNotAnimateTheFirstComposition() {
+        hostPane(NzMotionLevel.Full, "a", "pane")
+        rule.waitForIdle()
+        assertEquals("the screen's own enter covers the first frame", 1f, composed, 0.001f)
+        assertEquals(1f, pane!!.progress, 0.001f)
+    }
+
+    @Test
+    fun paneEnterFadesInOnlyWhenItsKeyChanges() {
+        hostPane(NzMotionLevel.Full, "a", "pane")
+        rule.waitForIdle()
+
+        rule.mainClock.autoAdvance = false
+        taker!!("b")
+        frame()
+        frame()
+        val atFrameZero = composed
+        rule.mainClock.advanceTimeBy(70)
+        val midway = pane!!.progress
+        rule.mainClock.advanceTimeBy(80)
+        val landed = pane!!.progress
+        rule.mainClock.autoAdvance = true
+        rule.waitForIdle()
+
+        assertEquals("the new panel's first frame is at 0", 0f, atFrameZero, 0.001f)
+        assertTrue(
+            "at 70 ms of the 140 ms fade the pane is strictly between 0 and 1, was $midway",
+            midway > 0.01f && midway < 0.99f,
+        )
+        assertEquals("140 ms later it has landed", 1f, landed, 0.001f)
+    }
+
+    @Test
+    fun paneEnterIsInTheSameFrameAtEco() {
+        hostPane(NzMotionLevel.Off, "a", "pane")
+        rule.waitForIdle()
+
+        rule.mainClock.autoAdvance = false
+        taker!!("b")
+        frame()
+        frame()
+        // Eco plays nothing: no animated state to walk, the pane is whole at once.
+        assertEquals("eco replaces in one frame", 1f, composed, 0f)
+        assertEquals(1f, pane!!.progress, 0f)
+        rule.mainClock.advanceTimeBy(70)
+        assertEquals("and nothing follows it", 1f, pane!!.progress, 0f)
+        rule.mainClock.autoAdvance = true
+    }
+
+    @Test
+    fun paneEnterReplaysNothingWhenTheSameKeyIsReEmitted() {
+        hostPane(NzMotionLevel.Full, "same", "pane")
+        rule.waitForIdle()
+
+        rule.mainClock.autoAdvance = false
+        tick++
+        frame()
+        frame()
+        assertEquals("a re-emit of the same pane is already settled", 1f, composed, 0.001f)
+        assertEquals(1f, pane!!.progress, 0.001f)
+        rule.mainClock.advanceTimeBy(70)
+        assertEquals("and nothing restarts it", 1f, pane!!.progress, 0.001f)
+        rule.mainClock.autoAdvance = true
+    }
+
+    /**
+     * [NzAppearOnMount] is the one preset [NzAppear] cannot express: an element
+     * that enters when it is ADDED to the tree. At eco it is present in the frame
+     * it was asked for (no animated state to walk through); at Full it stays one
+     * node before, during and after its 140 ms enter.
+     */
+    @Test
+    fun nzAppearOnMountIsPresentAtFrameZeroAtEveryLevel() {
+        var level by mutableStateOf(NzMotionLevel.Off)
+        rule.setContent {
+            NzTheme(motion = level) {
+                NzAppearOnMount { Box(Modifier.testTag("mount")) }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("mount").assertExists()
+
+        level = NzMotionLevel.Full
+        rule.mainClock.autoAdvance = false
+        rule.waitForIdle()
+        rule.mainClock.advanceTimeBy(1)
+        rule.onAllNodesWithTag("mount").assertCountEquals(1)
+        rule.mainClock.advanceTimeBy(200)
+        rule.mainClock.autoAdvance = true
+        rule.waitForIdle()
+        rule.onAllNodesWithTag("mount").assertCountEquals(1)
+    }
 }

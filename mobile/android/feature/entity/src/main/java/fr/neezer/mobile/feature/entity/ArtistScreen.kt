@@ -35,10 +35,13 @@ import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzChip
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.NzItemSpecs
 import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
+import fr.neezer.mobile.designsystem.nzPaneEnter
+import fr.neezer.mobile.designsystem.rememberPaneEnter
 import uniffi.nz_ffi.ArtistData
 import uniffi.nz_ffi.TrackRow
 
@@ -52,6 +55,39 @@ const val ARTIST_MARKER = "Fiche artiste"
 /** S2's geometry test: the band (it cancels the page's top margin) and the list. */
 const val ARTIST_BAND_TAG = "artist-band"
 const val ARTIST_LIST_TAG = "artist-list"
+
+/**
+ * What the page's body is drawing — the pane's key (D2), from the same fields the
+ * tab bodies below test. A tab's own phase, because a tab loads on its first
+ * open: switching to a tab that is still reading is a skeleton, not a pop.
+ */
+private enum class ArtistPhase { Loading, Failed, Empty, Content }
+
+private fun artistPhase(state: ArtistModel.State): ArtistPhase {
+    if (state.screen is ScreenState.Failed) return ArtistPhase.Failed
+    return when (state.tab) {
+        ArtistTab.Overview -> if (state.data == null) ArtistPhase.Loading else ArtistPhase.Content
+        ArtistTab.Tracks -> {
+            val source = state.trackSource
+            when {
+                state.tracks is ScreenState.Failed -> ArtistPhase.Failed
+                source == null -> ArtistPhase.Loading
+                source.len() == 0 -> ArtistPhase.Empty
+                else -> ArtistPhase.Content
+            }
+        }
+        ArtistTab.Credits -> {
+            val source = state.creditsSource
+            when {
+                state.credits is ScreenState.Failed -> ArtistPhase.Failed
+                state.creditsPage == null -> ArtistPhase.Loading
+                source == null -> ArtistPhase.Loading
+                source.len() == 0 -> ArtistPhase.Empty
+                else -> ArtistPhase.Content
+            }
+        }
+    }
+}
 
 /** Everything the artist page can do, so the screen stays a pure function. */
 data class ArtistActions(
@@ -106,6 +142,15 @@ fun ArtistScreen(
     playingKey: String? = null,
 ) {
     val colors = Sillon.colors
+    // The page's body is one pane (D2): its key is the TAB and the phase, so a tab
+    // change and a skeleton → list enter while the band and the tab strip stay put
+    // — the band is shared by the three tabs, so fading it would re-enter it on
+    // every tap. Only the tab items carry the modifier.
+    val pane = rememberPaneEnter(state.tab to artistPhase(state))
+    val enter = Modifier.nzPaneEnter(pane)
+    // Read in the composition: the tab bodies run in the LazyColumn's scope, where
+    // a `CompositionLocal` cannot be read.
+    val specs = Sillon.motion.itemSpecs()
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -118,7 +163,7 @@ fun ArtistScreen(
 
         val failed = state.screen as? ScreenState.Failed
         if (failed != null) {
-            Column(Modifier.fillMaxWidth().padding(NzSpacing.pageX)) {
+            Column(enter.fillMaxWidth().padding(NzSpacing.pageX)) {
                 LoadFailed(
                     cause = failed.cause,
                     onRetry = actions.retry,
@@ -173,15 +218,15 @@ fun ArtistScreen(
                     Skeleton(
                         kind = NzSkeletonKind.List,
                         count = 6,
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = enter.padding(horizontal = NzSpacing.pageX),
                     )
                 }
                 return@LazyColumn
             }
             when (state.tab) {
-                ArtistTab.Overview -> artistOverview(state, actions, columns, tileSize, playingKey)
-                ArtistTab.Tracks -> artistTracks(state, actions, tracksWindow, playingKey)
-                ArtistTab.Credits -> artistCredits(state, actions, creditsWindow, playingKey)
+                ArtistTab.Overview -> artistOverview(state, actions, columns, tileSize, playingKey, enter)
+                ArtistTab.Tracks -> artistTracks(state, actions, tracksWindow, playingKey, enter, specs)
+                ArtistTab.Credits -> artistCredits(state, actions, creditsWindow, playingKey, enter, specs)
             }
         }
     }
@@ -326,9 +371,13 @@ private fun LazyListScope.artistOverview(
     columns: Int,
     tileSize: Dp,
     playingKey: String?,
+    enter: Modifier,
 ) {
     val data = state.data ?: return
-    val pad = Modifier.padding(horizontal = NzSpacing.pageX)
+    // Every item of the tab belongs to the pane; the one note that is only a
+    // `MutedNote` keeps the bare padding — it enters by `NzAppearOnMount` (D2/D3).
+    val pad = enter.padding(horizontal = NzSpacing.pageX)
+    val notePad = Modifier.padding(horizontal = NzSpacing.pageX)
     val latest = state.latest
     if (latest.isNotEmpty()) {
         item(key = "latest-title") { SectionTitle("Dernières sorties", pad) }
@@ -396,7 +445,7 @@ private fun LazyListScope.artistOverview(
             state.deezerDown -> item(key = "deezer-down") {
                 MutedNote(
                     "Deezer est injoignable : le reste du catalogue n'est pas affiché.",
-                    pad.padding(vertical = NzSpacing.s),
+                    notePad.padding(vertical = NzSpacing.s),
                 )
             }
         }
@@ -450,8 +499,11 @@ private fun LazyListScope.artistTracks(
     actions: ArtistActions,
     window: fr.neezer.mobile.designsystem.ListWindow?,
     playingKey: String?,
+    enter: Modifier,
+    specs: NzItemSpecs,
 ) {
-    val pad = Modifier.padding(horizontal = NzSpacing.pageX)
+    val pad = enter.padding(horizontal = NzSpacing.pageX)
+    val notePad = Modifier.padding(horizontal = NzSpacing.pageX)
     val failed = state.tracks as? ScreenState.Failed
     if (failed != null) {
         item(key = "tracks-failed") {
@@ -474,7 +526,7 @@ private fun LazyListScope.artistTracks(
     val count = source.len()
     if (count == 0) {
         item(key = "tracks-empty") {
-            MutedNote("Aucun titre trouvé pour cet artiste.", pad.padding(vertical = NzSpacing.l))
+            MutedNote("Aucun titre trouvé pour cet artiste.", notePad.padding(vertical = NzSpacing.l))
         }
         return
     }
@@ -496,10 +548,18 @@ private fun LazyListScope.artistTracks(
             )
         }
     }
-    items(count = count, key = { index -> "track-$index" }) { index ->
+    // The key is the TRACK's identity, not its rank: an indexed key makes every
+    // row below a removal a new item, so `animateItem` has nothing to move
+    // (measured in X5). An artist's list holds each title once, so it is unique;
+    // a page that has not landed yet draws a skeleton under `pending-<index>`.
+    items(count = count, key = { index -> window?.rowAt(index)?.key ?: "pending-$index" }) { index ->
         val row = window?.rowAt(index)
         if (row == null) {
-            Skeleton(kind = NzSkeletonKind.List, count = 1, modifier = pad)
+            Skeleton(
+                kind = NzSkeletonKind.List,
+                count = 1,
+                modifier = enter.animateItem(null, specs.placement, null).then(notePad),
+            )
         } else {
             EntityTrackRow(
                 row = row,
@@ -508,7 +568,7 @@ private fun LazyListScope.artistTracks(
                 onClick = { actions.playTrack(row) },
                 onMore = { actions.more(row) },
                 onSwipeQueue = { actions.queueNext(row) },
-                modifier = pad,
+                modifier = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut).then(notePad),
             )
         }
     }
@@ -520,8 +580,11 @@ private fun LazyListScope.artistCredits(
     actions: ArtistActions,
     window: fr.neezer.mobile.designsystem.ListWindow?,
     playingKey: String?,
+    enter: Modifier,
+    specs: NzItemSpecs,
 ) {
-    val pad = Modifier.padding(horizontal = NzSpacing.pageX)
+    val pad = enter.padding(horizontal = NzSpacing.pageX)
+    val notePad = Modifier.padding(horizontal = NzSpacing.pageX)
     val failed = state.credits as? ScreenState.Failed
     if (failed != null) {
         item(key = "credits-failed") {
@@ -554,14 +617,18 @@ private fun LazyListScope.artistCredits(
     val count = state.creditsSource?.len() ?: 0
     if (count == 0) {
         item(key = "credits-empty") {
-            MutedNote("Aucun titre pour ce rôle.", pad.padding(vertical = NzSpacing.l))
+            MutedNote("Aucun titre pour ce rôle.", notePad.padding(vertical = NzSpacing.l))
         }
         return
     }
-    items(count = count, key = { index -> "credited-$index" }) { index ->
+    items(count = count, key = { index -> window?.rowAt(index)?.key ?: "pending-$index" }) { index ->
         val row = window?.rowAt(index)
         if (row == null) {
-            Skeleton(kind = NzSkeletonKind.List, count = 1, modifier = pad)
+            Skeleton(
+                kind = NzSkeletonKind.List,
+                count = 1,
+                modifier = enter.animateItem(null, specs.placement, null).then(notePad),
+            )
         } else {
             EntityTrackRow(
                 row = row,
@@ -569,7 +636,7 @@ private fun LazyListScope.artistCredits(
                 onClick = { actions.playFromCredits(row) },
                 onMore = { actions.more(row) },
                 onSwipeQueue = { actions.queueNext(row) },
-                modifier = pad,
+                modifier = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut).then(notePad),
             )
         }
     }

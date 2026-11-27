@@ -48,6 +48,8 @@ import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
+import fr.neezer.mobile.designsystem.nzPaneEnter
+import fr.neezer.mobile.designsystem.rememberPaneEnter
 import uniffi.nz_ffi.HistoryEventData
 import uniffi.nz_ffi.HistorySummaryData
 import uniffi.nz_ffi.TrackRow
@@ -67,6 +69,20 @@ private const val LARGE_TEXT_SCALE = 1.3f
  * the event rows live in ONE `LazyColumn`, and a tag is invisible to TalkBack.
  */
 const val HISTORY_LIST_TAG = "history-list"
+
+/**
+ * What the history is drawing: its page arrived, its read failed, it has nothing
+ * to show, or nothing yet — the pane's key (D2), computed from the same fields
+ * the branches below test.
+ */
+private enum class HistoryPhase { Loading, Failed, Empty, Content }
+
+private fun historyPhase(state: HistoryModel.State): HistoryPhase = when {
+    state.failure != null -> HistoryPhase.Failed
+    state.screen is ScreenState.Loading && state.summary == null -> HistoryPhase.Loading
+    state.events.isEmpty() -> HistoryPhase.Empty
+    else -> HistoryPhase.Content
+}
 
 /** What the history screen may ask. */
 class HistoryActions(
@@ -112,6 +128,10 @@ fun HistoryScreen(
     val days = remember(state.events, today, zone) { groupByDay(state.events, zone, today) }
     val rows = remember(days) { flattenDays(days) }
     val failure = state.failure
+    // The history's body is one pane (D2): its key is the phase, so a skeleton →
+    // list and a failure → list fade the CONTENT in while the head and the filter
+    // chips stay put.
+    val pane = rememberPaneEnter(historyPhase(state))
 
     Box(
         modifier
@@ -142,7 +162,8 @@ fun HistoryScreen(
             item(key = "summary") {
                 val summary = state.summary
                 when {
-                    summary != null && !state.emptyHistory -> SummaryCard(summary, actions)
+                    summary != null && !state.emptyHistory ->
+                        SummaryCard(summary, actions, modifier = Modifier.nzPaneEnter(pane))
                     failure == null && !state.emptyHistory && state.screen is ScreenState.Loading ->
                         Skeleton(
                             kind = NzSkeletonKind.Header,
@@ -174,7 +195,7 @@ fun HistoryScreen(
                         cause = failure.cause,
                         onRetry = actions.retry,
                         title = "Historique indisponible",
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX),
                     )
                 }
             } else if (state.screen is ScreenState.Loading && state.summary == null) {
@@ -182,7 +203,7 @@ fun HistoryScreen(
                     Skeleton(
                         kind = NzSkeletonKind.List,
                         count = 8,
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX),
                     )
                 }
             } else if (rows.isEmpty()) {
@@ -205,23 +226,26 @@ fun HistoryScreen(
                         } else {
                             { actions.setFilter(HistoryFilter.All) }
                         },
+                        modifier = Modifier.nzPaneEnter(pane),
                     )
                 }
             } else {
                 items(rows.size, key = { index -> rows[index].key }) { index ->
+                    val enter = Modifier.nzPaneEnter(pane)
                     when (val row = rows[index]) {
-                        is HistoryRowView.Day -> DayHeading(row.day)
+                        is HistoryRowView.Day -> DayHeading(row.day, modifier = enter)
                         is HistoryRowView.Event -> EventRow(
                             event = row.event,
                             today = today,
                             zone = zone,
                             onPlay = { actions.play(row.event) },
                             onMore = { actions.more(row.event.track) },
+                            modifier = enter,
                         )
                     }
                 }
                 item(key = "more") {
-                    MoreBlock(state, actions)
+                    MoreBlock(state, actions, modifier = Modifier.nzPaneEnter(pane))
                 }
             }
         }
@@ -230,10 +254,14 @@ fun HistoryScreen(
 
 /** The 30-day card: three figures, two tops, and the door to the recap. */
 @Composable
-private fun SummaryCard(summary: HistorySummaryData, actions: HistoryActions) {
+private fun SummaryCard(
+    summary: HistorySummaryData,
+    actions: HistoryActions,
+    modifier: Modifier = Modifier,
+) {
     val colors = Sillon.colors
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = NzSpacing.pageX)
             .clip(RoundedCornerShape(NzRadius.card))
@@ -362,15 +390,15 @@ private fun Stat(value: String, label: String, modifier: Modifier = Modifier) {
 
 /** A day's heading: its name and its own counts. */
 @Composable
-private fun DayHeading(day: HistoryDay) {
+private fun DayHeading(day: HistoryDay, modifier: Modifier = Modifier) {
     val colors = Sillon.colors
     val largeText = LocalDensity.current.fontScale >= LARGE_TEXT_SCALE
-    val modifier = Modifier
+    val heading = modifier
         .fillMaxWidth()
         .heightIn(min = 44.dp)
         .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.xxs)
     if (largeText) {
-        Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(heading, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 text = day.label,
                 style = Sillon.type.titleSmall,
@@ -383,7 +411,7 @@ private fun DayHeading(day: HistoryDay) {
         return
     }
     Row(
-        modifier = modifier,
+        modifier = heading,
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {
@@ -409,10 +437,11 @@ private fun EventRow(
     zone: ZoneId,
     onPlay: () -> Unit,
     onMore: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 72.dp)
             .clickable(role = Role.Button, onClick = onPlay)
@@ -485,10 +514,14 @@ private fun Verdict(verdict: HistoryVerdict) {
 
 /** « Charger plus », the end of the log, and a later page's own failure. */
 @Composable
-private fun MoreBlock(state: HistoryModel.State, actions: HistoryActions) {
+private fun MoreBlock(
+    state: HistoryModel.State,
+    actions: HistoryActions,
+    modifier: Modifier = Modifier,
+) {
     val colors = Sillon.colors
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.l),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
