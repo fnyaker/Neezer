@@ -1325,7 +1325,20 @@
     // the prefetch cache. track.gain is preloaded for upcoming tracks (see the
     // reactive below), so the snapped value is already the correct one, with no
     // unity-then-correct jump. No-op unless normalization is on.
-    setElementGain(audio, gainFor(track));
+    const handoverGain = gainFor(track);
+    setElementGain(audio, handoverGain);
+    // What the normalization ACTUALLY got at this track's start, in the log the
+    // app already keeps: "none" here is the whole answer when a person reports
+    // that tracks are not levelled (the value is the server's `Track.gain` —
+    // null means the track was never measured, and no client can invent it),
+    // and a number here with a flat-sounding library means it is the SETTING.
+    logInfo(
+      "load",
+      `gain ${typeof handoverGain === "number" ? handoverGain.toFixed(1) + " dB" : "none"}`
+        + ` (normalisation ${$normalization}) for ${trackKey(track)}`,
+      null,
+      { important: false }
+    );
     if (src.blob) touch(trackKey(track)); // bump LRU recency
 
     if (resumeAt > 0 && !adopt) seekOnceLoaded(resumeAt);

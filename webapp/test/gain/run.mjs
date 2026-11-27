@@ -102,6 +102,9 @@ async function play(level, queue) {
       }
       // `fx.normalize` is a DEVICE setting: the plain key, not an account one.
       localStorage.setItem("fx.normalize", JSON.stringify(level));
+      // The diagnostic log the app already keeps, so the line a person's log
+      // shows can be read here too (debug.logs is off by default).
+      localStorage.setItem("debug.logs", "1");
     } catch {
       /* no storage */
     }
@@ -123,11 +126,16 @@ async function play(level, queue) {
       direct: !!window.__nsAudioPath?.().direct,
       norm: window.__gains.map((n) => +n.gain.value.toFixed(4)).filter((v) => Math.abs(v - 1) > 1e-3),
       vols: window.__els.map((e) => e.volume),
+      // Every "gain ..." line the player wrote, oldest first (the buffer is
+      // flushed at most every 1.5 s, so the caller waits past that).
+      log: (JSON.parse(localStorage.getItem("debug.log.buffer") || "[]") || [])
+        .map((e) => String(e[2]))
+        .filter((m) => m.startsWith("gain ")),
     }));
 
   await page.locator("footer.player .pp").click();
   await page.waitForFunction(() => window.__els.some((e) => e.src && !e.paused), null, { timeout: 15000 });
-  await page.waitForTimeout(900);
+  await page.waitForTimeout(1800); // past the log's 1.5 s flush window
   const first = await read();
 
   await page.locator("footer.player .next").click();
@@ -136,7 +144,7 @@ async function play(level, queue) {
     null,
     { timeout: 15000 }
   );
-  await page.waitForTimeout(900);
+  await page.waitForTimeout(1800);
   const second = await read();
   await ctx.close();
   return { first, second, errors };
@@ -168,6 +176,16 @@ async function play(level, queue) {
     "deux titres de 10 dB d'écart sortent 10 dB d'écart (le nivellement est le gain)",
     `${first.norm[0]} → ${second.norm[0]}`
   );
+  check(
+    first.log.some((m) => m.includes("gain -10.0 dB (normalisation medium)")),
+    "le journal dit le gain RÉELLEMENT posé au démarrage du titre",
+    JSON.stringify(first.log)
+  );
+  check(
+    second.log.some((m) => m.includes("gain -20.0 dB (normalisation medium)")),
+    "et celui du titre suivant après le saut",
+    JSON.stringify(second.log)
+  );
   check(errors.length === 0, "aucune erreur de page", errors.join(" | "));
 }
 
@@ -182,6 +200,13 @@ async function play(level, queue) {
     first.norm.length === 0 && second.norm.length === 0,
     "un gain inconnu (null) ne s'invente pas : le titre joue à l'unité",
     JSON.stringify([first.norm, second.norm])
+  );
+  // "gain none" is the line that answers a "it is not levelled" report: the
+  // track has no measured loudness, whatever the client does.
+  check(
+    first.log.some((m) => m.includes("gain none (normalisation medium)")),
+    "et le journal dit « gain none », la réponse à « le son n'est pas nivelé »",
+    JSON.stringify(first.log)
   );
 }
 
