@@ -133,7 +133,14 @@ pages, sheets, menus, rows, lists, the player's chrome — is [transitions.md](t
   ground.
   A sleeve change is a 640 ms walk, not a cut: fade the group out over 220 ms, swap the art and its
   tint at the invisible point, fade back over 420 ms; the scrim never moves, so there is no flash, and
-  `prefers-reduced-motion` swaps at once. The tint is `coverpalette.js`'s `dominant` colour — ONE
+  `prefers-reduced-motion` swaps at once. A title with NO art takes the ground away on that same
+  220 ms fade — the one branch of the component that can throw (`clearArt` → `reducedMotion()`, the
+  helper at the top of the file), and a free variable there is INVISIBLE to `npm run build`: Svelte
+  compiles an undeclared name as a global lookup and neither it nor Rollup says a word. It cost a
+  real one on 2026-11-27 — `reduceMotion()` threw out of the store subscriber on every coverless
+  track change (an unhandled rejection, and the PREVIOUS sleeve left painted as a lie about what is
+  playing); the bench's last case ("aucun pageerror sur un titre sans pochette") is the only check
+  that sees this class, since the component only runs it in a browser. The tint is `coverpalette.js`'s `dominant` colour — ONE
   64×64 decode per cover URL, cached by URL with concurrent callers sharing the in-flight promise and
   failures not stored (`colour` extractors must import it, never decode the sleeve again). Measured
   (`test/backdrop/run.mjs` on `tools/perf_api.py --serve`, 1280×900 and 390×844, 7 routes each):

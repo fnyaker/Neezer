@@ -38,7 +38,7 @@
 // worst frame gap of 17–33 ms; over a white sleeve --dim keeps 5.00:1 (Encre)
 // and 5.96:1 (Papier), --tx 11.8:1 and 16.3:1.
 import { existsSync, mkdirSync } from "node:fs";
-import { loadPlaywright, startServer, login, checker, deezerApi, dzcdn, pathOn } from "../harness.mjs";
+import { loadPlaywright, startServer, login, checker, deezerApi, dzcdn, pathOn, installSessionPrefix } from "../harness.mjs";
 
 const { base, ids, stop } = await startServer(["--podcasts"]);
 // An assertion that throws would otherwise leave the perf server running.
@@ -715,6 +715,85 @@ for (const [name, size, phone] of [
   const minOpacity = Math.min(...run.map((s) => (s.op === null ? 1 : s.op)));
   check(changed && changed.t < 300, `reduced-motion : la pochette change vite (${changed?.t ?? "?"} ms)`, "");
   check(minOpacity >= 0.99, `reduced-motion : aucun fondu d'opacité (min ${minOpacity})`, "");
+  await ctx.close();
+}
+
+// --- a title with NO art takes the ground away ----------------------------
+// From a phone's log (2026-11-27): on a track change to a title that has no
+// sleeve, `GlobalBackdrop`'s clearArt() called `reduceMotion()` — a name that
+// file never declares (`reducedMotion` is the helper) — so every such change
+// threw a ReferenceError out of an async subscriber: an unhandled rejection on
+// the console, and the PREVIOUS sleeve left painted, claiming a ground for a
+// track that has none. Pinned here because nothing else can see it: Svelte and
+// Rollup both build a free variable silently (no warning in `npm run build`).
+{
+  const ctx = await context({ width: 390, height: 844, phone: true });
+  await ctx.addInitScript(installSessionPrefix);
+  await ctx.addInitScript(() => {
+    try {
+      const j = sessionStorage.getItem("__inject");
+      if (j) {
+        localStorage.setItem(window.__nsPkey("player.session"), j);
+        localStorage.removeItem(window.__nsPkey("player.pos"));
+        sessionStorage.removeItem("__inject");
+      }
+    } catch {
+      /* no storage */
+    }
+  });
+  const ART = "https://e-cdns-images.dzcdn.net/images/cover/aaaa/500x500-000000-80-0-0.jpg";
+  const artUrl = new URL(ART).pathname;
+  const track = (id, cover) => ({
+    deezer_id: id,
+    title: "Titre " + id,
+    duration: 60,
+    artist: { deezer_id: "a1", name: "Band" },
+    album: { deezer_id: "al1", title: "Album", cover },
+  });
+  const session = {
+    queue: [track("avec", ART), track("sans", "")],
+    index: 0,
+    start: 0,
+    currentTime: 0,
+    context: null,
+    shuffle: false,
+    repeat: "off",
+    _orig: null,
+    at: Date.now(),
+  };
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await login(page, base);
+  await page.evaluate((j) => sessionStorage.setItem("__inject", j), JSON.stringify(session));
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector("footer.player .pp"), null, { timeout: 30000 });
+  await page.locator("footer.player .pp").click();
+  // The ground paints after an idle moment on the very first track.
+  const painted = await page
+    .waitForFunction(
+      (u) => [...document.querySelectorAll(".gb-img")].some((e) => e.style.backgroundImage.includes(u.slice(0, 40))),
+      artUrl,
+      { timeout: 8000 }
+    )
+    .then(() => true)
+    .catch(() => false);
+  check(painted, "fond : la pochette du premier titre est peinte", "");
+  await page.locator("footer.player .next").click();
+  await page.waitForFunction(
+    () => /Titre sans/.test(document.querySelector("footer.player .info .t")?.textContent || ""),
+    null,
+    { timeout: 15000 }
+  );
+  await page.waitForTimeout(900); // the 220 ms fade-out plus a margin
+  const g = await page.evaluate(() => ({
+    art: document.querySelectorAll(".gb-art").length,
+    img: document.querySelectorAll(".gb-img").length,
+    scrim: document.querySelectorAll(".gb-scrim").length,
+  }));
+  check(errors.length === 0, "fond : aucun pageerror sur un titre sans pochette", errors.join(" | "));
+  check(g.art === 0 && g.img === 0, `fond : l'ancienne pochette est retirée (${g.art} art, ${g.img} image)`, "");
+  check(g.scrim === 1, "fond : le scrim, lui, reste", `${g.scrim}`);
   await ctx.close();
 }
 

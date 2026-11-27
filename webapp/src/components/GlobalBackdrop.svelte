@@ -98,7 +98,7 @@
       stopFade();
       return;
     }
-    if (reduceMotion()) {
+    if (reducedMotion()) {
       stopFade();
       paint(null, null, 1);
       wanted = null;
