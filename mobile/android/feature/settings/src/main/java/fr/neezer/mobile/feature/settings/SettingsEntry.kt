@@ -122,7 +122,7 @@ fun SettingsEntry(
                         state = state,
                         selected = section,
                         onOpen = go,
-                        showHints = false,
+                        showChevron = false,
                         modifier = Modifier.verticalScroll(rememberScrollState()).padding(NzSpacing.l),
                     )
                 }
@@ -152,7 +152,7 @@ fun SettingsEntry(
                 state = state,
                 selected = null,
                 onOpen = go,
-                showHints = true,
+                showChevron = true,
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             )
         } else {
@@ -178,7 +178,7 @@ private fun SettingsMenu(
     state: SettingsModel.State,
     selected: String?,
     onOpen: (String) -> Unit,
-    showHints: Boolean,
+    showChevron: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val colors = Sillon.colors
@@ -214,7 +214,7 @@ private fun SettingsMenu(
                 CategoryRow(
                     category = category,
                     selected = selected == category.id,
-                    hint = showHints,
+                    showChevron = showChevron,
                     onClick = { onOpen(category.id) },
                 )
             }
@@ -223,12 +223,12 @@ private fun SettingsMenu(
     }
 }
 
-/** `Settings.svelte`'s `.cat` row: an icon chip, the name, and what it holds. */
+/** `Settings.svelte`'s `.cat` row: an icon chip and the name. */
 @Composable
 private fun CategoryRow(
     category: SettingCategory,
     selected: Boolean,
-    hint: Boolean,
+    showChevron: Boolean,
     onClick: () -> Unit,
 ) {
     val colors = Sillon.colors
@@ -267,17 +267,8 @@ private fun CategoryRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (hint && !selected) {
-                Text(
-                    text = category.hint,
-                    style = Sillon.type.bodySmall,
-                    color = colors.dim,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         }
-        if (hint) {
+        if (showChevron) {
             Icon(
                 glyph = NzGlyph.ChevronRight,
                 size = 18.dp,

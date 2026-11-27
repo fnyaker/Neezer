@@ -78,6 +78,11 @@ class SettingsGoldenTest {
 
     private fun shotMenu(width: Int, scale: Float) {
         render(section = null, fontScale = scale)
+        // Une ligne d'aide sous un libellé est du « texte inutile » (C5, décision
+        // du propriétaire 2026-11-27). La garde nomme celles que l'index portait.
+        for (line in MENU_HELP_LINES) {
+            rule.composeRule.onNodeWithText(line).assertDoesNotExist()
+        }
         // « la dernière ligne visible après un défilement » (the matrix's state):
         // the menu is taller than a phone, and its tail is what a golden checks.
         rule.composeRule.onNodeWithText("Assistance").performScrollTo()
@@ -87,6 +92,9 @@ class SettingsGoldenTest {
 
     private fun shotPlayback(width: Int, scale: Float) {
         render(section = "playback", fontScale = scale)
+        for (line in PLAYBACK_HELP_LINES) {
+            rule.composeRule.onNodeWithText(line).assertDoesNotExist()
+        }
         rule.capture("settings-lecture-${width}dp-f$scale.png")
     }
 
@@ -102,5 +110,26 @@ class SettingsGoldenTest {
         // land (an EVENT, not a duration — `runToEndOfTasks` drains the queue).
         shadowOf(Looper.getMainLooper()).idle()
         rule.composeRule.waitForIdle()
+    }
+
+    private companion object {
+        /** Les descriptions de l'index que la décision du 2026-11-27 a retirées. */
+        val MENU_HELP_LINES = listOf(
+            "Sortie audio, volume, égaliseur, transitions",
+            "Thème Encre, Papier ou Pochette",
+            "Ce qui s'anime pendant la lecture",
+            "Qualité, hors-ligne, préchargement",
+            "Flow, titres que vous n'aimez pas, nouveautés",
+            "Échange entre vos appareils et vos amis sur ce Wi-Fi",
+            "Ordre des sources, vos comptes, et qui peut s'en servir",
+            "Votre compte, l'export vers d'autres services",
+            "Recharger l'application, journal de diagnostic",
+        )
+
+        /** Celles de « Lecture & son », la page que le juge photographie. */
+        val PLAYBACK_HELP_LINES = listOf(
+            "S'applique au prochain titre ; le titre en cours continue.",
+            "Le panneau par-dessus la navigation, les déclencheurs, le placement et les playlists épinglées.",
+        )
     }
 }

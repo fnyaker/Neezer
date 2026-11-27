@@ -20,7 +20,6 @@ data class SettingCategory(
     val id: String,
     val label: String,
     val glyph: NzGlyph,
-    val hint: String,
     /** The group it is drawn under. */
     val group: SettingGroup,
     /** Only an administrator sees it (the server enforces it again). */
@@ -35,21 +34,21 @@ enum class SettingGroup(val label: String) {
 
 /** Every category, in the SPA's order. */
 val SETTING_CATEGORIES: List<SettingCategory> = listOf(
-    SettingCategory("playback", "Lecture & son", NzGlyph.Speaker, "Sortie audio, volume, égaliseur, transitions", SettingGroup.Listen),
-    SettingCategory("appearance", "Apparence", NzGlyph.Moon, "Thème Encre, Papier ou Pochette", SettingGroup.Listen),
-    SettingCategory("viz", "Animations", NzGlyph.Sparkles, "Ce qui s'anime pendant la lecture", SettingGroup.Listen),
-    SettingCategory("downloads", "Téléchargements", NzGlyph.Download, "Qualité, hors-ligne, préchargement", SettingGroup.Library),
-    SettingCategory("discovery", "Découverte", NzGlyph.Compass, "Flow, titres que vous n'aimez pas, nouveautés", SettingGroup.Library),
-    SettingCategory("lan", "Appareils à proximité", NzGlyph.People, "Échange entre vos appareils et vos amis sur ce Wi-Fi", SettingGroup.Accounts),
-    SettingCategory("sources", "Sources", NzGlyph.Link, "Ordre des sources, vos comptes, et qui peut s'en servir", SettingGroup.Accounts),
-    SettingCategory("account", "Compte", NzGlyph.User, "Votre compte, l'export vers d'autres services", SettingGroup.Accounts),
-    SettingCategory("help", "Assistance", NzGlyph.Info, "Recharger l'application, journal de diagnostic", SettingGroup.Accounts),
+    SettingCategory("playback", "Lecture & son", NzGlyph.Speaker, SettingGroup.Listen),
+    SettingCategory("appearance", "Apparence", NzGlyph.Moon, SettingGroup.Listen),
+    SettingCategory("viz", "Animations", NzGlyph.Sparkles, SettingGroup.Listen),
+    SettingCategory("downloads", "Téléchargements", NzGlyph.Download, SettingGroup.Library),
+    SettingCategory("discovery", "Découverte", NzGlyph.Compass, SettingGroup.Library),
+    SettingCategory("lan", "Appareils à proximité", NzGlyph.People, SettingGroup.Accounts),
+    SettingCategory("sources", "Sources", NzGlyph.Link, SettingGroup.Accounts),
+    SettingCategory("account", "Compte", NzGlyph.User, SettingGroup.Accounts),
+    SettingCategory("help", "Assistance", NzGlyph.Info, SettingGroup.Accounts),
 )
 
 /** The two pages MB17 adds, behind [adminsOnly]; drawn by `AdminSections()`. */
 val ADMIN_CATEGORIES: List<SettingCategory> = listOf(
-    SettingCategory("users", "Utilisateurs", NzGlyph.Users, "Comptes, rôles et invitations", SettingGroup.Accounts, adminOnly = true),
-    SettingCategory("server", "Serveur", NzGlyph.Archive, "Archive, nettoyage, stockage, quotas", SettingGroup.Accounts, adminOnly = true),
+    SettingCategory("users", "Utilisateurs", NzGlyph.Users, SettingGroup.Accounts, adminOnly = true),
+    SettingCategory("server", "Serveur", NzGlyph.Archive, SettingGroup.Accounts, adminOnly = true),
 )
 
 /** The groups, with the categories an administrator may see, in order. */
@@ -210,19 +209,19 @@ fun accountUse(account: AccountData): String {
 // -- the local settings --------------------------------------------------------
 
 /**
- * The quality card's five rungs, label and hint, in the sheet's order.
+ * The quality card's five rungs, id and label, in the sheet's order.
  *
  * Five, not six: `AUTO` is the player's own default (the card used to show
  * `FLAC` while the player played `Auto`), and `OPUS_256`/`OPUS_192` have no rung
  * in `nz_audio::Quality` — offering a rate the engine cannot load is the bug,
  * not the simplification (D14a already removed them from the player's menu).
  */
-val QUALITY_CHOICES: List<Triple<String, String, String>> = listOf(
-    Triple("AUTO", "Auto", "Selon le débit mesuré"),
-    Triple("FLAC", "FLAC", "Sans perte — lourd"),
-    Triple("OPUS_320", "Opus 320", "Haute qualité"),
-    Triple("OPUS_128", "Opus 128", "Standard, léger"),
-    Triple("OPUS_64", "Opus 64", "Données réduites"),
+val QUALITY_CHOICES: List<Pair<String, String>> = listOf(
+    "AUTO" to "Auto",
+    "FLAC" to "FLAC",
+    "OPUS_320" to "Opus 320",
+    "OPUS_128" to "Opus 128",
+    "OPUS_64" to "Opus 64",
 )
 
 /**
@@ -256,20 +255,20 @@ fun qualityLabel(id: String): String =
     QUALITY_CHOICES.firstOrNull { it.first == id }?.second ?: id
 
 /** `lib/theme.js#THEME_INFO`, the three cards of *Apparence*. */
-val THEME_CHOICES: List<Triple<String, String, String>> = listOf(
-    Triple("encre", "Encre", "Sombre, accent citron. Le défaut."),
-    Triple("papier", "Papier", "Clair chaud, encre noire, citron en surlignage."),
-    Triple("pochette", "Pochette", "Sombre, l'accent suit la pochette qui joue."),
+val THEME_CHOICES: List<Pair<String, String>> = listOf(
+    "encre" to "Encre",
+    "papier" to "Papier",
+    "pochette" to "Pochette",
 )
 
 /** The discovery steps, `lib/discovery.js#STEPS`. */
-data class DiscoveryStep(val name: String, val from: Double, val hint: String)
+data class DiscoveryStep(val name: String, val from: Double)
 
 val DISCOVERY_STEPS: List<DiscoveryStep> = listOf(
-    DiscoveryStep("Proche", 0.0, "Des titres qui sonnent comme ce que vous écoutez"),
-    DiscoveryStep("Voisin", 0.25, "Les artistes proches de vos favoris"),
-    DiscoveryStep("Exploration", 0.5, "Des genres voisins, des artistes à deux pas"),
-    DiscoveryStep("Aventure", 0.75, "Loin de vos habitudes"),
+    DiscoveryStep("Proche", 0.0),
+    DiscoveryStep("Voisin", 0.25),
+    DiscoveryStep("Exploration", 0.5),
+    DiscoveryStep("Aventure", 0.75),
 )
 
 /** `discovery.js#stepOf`. */

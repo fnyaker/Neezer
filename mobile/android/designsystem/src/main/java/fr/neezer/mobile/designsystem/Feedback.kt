@@ -326,7 +326,7 @@ fun NetworkIndicator(state: NzNetwork, modifier: Modifier = Modifier) {
 @Composable
 fun EmptyState(
     title: String,
-    body: String,
+    body: String = "",
     modifier: Modifier = Modifier,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
@@ -358,7 +358,9 @@ fun EmptyState(
             Icon(glyph = glyph, size = 28.dp, tint = colors.dim)
         }
         Text(text = title, style = Sillon.type.titleSmall, color = colors.tx, textAlign = TextAlign.Center)
-        Text(text = body, style = Sillon.type.bodySmall, color = colors.dim, textAlign = TextAlign.Center)
+        if (body.isNotBlank()) {
+            Text(text = body, style = Sillon.type.bodySmall, color = colors.dim, textAlign = TextAlign.Center)
+        }
         if (actionLabel != null && onAction != null) {
             Spacer(Modifier.height(NzSpacing.xs))
             NzButton(text = actionLabel, onClick = onAction)
