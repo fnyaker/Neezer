@@ -51,12 +51,16 @@ import fr.neezer.mobile.designsystem.NzButtonKind
 import fr.neezer.mobile.designsystem.NzChip
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzIconButton
+import fr.neezer.mobile.designsystem.NzItemSpecs
+import fr.neezer.mobile.designsystem.NzPaneEnter
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSheet
 import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
+import fr.neezer.mobile.designsystem.nzPaneEnter
+import fr.neezer.mobile.designsystem.rememberPaneEnter
 import uniffi.nz_ffi.LibraryAlbum
 import uniffi.nz_ffi.LibraryArtist
 import uniffi.nz_ffi.TrackRow
@@ -163,6 +167,17 @@ fun LibraryScreen(
         ReportWindow(listState, listWindow, WINDOW_OFFSET)
     }
 
+    // The leaf's CONTENT is one pane: its key is the leaf AND its phase, so a leaf
+    // change and a skeleton → content fade the content in, while the head, the
+    // strip of leaves and the leaf's tools stay put (the decision note's D2 — an
+    // `AnimatedContent` around the `LazyColumn` would fade the strip with it).
+    // The History leaf is `HistoryScreen`'s own pane: it animates its phases itself,
+    // and a second fade over it would multiply the two.
+    val pane = rememberPaneEnter(state.leaf to libraryPhase(state))
+    // Read here, in the composition: `leaf`/`trackRows` run in the LazyColumn's
+    // scope, where a `CompositionLocal` cannot be read.
+    val specs = Sillon.motion.itemSpecs()
+
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -187,7 +202,7 @@ fun LibraryScreen(
                 item(key = "tools") { LeafTools(state, actions) }
                 when (state.leaf) {
                     LibraryLeaf.History -> item(key = "history") { actions.historyBody() }
-                    else -> leaf(state, actions, columns, playingKey, listWindow, openSectionMenu)
+                    else -> leaf(state, actions, columns, playingKey, listWindow, openSectionMenu, pane, specs)
                 }
             }
 
@@ -240,8 +255,51 @@ const val LIBRARY_LIST_TAG = "library-list"
  * a 48 dp icon row, so its own top is not the page's margin). */
 const val LIBRARY_HEAD_TAG = "library-head"
 
+/** The strip of leaves: X4 asserts a leaf change never re-lays it out (± 0 dp). */
+const val LIBRARY_LEAVES_TAG = "library-leaves"
+
 /** The three lazily-composed items above a windowed list's first row. */
 private const val WINDOW_OFFSET = 3
+
+/**
+ * What a leaf is drawing: its data arrived, its read failed, it has nothing to
+ * show, or nothing yet. It is the phase of the leaf's PANE (the entrance its
+ * content plays when the leaf or the phase changes), computed OUTSIDE the
+ * `LazyColumn` from the same fields the branches below test — a second field
+ * would be a second truth.
+ */
+private enum class LibraryPhase { Loading, Failed, Empty, Content }
+
+private fun libraryPhase(state: LibraryModel.State): LibraryPhase = when (state.leaf) {
+    LibraryLeaf.Favorites -> libraryPhase(state.favoriteRows, state.failure, state.favoriteRows?.len() == 0)
+    LibraryLeaf.Artists -> libraryPhase(
+        (state.artists as? ScreenState.Ready)?.data,
+        state.failure,
+        state.shownArtists.isEmpty(),
+    )
+    LibraryLeaf.Albums -> libraryPhase(
+        (state.albums as? ScreenState.Ready)?.data,
+        state.failure,
+        state.albumRows.isEmpty(),
+    )
+    LibraryLeaf.Playlists -> {
+        val tree = state.treeData
+        libraryPhase(tree, state.failure, tree != null && tree.playlists.isEmpty() && tree.folders.isEmpty())
+    }
+    LibraryLeaf.Local -> libraryPhase(state.localRows, state.failure, state.localRows?.len() == 0)
+    LibraryLeaf.Unavailable -> libraryPhase(state.unavailableRows, state.failure, state.unavailableRows?.len() == 0)
+    LibraryLeaf.Dislikes -> libraryPhase(state.dislikeRows, state.failure, state.dislikeRows?.len() == 0)
+    // `HistoryScreen` owns this leaf's phases and its own pane; the library's is
+    // settled here so a leaf change into or out of it plays exactly one fade.
+    LibraryLeaf.History -> LibraryPhase.Content
+}
+
+private fun libraryPhase(data: Any?, failure: ScreenState.Failed?, empty: Boolean): LibraryPhase = when {
+    failure != null && data == null -> LibraryPhase.Failed
+    data == null -> LibraryPhase.Loading
+    empty -> LibraryPhase.Empty
+    else -> LibraryPhase.Content
+}
 
 /** The head: the page's title, the counters, search and the one add action. */
 @Composable
@@ -311,7 +369,7 @@ private fun LeafBar(state: LibraryModel.State, onPick: (LibraryLeaf) -> Unit) {
     }
     androidx.compose.foundation.lazy.LazyRow(
         state = strip,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag(LIBRARY_LEAVES_TAG),
         contentPadding = PaddingValues(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
@@ -451,8 +509,10 @@ private fun LazyListScope.leaf(
     playingKey: String?,
     window: ListWindow?,
     onSectionMenu: (SectionView) -> Unit,
+    pane: NzPaneEnter,
+    specs: NzItemSpecs,
 ) {
-    val side = Modifier.padding(horizontal = NzSpacing.pageX)
+    val side = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX)
     when (state.leaf) {
         LibraryLeaf.Favorites -> {
             val failure = state.failure
@@ -484,6 +544,7 @@ private fun LazyListScope.leaf(
                         glyph = NzGlyph.Heart,
                         actionLabel = "Explorer",
                         onAction = actions.openSearch,
+                        modifier = Modifier.nzPaneEnter(pane),
                     )
                 }
                 window != null -> trackRows(
@@ -492,6 +553,8 @@ private fun LazyListScope.leaf(
                     onPlay = actions.playFrom,
                     onMore = actions.more,
                     onQueue = actions.queueNext,
+                    pane = pane,
+                    specs = specs,
                 )
             }
         }
@@ -526,9 +589,10 @@ private fun LazyListScope.leaf(
                         glyph = NzGlyph.User,
                         actionLabel = if (state.artistQuery.isBlank()) "Explorer" else null,
                         onAction = if (state.artistQuery.isBlank()) actions.openSearch else null,
+                        modifier = Modifier.nzPaneEnter(pane),
                     )
                 }
-                else -> gridItems(key = "artists", rows = artists, columns = columns) { artist ->
+                else -> gridItems(key = "artists", rows = artists, columns = columns, pane = pane) { artist ->
                     ArtistTile(
                         artist = artist,
                         onClick = { actions.openArtist(artist.id) },
@@ -559,14 +623,15 @@ private fun LazyListScope.leaf(
                         glyph = NzGlyph.Disc,
                         actionLabel = "Parcourir les albums",
                         onAction = actions.openSearch,
+                        modifier = Modifier.nzPaneEnter(pane),
                     )
                 }
-                else -> gridItems(key = "albums", rows = albums, columns = columns) { album ->
+                else -> gridItems(key = "albums", rows = albums, columns = columns, pane = pane) { album ->
                     AlbumTile(card = album, onClick = { actions.openAlbum(album.id) })
                 }
             }
         }
-        LibraryLeaf.Playlists -> playlists(state, actions, columns, onSectionMenu)
+        LibraryLeaf.Playlists -> playlists(state, actions, columns, onSectionMenu, pane)
         LibraryLeaf.Local -> {
             val failure = state.failure
             val rows = state.localRows
@@ -589,6 +654,7 @@ private fun LazyListScope.leaf(
                         glyph = NzGlyph.Upload,
                         actionLabel = "Explorer",
                         onAction = actions.openSearch,
+                        modifier = Modifier.nzPaneEnter(pane),
                     )
                 }
                 window != null -> trackRows(
@@ -597,6 +663,8 @@ private fun LazyListScope.leaf(
                     onPlay = actions.playFrom,
                     onMore = actions.more,
                     onQueue = actions.queueNext,
+                    pane = pane,
+                    specs = specs,
                 )
             }
         }
@@ -622,6 +690,7 @@ private fun LazyListScope.leaf(
                         glyph = NzGlyph.Check,
                         actionLabel = "Écouter mes favoris",
                         onAction = { actions.selectLeaf(LibraryLeaf.Favorites) },
+                        modifier = Modifier.nzPaneEnter(pane),
                     )
                 }
                 window != null -> trackRows(
@@ -630,6 +699,8 @@ private fun LazyListScope.leaf(
                     onPlay = actions.playFrom,
                     onMore = actions.more,
                     onQueue = actions.queueNext,
+                    pane = pane,
+                    specs = specs,
                 )
             }
         }
@@ -661,6 +732,7 @@ private fun LazyListScope.leaf(
                         busy = state.busy != null,
                         onRemove = actions.removeDislike,
                         onMore = actions.more,
+                        modifier = Modifier.nzPaneEnter(pane),
                     )
                 }
             }
@@ -675,10 +747,11 @@ private fun LazyListScope.playlists(
     actions: LibraryActions,
     columns: Int,
     onSectionMenu: (SectionView) -> Unit,
+    pane: NzPaneEnter,
 ) {
     val failure = state.failure
     val tree = state.treeData
-    val side = Modifier.padding(horizontal = NzSpacing.pageX)
+    val side = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX)
     when {
         failure != null && tree == null -> item(key = "fail") {
             LoadFailed(
@@ -691,12 +764,13 @@ private fun LazyListScope.playlists(
         tree == null -> item(key = "skeleton") {
             Skeleton(kind = NzSkeletonKind.Shelf, modifier = side)
         }
-        state.organizing -> organizer(state, actions)
+        state.organizing -> organizer(state, actions, pane)
         tree.playlists.isEmpty() && tree.folders.isEmpty() -> item(key = "empty") {
             EmptyState(
                 title = "Aucune playlist",
                 body = "Une playlist pour un moment, une humeur, une route : elle se crée depuis la recherche.",
                 glyph = NzGlyph.Library,
+                modifier = Modifier.nzPaneEnter(pane),
             )
         }
         else -> {
@@ -731,6 +805,7 @@ private fun LazyListScope.playlists(
                             style = Sillon.type.bodySmall,
                             color = Sillon.colors.dim,
                             modifier = Modifier
+                                .nzPaneEnter(pane)
                                 .fillMaxWidth()
                                 .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
                         )
@@ -741,6 +816,7 @@ private fun LazyListScope.playlists(
                 items(chunks.size, key = { index -> "r:${section.key}:$index" }) { index ->
                     Row(
                         modifier = Modifier
+                            .nzPaneEnter(pane)
                             .fillMaxWidth()
                             .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.xxs),
                         horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
@@ -762,11 +838,16 @@ private fun LazyListScope.playlists(
 }
 
 /** The organiser: container chips and the ordered rows (`Library.svelte#org`). */
-private fun LazyListScope.organizer(state: LibraryModel.State, actions: LibraryActions) {
+private fun LazyListScope.organizer(
+    state: LibraryModel.State,
+    actions: LibraryActions,
+    pane: NzPaneEnter,
+) {
     val tree = state.treeData ?: return
     item(key = "org:head") {
         Row(
             modifier = Modifier
+                .nzPaneEnter(pane)
                 .fillMaxWidth()
                 .padding(horizontal = NzSpacing.pageX),
             verticalAlignment = Alignment.CenterVertically,
@@ -787,6 +868,7 @@ private fun LazyListScope.organizer(state: LibraryModel.State, actions: LibraryA
     item(key = "org:chips") {
         Row(
             modifier = Modifier
+                .nzPaneEnter(pane)
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
@@ -833,7 +915,9 @@ private fun LazyListScope.organizer(state: LibraryModel.State, actions: LibraryA
                 },
                 style = Sillon.type.bodySmall,
                 color = Sillon.colors.dim,
-                modifier = Modifier.padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
+                modifier = Modifier
+                    .nzPaneEnter(pane)
+                    .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
             )
         }
         return
@@ -852,7 +936,7 @@ private fun LazyListScope.organizer(state: LibraryModel.State, actions: LibraryA
             } else {
                 null
             },
-            modifier = Modifier.padding(horizontal = NzSpacing.pageX, vertical = 2.dp),
+            modifier = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX, vertical = 2.dp),
         )
     }
 }
@@ -862,12 +946,14 @@ private fun <T> LazyListScope.gridItems(
     key: String,
     rows: List<T>,
     columns: Int,
+    pane: NzPaneEnter,
     tile: @Composable (T) -> Unit,
 ) {
     val chunks = rows.chunked(columns)
     items(chunks.size, key = { index -> "$key:$index" }) { index ->
         Row(
             modifier = Modifier
+                .nzPaneEnter(pane)
                 .fillMaxWidth()
                 .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.xxs),
             horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),

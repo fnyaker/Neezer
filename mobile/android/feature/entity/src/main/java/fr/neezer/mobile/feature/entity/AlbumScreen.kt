@@ -36,6 +36,8 @@ import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
+import fr.neezer.mobile.designsystem.nzPaneEnter
+import fr.neezer.mobile.designsystem.rememberPaneEnter
 import fr.neezer.mobile.feature.offline.DownloadButton
 import uniffi.nz_ffi.TrackRow
 
@@ -45,6 +47,18 @@ const val ALBUM_MARKER = "Fiche album"
 /** S2's geometry test: the band (it cancels the page's top margin) and the list. */
 const val ALBUM_BAND_TAG = "album-band"
 const val ALBUM_LIST_TAG = "album-list"
+
+/**
+ * What the page is drawing: its data arrived, its read failed, or nothing yet —
+ * the pane's key (D2), from the same fields the branches below test.
+ */
+private enum class AlbumPhase { Loading, Failed, Content }
+
+private fun albumPhase(state: AlbumModel.State): AlbumPhase = when {
+    state.screen is ScreenState.Failed -> AlbumPhase.Failed
+    state.data == null -> AlbumPhase.Loading
+    else -> AlbumPhase.Content
+}
 
 /** Everything the album page can do. */
 data class AlbumActions(
@@ -82,6 +96,16 @@ fun AlbumScreen(
     playingKey: String? = null,
 ) {
     val colors = Sillon.colors
+    // The page's phases are one pane (the decision note's D2): skeleton → album →
+    // failure. Its key is the phase, so the content enters while nothing else on
+    // the screen exists to be moved. The band is INSIDE the pane here — unlike the
+    // artist's, it is a header skeleton until the page arrives, so it is part of
+    // what changes.
+    val pane = rememberPaneEnter(albumPhase(state))
+    // Read in the composition: `items` runs in the LazyColumn's scope, where a
+    // `CompositionLocal` cannot be read.
+    val specs = Sillon.motion.itemSpecs()
+    val enter = Modifier.nzPaneEnter(pane)
     // No `BoxWithConstraints`: this page has no table width to compute (the
     // artist's grid does), and lint rightly refuses a scope nothing reads.
     Box(
@@ -91,7 +115,7 @@ fun AlbumScreen(
     ) {
         val failed = state.screen as? ScreenState.Failed
         if (failed != null) {
-            Column(Modifier.fillMaxWidth().padding(NzSpacing.pageX)) {
+            Column(enter.fillMaxWidth().padding(NzSpacing.pageX)) {
                 LoadFailed(
                     cause = failed.cause,
                     onRetry = actions.retry,
@@ -113,14 +137,14 @@ fun AlbumScreen(
         ) {
             item(key = "band") {
                 if (page != null) {
-                    AlbumBand(page = page, state = state, actions = actions)
+                    AlbumBand(page = page, state = state, actions = actions, modifier = enter)
                     if (state.stale) {
                         EntityStaleNote(Modifier.padding(horizontal = NzSpacing.pageX))
                     }
                 } else {
                     Skeleton(
                         kind = NzSkeletonKind.Header,
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = enter.padding(horizontal = NzSpacing.pageX),
                     )
                 }
             }
@@ -129,16 +153,27 @@ fun AlbumScreen(
                     Skeleton(
                         kind = NzSkeletonKind.List,
                         count = 6,
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = enter.padding(horizontal = NzSpacing.pageX),
                     )
                 }
                 return@LazyColumn
             }
             val pad = Modifier.padding(horizontal = NzSpacing.pageX)
-            items(count = page.tracks.len(), key = { index -> "album-track-$index" }) { index ->
+            // A row's key is the TRACK's identity, not its rank: an indexed key
+            // makes every row below a removal a new item, so `animateItem` has
+            // nothing to move (measured in X5). An album holds each title once, so
+            // the identity is unique here; a page that has not landed yet draws a
+            // skeleton under its own `pending-<index>` key.
+            items(count = page.tracks.len(), key = { index -> window?.rowAt(index)?.key ?: "pending-$index" }) { index ->
                 val row = window?.rowAt(index)
                 if (row == null) {
-                    Skeleton(kind = NzSkeletonKind.List, count = 1, modifier = pad)
+                    // D4: the skeleton's key leaves as the row's arrives; nothing
+                    // fades out over the row that replaces it.
+                    Skeleton(
+                        kind = NzSkeletonKind.List,
+                        count = 1,
+                        modifier = enter.animateItem(null, specs.placement, null).then(pad),
+                    )
                 } else {
                     EntityTrackRow(
                         row = row,
@@ -148,7 +183,7 @@ fun AlbumScreen(
                         onClick = { actions.playFrom(row) },
                         onMore = { actions.more(row) },
                         onSwipeQueue = { actions.queueNext(row) },
-                        modifier = pad,
+                        modifier = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut).then(pad),
                     )
                 }
             }
@@ -158,13 +193,15 @@ fun AlbumScreen(
             if (page.library) {
                 when {
                     state.onDeezerBusy && !state.onDeezerFetched -> item(key = "more-skeleton") {
-                        Column(pad) {
+                        Column(enter.then(pad)) {
                             SectionTitle("Disponible sur Deezer")
                             Skeleton(kind = NzSkeletonKind.List, count = 3)
                         }
                     }
                     state.onDeezer.isNotEmpty() -> {
-                        item(key = "more-title") { SectionTitle("Disponible sur Deezer", pad.padding(top = NzSpacing.xl)) }
+                        item(key = "more-title") {
+                            SectionTitle("Disponible sur Deezer", enter.then(pad).padding(top = NzSpacing.xl))
+                        }
                         items(
                             count = state.onDeezer.size,
                             key = { index -> "missing-${state.onDeezer[index].key}-$index" },
@@ -176,7 +213,7 @@ fun AlbumScreen(
                                 onClick = { actions.playMissing(row) },
                                 onMore = { actions.more(row) },
                                 onSwipeQueue = { actions.queueNext(row) },
-                                modifier = pad,
+                                modifier = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut).then(pad),
                             )
                         }
                     }
@@ -194,10 +231,15 @@ fun AlbumScreen(
 
 /** The band: sleeve, facts, title, the artist link, and the actions. */
 @Composable
-private fun AlbumBand(page: AlbumView, state: AlbumModel.State, actions: AlbumActions) {
+private fun AlbumBand(
+    page: AlbumView,
+    state: AlbumModel.State,
+    actions: AlbumActions,
+    modifier: Modifier = Modifier,
+) {
     val colors = Sillon.colors
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(colors.s2)
             .testTag(ALBUM_BAND_TAG)

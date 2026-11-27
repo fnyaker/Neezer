@@ -34,6 +34,7 @@ import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSheet
 import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
 import uniffi.nz_ffi.TrackRow
@@ -200,22 +201,48 @@ fun TrackCreditsSheet(
             )
         }
         Text(text = "CRÉDITS", style = Sillon.type.labelMono, color = colors.dim)
-        val data = state.data
-        val failed = state.screen as? ScreenState.Failed
-        when {
-            data != null && !data.empty -> TrackCreditsView(
-                credits = data,
-                onArtist = onArtist,
-                onPerson = onPerson,
-            )
-            data != null -> MutedNote("Aucun crédit connu pour ce titre.")
-            failed != null -> LoadFailed(
-                cause = failed.cause,
-                onRetry = onRetry,
-                title = "Les crédits n'ont pas pu être chargés",
-            )
-            else -> Skeleton(kind = NzSkeletonKind.List, count = 4)
+        // The sheet's four answers are one phase replaced in place (M7). THIS is
+        // an `NzSwap` site and not a `nzPaneEnter` one: the panel is a Column
+        // inside `NzSheet`, not the items of a `LazyColumn`.
+        NzSwap(targetState = creditsPhaseOf(state), label = "credits-phase") { phase ->
+            when (phase) {
+                CreditsPhase.Content -> {
+                    val credits = state.data
+                    if (credits != null) {
+                        TrackCreditsView(
+                            credits = credits,
+                            onArtist = onArtist,
+                            onPerson = onPerson,
+                        )
+                    }
+                }
+                CreditsPhase.Empty -> MutedNote("Aucun crédit connu pour ce titre.")
+                CreditsPhase.Failed -> {
+                    val failed = state.screen as? ScreenState.Failed
+                    if (failed != null) {
+                        LoadFailed(
+                            cause = failed.cause,
+                            onRetry = onRetry,
+                            title = "Les crédits n'ont pas pu être chargés",
+                        )
+                    }
+                }
+                CreditsPhase.Loading -> Skeleton(kind = NzSkeletonKind.List, count = 4)
+            }
         }
+    }
+}
+
+/** What the credits sheet is drawing: its four answers (a phase, not a duration). */
+private enum class CreditsPhase { Content, Empty, Failed, Loading }
+
+private fun creditsPhaseOf(state: TrackCreditsModel.State): CreditsPhase {
+    val data = state.data
+    return when {
+        data != null && !data.empty -> CreditsPhase.Content
+        data != null -> CreditsPhase.Empty
+        state.screen is ScreenState.Failed -> CreditsPhase.Failed
+        else -> CreditsPhase.Loading
     }
 }
 

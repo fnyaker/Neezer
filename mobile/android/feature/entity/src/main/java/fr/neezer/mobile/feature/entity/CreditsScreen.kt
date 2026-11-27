@@ -32,6 +32,8 @@ import fr.neezer.mobile.designsystem.NzSkeletonKind
 import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
+import fr.neezer.mobile.designsystem.nzPaneEnter
+import fr.neezer.mobile.designsystem.rememberPaneEnter
 import uniffi.nz_ffi.TrackRow
 
 /** The screen's marker, in every state (see [ARTIST_MARKER]). */
@@ -40,6 +42,22 @@ const val CREDITS_MARKER = "Crédits"
 /** S2's geometry test: the band (it cancels the page's top margin) and the list. */
 const val CREDITS_BAND_TAG = "credits-band"
 const val CREDITS_LIST_TAG = "credits-list"
+
+/**
+ * What the list is drawing — the pane's key (D2), from the same fields its
+ * branches test.
+ */
+private enum class CreditsListPhase { Loading, Failed, Empty, Content }
+
+private fun creditsListPhase(state: PersonModel.State): CreditsListPhase {
+    val page = state.data
+    return when {
+        state.screen is ScreenState.Failed -> CreditsListPhase.Failed
+        page == null -> CreditsListPhase.Loading
+        page.count == 0 -> CreditsListPhase.Empty
+        else -> CreditsListPhase.Content
+    }
+}
 
 /** Everything a person's credits page can do. */
 data class CreditsActions(
@@ -73,6 +91,14 @@ fun CreditsScreen(
     playingKey: String? = null,
 ) {
     val colors = Sillon.colors
+    // The list's phases are one pane (D2): its key is the phase, so a skeleton →
+    // list, a failure and an empty page enter while the band stays put (the band
+    // is drawn in every state, so it is not part of what changes).
+    val pane = rememberPaneEnter(creditsListPhase(state))
+    val enter = Modifier.nzPaneEnter(pane)
+    // Read in the composition: `items` runs in the LazyColumn's scope, where a
+    // `CompositionLocal` cannot be read.
+    val specs = Sillon.motion.itemSpecs()
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -101,7 +127,7 @@ fun CreditsScreen(
                         cause = failed.cause,
                         onRetry = actions.retry,
                         title = "Cette page de crédits n'a pas pu se charger",
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = enter.padding(horizontal = NzSpacing.pageX),
                     )
                 }
                 return@LazyColumn
@@ -112,7 +138,7 @@ fun CreditsScreen(
                     Skeleton(
                         kind = NzSkeletonKind.List,
                         count = 6,
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = enter.padding(horizontal = NzSpacing.pageX),
                     )
                 }
                 return@LazyColumn
@@ -121,12 +147,12 @@ fun CreditsScreen(
                 item(key = "empty") {
                     CreditsEmptyNote(
                         emptyPersonSentence(page.name),
-                        Modifier.padding(horizontal = NzSpacing.pageX),
+                        enter.padding(horizontal = NzSpacing.pageX),
                     )
                 }
                 return@LazyColumn
             }
-            val pad = Modifier.padding(horizontal = NzSpacing.pageX)
+            val pad = enter.padding(horizontal = NzSpacing.pageX)
             item(key = "bar") {
                 PersonCreditsBar(
                     page = page,
@@ -138,10 +164,20 @@ fun CreditsScreen(
                 )
             }
             val count = state.tracks?.len() ?: 0
-            items(count = count, key = { index -> "credit-row-$index" }) { index ->
+            // The key is the TRACK's identity, not its rank: an indexed key makes
+            // every row below a removal a new item, so `animateItem` has nothing to
+            // move (measured in X5). A person's credits list holds each title once,
+            // so it is unique; a page that has not landed draws `pending-<index>`.
+            items(count = count, key = { index -> window?.rowAt(index)?.key ?: "pending-$index" }) { index ->
                 val row = window?.rowAt(index)
                 if (row == null) {
-                    Skeleton(kind = NzSkeletonKind.List, count = 1, modifier = pad)
+                    Skeleton(
+                        kind = NzSkeletonKind.List,
+                        count = 1,
+                        modifier = enter.animateItem(null, specs.placement, null).then(
+                            Modifier.padding(horizontal = NzSpacing.pageX),
+                        ),
+                    )
                 } else {
                     EntityTrackRow(
                         row = row,
@@ -149,7 +185,8 @@ fun CreditsScreen(
                         onClick = { actions.playFrom(row) },
                         onMore = { actions.more(row) },
                         onSwipeQueue = { actions.queueNext(row) },
-                        modifier = pad,
+                        modifier = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
+                            .then(Modifier.padding(horizontal = NzSpacing.pageX)),
                     )
                 }
             }

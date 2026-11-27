@@ -7941,3 +7941,84 @@ scope paresseux, d'où l'écart 2) : <https://developer.android.com/develop/ui/c
 <https://developer.android.com/develop/ui/compose/lists#item-animations> ; `AnimatedContent`
 (`sizeTransform = null`, `ExitTransition.None`) : <https://developer.android.com/develop/ui/compose/animation/composables-modifiers> ;
 la table de `docs/agents/transitions.md` (*Le téléphone*, X0) pour les valeurs.
+
+### X4 — Bibliothèque et fiches : cinq feuilles qui se remplacent, une note qui apparaît (delivered 2026-11-27)
+
+**Le besoin.** Changer de feuille dans la Bibliothèque (« Titres » → « Artistes ») ou d'onglet sur une
+fiche remplaçait le contenu en **une image** : la grille ou la liste apparaissait d'un coup, sans dire
+qu'elle venait de changer. Un dé-favori retirait sa ligne et **tout ce qui était dessous téléportait**
+vers le haut. Sur un téléphone, ça ne se lit pas comme « ce contenu est arrivé » mais comme un
+scintillement.
+
+**Ce que le lot a appris, et qui vaut pour la suite (X5b, X6, tout écran à venir).**
+
+1. **`AnimatedContent` ne peut pas envelopper les items d'un `LazyColumn`.** Le corps d'une feuille,
+   d'un onglet ou d'une phase est ici une extension `LazyListScope` : ses items ne peuvent être
+   déclarés que dans le DSL du `LazyColumn`, qui les mesure avec des contraintes infinies sur l'axe
+   principal (un `LazyColumn` imbriqué est impossible). Envelopper la liste entière ferait entrer la
+   tête **et** la bande de feuilles avec elle — ce que la SPA ne fait pas. D'où `NzPaneEnter` :
+   `rememberPaneEnter(clef)` tient une progression partagée, et **chaque item du panneau** porte
+   `Modifier.nzPaneEnter(pane)`, qui la lit dans `graphicsLayer` — **aucune recomposition ni remise en
+   page par image** (M10). Specs d'`inPlaceSpecs` : 140 ms + 4 dp à Full, fondu seul en mouvement
+   réduit, **rien** en éco. La première composition ne joue rien (l'entrée de l'écran, X1, la couvre).
+2. **`NzAppear(visible = true)` n'anime pas un montage**, et c'était le one-liner du plan pour
+   `MutedNote` : `AnimatedVisibility(Boolean)` affiche son contenu sans animation à la première
+   composition. `NzAppearOnMount` prend un `MutableTransitionState`, seule forme qui démarre l'entrée
+   sur l'image où le composable rejoint l'arbre. C'est ce que porte `MutedNote` (`EntityBits.kt`) —
+   une définition, tous les appelants.
+3. **La clef de ligne ÉTAIT l'animation** (même constat que X5) : `items(window.len)` sans clef (le
+   tableau des favoris) et `"track-$index"` (fiches) faisaient de chaque ligne sous un retrait un
+   **nouvel item**, donc `animateItem` n'avait rien à déplacer. La clef devient l'identité de la piste
+   (`<source>:<id>`, unique dans ces listes — un favori, une piste d'album, une ligne de crédit y
+   figurent une fois), et un squelette de page non chargée garde `pending-<index>` avec
+   `fadeOutSpec = null` : sinon il s'effacerait **par-dessus** la ligne qui le remplace.
+4. **La bande reste hors du panneau, et ça se mesure.** Sur la fiche artiste, l'onglet change sans
+   que la bande bouge : **0..196 dp avant et après (± 0 dp)**. L'album fait l'inverse — sa bande EST un
+   squelette tant que la page n'est pas là, donc elle appartient au panneau.
+5. **Une progression de panneau ne se photographie pas sous Robolectric.** `captureRoboImage` dessine
+   le dernier calque évalué : deux captures d'affilée montrent `p = 0` puis `p = 1`, jamais l'entre-deux
+   (mesuré). La courbe est donc tenue par le test (`TransitionTest`), et l'image à 50 % reste due d'une
+   machine à `/dev/kvm`.
+
+**Mesuré** (Robolectric 360 dp, horloge Compose explicite, aucune lecture d'horloge murale) :
+
+| Cas | Avant | Image 0 | 16 ms / 70 ms | Après | Éco |
+|---|---|---|---|---|---|
+| Panneau, changement de clef (Full) | 1 | **0** | **0,654 à 16 ms**, strictement entre 0 et 1 à 70 ms | **1** après 140 ms | **1** à l'image du changement |
+| Panneau, même clef ré-émise | 1 | 1 | 1 | 1 | 1 |
+| Bibliothèque, « Titres » → « Artistes » | tête 20,0..87,5 dp, bande 87,5..151,5 dp | le contenu de la nouvelle feuille, l'ancien **aucun nœud** ; **aucune** des deux bornes ne bouge (± 0 dp) | — | idem | — |
+| Fiche artiste, « Titres » → « Crédits » | bande 0..196 dp | la barre de crédits est là, la liste des titres **plus aucun nœud** ; bande **0..196 dp** | — | idem | — |
+| Album, squelette → page | liste `top = 0,0 dp` | la page (bande + titres) dans l'image du changement | — | idem | — |
+| Favori retiré (60 lignes de 56 dp) | « Sinnerman 3 » à **489,5 dp** | — | **441,0 dp à 100 ms** (strictement entre) | **433,5 dp** (−56) | **433,5 dp** à l'image du changement |
+
+`0` requête ajoutée : ces chemins dessinent un état déjà lu (une feuille est déjà en mémoire, un
+dé-favori vient de la commande que la personne a lancée). Le compte de mises en page d'un retrait est
+**1** : la place d'une ligne est une translation de placement, la ligne n'est jamais remesurée (le
+plafond web de 3 tient par construction). Goldens T3 **inchangés** (`-Proborazzi.test.verify=true`) :
+la couche du panneau vaut alpha 1 au repos, et la note apparaît avant que la capture n'ait lieu.
+
+**Tests.** `TransitionTest` +5 (le panneau : première composition muette, 0 → strictement entre → 1 sur
+un changement de clef, éco dans l'image du changement, ré-émission muette ; `NzAppearOnMount` présent à
+l'image 0 à chaque niveau), `LibraryScreenMotionTest` (4 : la feuille remplacée dans la même image avec
+la bande et la tête immobiles, la ré-émission qui n'ajoute aucun nœud, le dé-favori à Full et en éco),
+`EntityPaneMotionTest` (3 : onglet d'artiste, phase d'album, feuille de crédits), `EntityBitsMotionTest`
+(3 : la note présente à l'image demandée, un seul nœud pendant son entrée, le preset qu'elle emploie).
+Les deux cas « ça bouge » ont été lancés **une fois sur l'arbre d'avant** : à 100 ms le voisin était
+déjà à **433,5 dp** (« the row is strictly between 433,5 and 489,5, was 433,5 »), et le nœud déplacé
+n'était plus retrouvé. 157 tests sur les trois modules (66 + 52 + 39), 0 échec, 0 ignoré.
+
+**Dû sur une machine à KVM.** Le `FrameTimingMetric` (p95 ≤ 16,7 ms) d'un dé-favori sur la
+bibliothèque de 8 000 titres et les captures d'émulateur à 50 % ; ce worker n'a pas `/dev/kvm`, la
+preuve émulateur vient du job `emulator` de `mobile.yaml`. L'image de
+`docs/agents/screenshots/mobile/X4/` est une capture Robolectric de l'état final.
+
+**Sources** (comportements non spécifiés par la personne) : `MutableTransitionState` pour une entrée au
+montage et `LazyItemScope.animateItem` (clef stable) :
+<https://developer.android.com/develop/ui/compose/animation/composables-modifiers> et
+<https://developer.android.com/develop/ui/compose/lists#item-animations> ; la décision qui a débloqué
+le lot (2026-11-27 : `nzPaneEnter` plutôt que `NzSwap` dans un `LazyColumn`, et `X5b` pour les corps
+de phase de la playlist et des podcasts).
+
+**Hors portée.** La file, la playlist, l'arbre des genres, les podcasts (`X5`, et `X5b` pour leurs corps
+de phase dans un `LazyColumn`), les écrans de rayons (`X3`), les réglages/import (`X6`), les gestes
+(`SwipeRow` de G1), l'espacement (S2), la disposition large.
