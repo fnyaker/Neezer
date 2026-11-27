@@ -58,11 +58,12 @@ import fr.neezer.mobile.designsystem.NzIconButton
 import fr.neezer.mobile.designsystem.NzMinTouchTarget
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
-import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.SwipeRow
 import fr.neezer.mobile.designsystem.nzDuration
+import fr.neezer.mobile.designsystem.nzPaneEnter
 import fr.neezer.mobile.designsystem.rememberListWindow
+import fr.neezer.mobile.designsystem.rememberPaneEnter
 import fr.neezer.mobile.feature.offline.DownloadButton
 import uniffi.nz_ffi.PlaylistRole
 import uniffi.nz_ffi.TrackRow
@@ -100,58 +101,72 @@ fun PlaylistScreen(
     modifier: Modifier = Modifier,
     wide: Boolean = false,
 ) {
-    val colors = Sillon.colors
     // No top bar here: the SHELL draws the phone's (`app/NavGraph.kt`'s
     // Scaffold) and a second one showed two bars on the device — measured on
     // the emulator capture (`mb9-emulateur-360dp.png` before the fix). Since
     // L1 the shell has no bar at all: the band below carries the playlist's
     // title, and [PLAYLIST_MARKER] is what names the route to a test. Back is
     // the system's (or the shell's `DetailBackRow`), as every other screen.
+    //
+    // The phase is ONE pane (X4's decision note, D2), not an `NzSwap`: the
+    // phase's body is a `LazyColumn`, and an `AnimatedContent` around it faded
+    // and lifted the BAND with the rows — the band is the list's first item, and
+    // it is the screen's header. `rememberPaneEnter(phase)` holds one progress,
+    // every item of the panel carries it, and the band's item does not, so the
+    // header keeps its box (± 0 dp, `PlaylistScreenPaneTest`) while the panel
+    // enters by itself. A re-emit of the same phase plays nothing.
+    val phase = playlistPhase(state)
+    val pane = rememberPaneEnter(phase)
+    val enter = Modifier.nzPaneEnter(pane)
     Column(modifier = modifier.fillMaxSize().semantics { contentDescription = PLAYLIST_MARKER }) {
-        // The phase, swapped in place: skeleton → page, LoadFailed → page (M7). A
-        // re-emit of the same phase plays nothing (X0's `contentKey`).
-        NzSwap(targetState = phaseOf(state), label = "playlist-phase") { phase ->
-            when (phase) {
-                Phase.Failed -> LoadFailed(
-                    cause = state.failure ?: "cause inconnue",
-                    onRetry = actions.retry,
-                    modifier = Modifier.padding(NzSpacing.l),
-                )
+        when (phase) {
+            Phase.Failed -> LoadFailed(
+                cause = state.failure ?: "cause inconnue",
+                onRetry = actions.retry,
+                modifier = enter.padding(NzSpacing.l),
+            )
 
-                Phase.Loading -> SkeletonBand()
+            Phase.Loading -> SkeletonBand(modifier = enter)
 
-                Phase.Ready -> if (wide) {
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        Column(
-                            modifier = Modifier
-                                .width(320.dp)
-                                .fillMaxSize()
-                                .padding(NzSpacing.l),
-                            verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
-                        ) {
-                            Band(state, actions)
-                            ActionLine(state, actions)
-                            if (state.readOnlyNote) ReadOnlyNote(state)
-                        }
-                        Box(Modifier.weight(1f).fillMaxSize()) {
-                            Tracks(state, actions, showBand = false)
-                        }
+            Phase.Empty, Phase.Content -> if (wide) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .width(320.dp)
+                            .fillMaxSize()
+                            .padding(NzSpacing.l),
+                        verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
+                    ) {
+                        // The wide band is not a list item, so it never enters: the
+                        // header of the screen does not move with the panel (D2).
+                        Band(state, actions)
+                        ActionLine(state, actions)
+                        if (state.readOnlyNote) ReadOnlyNote(state)
                     }
-                } else {
-                    Tracks(state, actions, showBand = true)
+                    Box(Modifier.weight(1f).fillMaxSize()) {
+                        Tracks(state, actions, showBand = false, enter = enter)
+                    }
                 }
+            } else {
+                Tracks(state, actions, showBand = true, enter = enter)
             }
         }
     }
 }
 
-/** What the screen draws: its data arrived, its read failed, or nothing yet. */
-private enum class Phase { Loading, Failed, Ready }
+/**
+ * What the panel is drawing: the page arrived and holds rows, the page arrived
+ * and holds none, the read failed with nothing to draw, or nothing yet — the
+ * pane's key (D2), from the same fields the branches below test.
+ */
+private enum class Phase { Loading, Failed, Empty, Content }
 
-private fun phaseOf(state: PlaylistModel.State): Phase = when {
-    state.page != null -> Phase.Ready
-    state.failure != null -> Phase.Failed
-    else -> Phase.Loading
+private fun playlistPhase(state: PlaylistModel.State): Phase = when {
+    // A kept page outlives a failed refresh: the page wins, as it always did.
+    state.page == null && state.failure != null -> Phase.Failed
+    state.page == null -> Phase.Loading
+    state.trackCount == 0 -> Phase.Empty
+    else -> Phase.Content
 }
 
 /**
@@ -185,9 +200,9 @@ data class PlaylistActions(
 )
 
 @Composable
-private fun SkeletonBand() {
+private fun SkeletonBand(modifier: Modifier = Modifier) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(NzSpacing.l),
+        modifier = modifier.fillMaxWidth().padding(NzSpacing.l),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
@@ -428,6 +443,7 @@ private fun Tracks(
     state: PlaylistModel.State,
     actions: PlaylistActions,
     showBand: Boolean,
+    enter: Modifier,
 ) {
     val rows = state.rows
     val page = state.page
@@ -447,6 +463,9 @@ private fun Tracks(
     }
     val colors = Sillon.colors
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+        // The header: the band, the actions, the toolbar. It is NOT part of the
+        // panel — a phase change leaves it exactly where it is (D2, measured ± 0 dp
+        // in the change's first frame).
         item(key = "band") {
             Column(
                 modifier = Modifier.padding(horizontal = NzSpacing.l, vertical = NzSpacing.m),
@@ -468,18 +487,22 @@ private fun Tracks(
             }
         }
         if (state.trackCount == 0) {
+            // The panel's own answer to an empty list: an `EmptyState` (or the
+            // search's no-hit line), never a bare `MutedNote`, so it enters with the
+            // pane like every other item of the panel.
             item(key = "empty") {
                 if (state.query.isNotBlank()) {
                     Text(
                         text = "Aucun titre ne correspond à « ${state.query} ».",
                         style = Sillon.type.bodySmall,
                         color = colors.dim,
-                        modifier = Modifier.padding(NzSpacing.l),
+                        modifier = enter.padding(NzSpacing.l),
                     )
                 } else {
                     EmptyState(
                         title = "Cette playlist est vide",
                         body = "Ajoutez des titres pour commencer.",
+                        modifier = enter,
                         actionLabel = if (state.editable) "Ajouter des titres" else null,
                         onAction = if (state.editable) actions.addTracks else null,
                         glyph = NzGlyph.Music,
@@ -489,7 +512,8 @@ private fun Tracks(
         }
         items(count = state.trackCount, key = { index -> window.itemKey(index) }) { index ->
             val row = window.rowAt(index)
-            val motion = Modifier.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
+            // `enter` FIRST in the item's chain (D2), then the list's placement.
+            val motion = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
             if (row == null) {
                 // A page that has not landed yet: a skeleton, never a blank row.
                 Box(
@@ -518,9 +542,9 @@ private fun Tracks(
             }
         }
         if (state.editable && !state.editing && state.query.isBlank()) {
-            item(key = "recs") { Recommendations(state, actions) }
+            item(key = "recs") { Recommendations(state, actions, modifier = enter) }
         }
-        item(key = "tail") { Spacer(Modifier.height(96.dp)) }
+        item(key = "tail") { Spacer(enter.height(96.dp)) }
     }
 }
 
@@ -727,11 +751,15 @@ private fun Toolbar(state: PlaylistModel.State, actions: PlaylistActions) {
 }
 
 @Composable
-private fun Recommendations(state: PlaylistModel.State, actions: PlaylistActions) {
+private fun Recommendations(
+    state: PlaylistModel.State,
+    actions: PlaylistActions,
+    modifier: Modifier = Modifier,
+) {
     val colors = Sillon.colors
     val recs = state.recs
     Column(
-        modifier = Modifier.fillMaxWidth().padding(NzSpacing.l),
+        modifier = modifier.fillMaxWidth().padding(NzSpacing.l),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.ln))

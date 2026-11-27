@@ -8022,3 +8022,86 @@ de phase de la playlist et des podcasts).
 **Hors portée.** La file, la playlist, l'arbre des genres, les podcasts (`X5`, et `X5b` pour leurs corps
 de phase dans un `LazyColumn`), les écrans de rayons (`X3`), les réglages/import (`X6`), les gestes
 (`SwipeRow` de G1), l'espacement (S2), la disposition large.
+
+### X5b — Les corps de phase d'un `LazyColumn` : la playlist et le podcast (delivered 2026-11-27)
+
+**Le besoin.** X4 a donné un seam aux panneaux d'un `LazyColumn` (chaque item porte
+`Modifier.nzPaneEnter(pane)`, une progression partagée lue dans `graphicsLayer`), mais deux écrans
+n'avaient pas encore leur panneau : la fiche playlist changeait de phase derrière un `NzSwap` posé
+**autour du `LazyColumn` entier**, et la fiche d'un podcast n'animait rien du tout (squelette → page →
+liste vide, d'un coup). Pour la playlist, la conséquence était visible : changer de phase faisait
+voyager la **bande du titre** de 4 dp et l'entrait en fondu **avec** les lignes, alors que cette bande
+est l'en-tête de l'écran, pas son contenu. La personne voyait sa fiche trembler au moment où elle
+devenait disponible.
+
+**Ce qui a changé.** Aucune copie, aucune mise en page, aucun geste : les deux écrans demandent au
+vocabulaire de X0 de jouer ce qu'ils font déjà.
+
+- `PlaylistScreen.kt` — `NzSwap` disparaît ; `val pane = rememberPaneEnter(playlistPhase(state))` et
+  `val enter = Modifier.nzPaneEnter(pane)`. La `Phase` devient `{ Loading, Failed, Empty, Content }`
+  (l'`empty` était un item, il est maintenant un état du panneau), calculée hors du `LazyColumn` : une
+  page gardée garde la priorité sur une relecture ratée, comme avant. **Chaque item du panneau** porte
+  `enter` en premier dans sa chaîne (les lignes, le squelette de page, l'`EmptyState`, les
+  recommandations, la queue de liste) ; l'item `band` (bande, actions, barre d'outils) **non**.
+- `ShowScreen.kt` — même seam pour la fiche d'un podcast : `rememberPaneEnter(showPhase(state))`, la
+  branche squelette et la branche `LoadFailed` (qui sont des `Column`, pas des items) portent `enter`
+  sur leur racine, et chaque item du corps le porte sauf l'item `header`.
+- `EpisodePanel.kt` — **rien**, et c'est D2 : son corps d'onglet est un `Column` dans `NzSheet`, donc
+  il garde son `NzSwap` (« les écrans en `Column` ou `Box` gardent `NzSwap` »), comme la feuille de
+  crédits de X4. Un test le tient (les deux bornes de l'en-tête ne bougent pas), parce que c'est là
+  qu'un `sizeTransform` ajouté par distraction se verrait.
+
+**Ce que le lot a appris, et qui vaut pour la suite.**
+
+1. **Un panneau remplacé par un MODIFICATEUR ne se distingue pas par des bornes.** C'est la première
+   chose mesurée, et elle corrige une attente : les tests de bornes de ce lot passent **aussi sur
+   l'arbre d'avant** (lancés dessus, `PlaylistScreenPaneTest` à `Full` : bande à `90,5..108,0 dp` des
+   deux côtés, 0 nœud de l'ancien panneau à l'image 0). `NzSwap`'s `slideInVertically` passe par un
+   calque (`placeWithLayer`) et `Modifier.nzPaneEnter` par un `graphicsLayer` : `getUnclippedBoundsInRoot`
+   ignore les deux, exactement comme X0 l'avait écrit. Ce que la personne voit — la bande qui ne
+   voyage plus de 4 dp, le panneau qui n'est plus re-composé — est un fait de **dessin**, prouvé par la
+   capture à 50 % sur une machine à KVM. Les tests de ce lot tiennent le **câblage** : le nouveau
+   panneau dans la même image en éco, l'ancien sans aucun nœud, l'en-tête dans la même boîte, la
+   ré-émission muette. C'est la bonne garde contre l'erreur que le lot interdit (un `AnimatedContent`
+   autour du corps), pas contre l'ancien code.
+2. **`empty` est un état du panneau, pas un item de plus.** Avec `Phase.Empty`, retirer le dernier
+   titre fait entrer l'`EmptyState` comme les lignes qu'il remplace ; sans lui, la note apparaîtrait
+   d'un coup au milieu d'un panneau qui, lui, entre en fondu.
+3. **L'item d'en-tête ne se déduit pas de « c'est le premier ».** Sur la fiche playlist, la bande est
+   un **item de la liste** (elle défile avec les titres) : « hors du panneau » veut dire « sans le
+   modificateur », pas « hors du `LazyColumn` ». C'est aussi ce qui a décidé de la liste large : en
+   disposition ≥ 600 dp la bande est une `Column` à côté de la liste, et elle ne porte pas `enter`
+   non plus — même en-tête, même immobilité.
+
+**Mesuré** (Robolectric 360 dp, horloge Compose explicite, aucune lecture d'horloge murale) :
+
+| Cas | Avant / image 0 | Après | Éco |
+|---|---|---|---|
+| Fiche playlist, page (3 titres) → vide, `Full` | bande `90,5..108,0 dp` | même boîte `90,5..108,0 dp` (± 0 dp) ; 0 nœud de l'ancienne liste, « Cette playlist est vide » présent | même chose à l'image 0 |
+| Fiche playlist, même phase ré-émise (`loading = true`) | 1 nœud « Titre 0 », bande immobile | 1 nœud, bande immobile | — |
+| Fiche podcast, 3 épisodes → aucun, `Full` | en-tête `67,0..84,5 dp` | même boîte `67,0..84,5 dp` (± 0 dp) ; 0 nœud « Épisode 0 », « Aucun épisode » présent | même chose à l'image 0 |
+| Panneau d'un épisode, « Chapitres » → « Transcription » | en-tête `192,0..209,5 dp` | même boîte (± 0 dp) ; champs de recherche de la transcription présent, 0 nœud des chapitres | même chose à l'image 0 |
+| Panneau d'un épisode, requêtes du changement d'onglet | — | **0** (le panneau a demandé la transcription à l'ouverture) | **0** |
+
+**Tests.** `PlaylistScreenPaneTest` (3 : la phase à `Full` avec la bande immobile et l'ancienne liste
+sans nœud, la même à l'image 0 en éco, la ré-émission muette), `ShowScreenPaneTest` (3, mêmes cas sur
+l'en-tête du podcast), `EpisodePanelTabTest` (2 : l'onglet à l'image 0 en éco avec **0 requête**, et à
+`Full` avec l'en-tête immobile puis un second appui muet). 68 tests sur les deux modules
+(`:feature:playlist` + `:feature:podcasts`), 0 échec, 0 ignoré ; goldens T3 **inchangés** (le panneau
+vaut alpha 1 au repos) ; `lintDebug` et `assembleDebug` verts.
+
+**Dû sur une machine à KVM.** Les captures d'émulateur à 50 % du fondu (le panneau de la playlist, celui
+du podcast) : ce worker n'a pas `/dev/kvm`, la preuve émulateur vient du job `emulator` de
+`mobile.yaml`. L'image de `docs/agents/screenshots/mobile/X5b/` est une capture Robolectric de l'état
+final.
+
+**Sources** (comportements non spécifiés par la personne) : `Modifier.graphicsLayer` lu en phase de
+dessin (aucune recomposition ni remise en page par image) :
+<https://developer.android.com/develop/ui/compose/graphics/draw/modifiers> ; `LazyItemScope.animateItem`
+et ses clés stables : <https://developer.android.com/develop/ui/compose/lists#item-animations> ;
+`AnimatedContent` (`sizeTransform = null`, `ExitTransition.None`), qui reste la forme d'un corps en
+`Column` : <https://developer.android.com/develop/ui/compose/animation/composables-modifiers>.
+
+**Hors portée.** `Transition.kt` (le seam, X4), les `animateItem` des lignes (X5), les gestes
+(`SwipeRow` de G1, le réordonnancement), les feuilles (`NzSheet`), les autres écrans en `LazyColumn`
+(la bibliothèque, les fiches, l'historique : X4).
