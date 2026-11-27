@@ -138,6 +138,7 @@ class AudioFxPhaseTest {
             "Fondu court sur suivant et précédent",
             "Coupe les silences en début et fin",
             "±16 dB par bande",
+            "non modifiable",
             "activez l'égaliseur",
             "Le serveur mesure les bords au seuil",
         )

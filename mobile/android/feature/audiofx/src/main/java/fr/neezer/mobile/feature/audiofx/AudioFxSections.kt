@@ -327,7 +327,7 @@ private fun PresetsBlock(model: AudioFxModel, state: FxState) {
     } else {
         val label = when {
             selection == null -> ""
-            selection.builtin -> "« ${selection.name} » · préréglage intégré, non modifiable."
+            selection.builtin -> "« ${selection.name} » · intégré"
             else -> "« ${selection.name} » · à jour."
         }
         if (label.isNotEmpty()) {
