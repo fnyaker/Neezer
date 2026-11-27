@@ -1,5 +1,6 @@
 package fr.neezer.mobile.app
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.ImageBitmap
 import fr.neezer.mobile.bridge.CoilCovers
 import fr.neezer.mobile.designsystem.LocalNzCoverLoader
 import fr.neezer.mobile.designsystem.NzCoverLoader
@@ -64,7 +66,9 @@ class MainActivity : ComponentActivity() {
                 // `CompositionLocalProvider` il reste `null` et chaque pochette
                 // est sa rainure (mesuré par l'audit : le seul fournisseur de
                 // l'arbre était un test).
-                CompositionLocalProvider(LocalNzCoverLoader provides CoilNzCoverLoader) {
+                CompositionLocalProvider(
+                    LocalNzCoverLoader provides CoilNzCoverLoader(applicationContext),
+                ) {
                     NzApp(graph)
                 }
             }
@@ -100,9 +104,17 @@ class MainActivity : ComponentActivity() {
  * `:designsystem` implémentée depuis `:bridge` serait un cycle de modules. `CoilCovers` reste dans
  * `:bridge` (le fetcher, le keyer et Coil y vivent déjà).
  */
-private object CoilNzCoverLoader : NzCoverLoader {
+private class CoilNzCoverLoader(private val context: Context) : NzCoverLoader {
     @Composable
     override fun Image(url: String, sizePx: Int) {
         CoilCovers.Image(url = url, sizePx = sizePx)
     }
+
+    /**
+     * Le fond du lecteur (JF) demande les PIXELS, pas une image composée : c'est
+     * lui qui floute, en Kotlin, sur tous les niveaux d'API. Seul `:app` voit
+     * `:designsystem` et `:bridge`, donc c'est ici que le pont se fait.
+     */
+    override suspend fun bitmap(url: String, sizePx: Int): ImageBitmap? =
+        CoilCovers.bitmap(context, url, sizePx)
 }

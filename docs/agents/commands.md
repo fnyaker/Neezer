@@ -105,6 +105,8 @@ cd webapp && node test/screens/run.mjs --check       # every reference is presen
 python mobile/tools/judge/precheck.py <evidence>     # the judge's countable checks on a mobile-journey-evidence directory: one line per
                                                      # check, `precheck: ok=<n> fail=<n>`, exit 0 whatever the result
 gh run download <run-id> --name mobile-journey-evidence --dir /tmp/judge-<n>   # the artifact the judge reads (14 days)
+gradle -p mobile/android :feature:nowplaying:recordRoborazziDebug -PskipRust   # re-record the T3 goldens committed under
+                                                     # mobile/android/screenshots (verification is `-Proborazzi.test.verify=true`, what the `apk` job runs)
 cd webapp && node test/player/run.mjs                # the sleep timer and the podcast speed on the audio elements the browser really plays (a fake page clock)
 cd webapp && node test/output/run.mjs                # the audio path: routed by the full-screen player, the fault simulated (the element's clock 8% fast): convicted
                                                      # in one window, DIRECT on a fresh element and a fresh context, retried at a track change, forgotten when clean

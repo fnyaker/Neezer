@@ -265,6 +265,13 @@ The SPA's `lib/api.js#req` is the contract; port it, do not reinvent it:
   when the file is finished, `?start=<s>` otherwise, see *Streams*).
 - A screen that cannot load shows the cause and "Réessayer" (the `LoadFailed.svelte` equivalent),
   never an endless spinner.
+- **The server's own body is never shown to a person.** `SourceError::Provider` keeps `message`
+  (the server's English JSON) for the log and `Debug` only; its `Display` names the cause in French
+  from the status alone — `accès refusé par le serveur`, `titre introuvable sur le serveur`,
+  `service indisponible sur le serveur`, `erreur du serveur`, `titre refusé par le serveur`,
+  `réponse inattendue du serveur` — because that same line reaches the phone's player header
+  (`docs/agents/mobile.md`, *Le juge*). Measured: `08-lecteur.xml` of the mobile journey showed
+  `Deezer proxy disabled (503)` before this rule (run 45953439457, head a176c2ed).
 
 ### Caches (what was fetched once is kept)
 

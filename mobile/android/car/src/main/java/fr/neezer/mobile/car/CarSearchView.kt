@@ -8,7 +8,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Handler
 import android.os.Looper
@@ -68,12 +69,14 @@ class CarSearchView(
     private val prefs: CarPrefs = host.prefs,
 ) : LinearLayout(context) {
     // A 640 dp car screen with the 92 dp bottom margin cannot fit 50 dp keys
-    // in the ABC + passenger layout; 42 dp rows still leave a 44 dp target
-    // after the touch slop, and keep the whole panel on screen.
+    // in the ABC + passenger layout; 48 dp is the touch floor (C48), still
+    // above the 44 dp the old 42 dp rows left after the touch slop, and the
+    // whole panel stays on screen because the keyboard lives in a column the
+    // overlay bottom-anchors.
     private val compactScreen = context.resources.displayMetrics.run {
         heightPixels / density < 700f
     }
-    private val keyHeightDp = if (compactScreen) 42 else 50
+    private val keyHeightDp = if (compactScreen) TOUCH else 50
     private val suggestionHeightDp = if (compactScreen) 42 else 46
     private val handler = Handler(Looper.getMainLooper())
     // Created on the first search and cancelled with the view: the service builds
@@ -196,7 +199,9 @@ class CarSearchView(
             setTextIsSelectable(false)
             setPadding(0, 0, 0, 0)
         }
-        field.addView(queryView, LinearLayout.LayoutParams(0, dp(30), 1f))
+        // The field itself is the 52 dp control; the text takes the full height
+        // so its line is centred in the field's box, not in a 30 dp strip.
+        field.addView(queryView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         row.addView(field, LinearLayout.LayoutParams(0, dp(52), 1f))
 
         micIcon = CarIconView(context).apply {
@@ -273,13 +278,22 @@ class CarSearchView(
         }
         tappable(
             passengerButton,
-            CarStyle.pill(context, Color.TRANSPARENT, withAlpha(CarStyle.TX, 0.40f)),
-            CarStyle.pill(context, CarStyle.TX),
+            // The pill stays 30 dp tall inside a 48 dp touch box (C48): the
+            // 9 dp inset above and below is the visible gap, the box is the
+            // target. The 6 dp top margin keeps the row where it was.
+            InsetDrawable(
+                CarStyle.pill(context, Color.TRANSPARENT, withAlpha(CarStyle.TX, 0.40f)),
+                0, dp(9), 0, dp(9),
+            ),
+            InsetDrawable(
+                CarStyle.pill(context, CarStyle.TX),
+                0, dp(9), 0, dp(9),
+            ),
         )
         passengerButton.setOnClickListener { onPassenger() }
         column.addView(
             passengerButton,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(30)).apply { topMargin = dp(6) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(TOUCH)).apply { topMargin = dp(6) },
         )
 
         addView(column, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
@@ -1030,8 +1044,8 @@ class CarSearchView(
 
     private fun tappable(
         view: View,
-        shape: GradientDrawable,
-        mask: GradientDrawable,
+        shape: Drawable,
+        mask: Drawable,
         rippleColor: Int = withAlpha(CarStyle.TX, 0.16f),
     ) {
         view.background = RippleDrawable(ColorStateList.valueOf(rippleColor), shape, mask)
@@ -1074,6 +1088,8 @@ class CarSearchView(
 
     companion object {
         private const val MAX_SUGGESTIONS = 3
+        /** The Material touch-target floor (C48): every clickable box is this big. */
+        private const val TOUCH = 48
         /** How many titles the panel looks at before it ranks: three are drawn. */
         private const val SUGGESTION_SCAN = 12u
         // /api/search is five upstream searches behind the route (artists,

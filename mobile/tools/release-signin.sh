@@ -44,10 +44,17 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/env.sh"
 
 serial=""
+# `--handoff <dir>`: the caller (release-journey.sh) takes the bench over and keeps
+# it until ITS last door, so the library and the next track's cover still reach a
+# server after this script exits. Without it the bench is this script's alone and
+# is stopped in `cleanup`, exactly as before.
+handoff=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial) serial="$2"; shift 2 ;;
         --serial=*) serial="${1#*=}"; shift ;;
+        --handoff) handoff="$2"; shift 2 ;;
+        --handoff=*) handoff="${1#*=}"; shift ;;
         -h | --help) sed -n '2,40p' "$0"; exit 0 ;;
         *) printf 'release-signin.sh: unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -64,12 +71,23 @@ readonly tls_host=valid-isrgrootx1.letsencrypt.org
 note() { printf 'release-signin.sh: %s\n' "$*" >&2; }
 step() { printf '\n=== %s\n' "$*"; }
 
-work="$(mktemp -d)"
+if [[ -n "$handoff" ]]; then
+    work="$handoff"
+    mkdir -p "$work"
+else
+    work="$(mktemp -d)"
+fi
 perf_state="$work/perf"
 cleanup() {
     local code=$?
-    NEEZER_PERF_STATE="$perf_state" "$here/perf-server.sh" stop >/dev/null 2>&1 || true
-    rm -rf "$work"
+    # Avec `--handoff`, NI l'arrêt du banc NI la suppression de `$work` : le
+    # certificat TLS et l'état du serveur sont ce que les portes suivantes
+    # utilisent (un certificat supprimé fait échouer la poignée de main
+    # suivante). C'est l'appelant qui arrête et nettoie.
+    if [[ -z "$handoff" ]]; then
+        NEEZER_PERF_STATE="$perf_state" "$here/perf-server.sh" stop >/dev/null 2>&1 || true
+        rm -rf "$work"
+    fi
     exit "$code"
 }
 trap cleanup EXIT
@@ -181,4 +199,7 @@ if [[ -n "$(adb_dev logcat -d -b crash 2>/dev/null | grep -F "Process: $ui_packa
     exit 1
 fi
 printf 'release_signin=1 covers_served=%s seconds=%s\n' "$covers" "$((SECONDS - started))"
+if [[ -n "$handoff" ]]; then
+    printf 'release_handoff=%s port=%s\n' "$work" "$port"
+fi
 (( tls_ok == 1 )) || { note "signed in, but the platform trust store refused $tls_host (phase 1)"; exit 1; }

@@ -36,6 +36,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import uniffi.nz_ffi.PlayerCommand
 
 /**
@@ -64,6 +65,11 @@ import uniffi.nz_ffi.PlayerCommand
  * this is the sheet that moved, not a state variable that says so.
  */
 @RunWith(RobolectricTestRunner::class)
+// NATIVE depuis JF : le lecteur peint désormais un champ de pixels (le fond
+// flouté, `PlayerBackdrop`), et les bitmaps de Robolectric LEGACY n'ont pas de
+// natif (`Bitmap.createBitmap` rend null). Le geste ne lit aucun pixel ; seul
+// le rendu a besoin du vrai backend, comme les goldens.
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-xhdpi")
 class PlayerSheetGestureTest {
 

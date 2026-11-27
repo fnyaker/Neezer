@@ -80,8 +80,13 @@ SCREENS = (
 # because an unbounded `[a-z][A-Z][a-z]` fires on "Yo**uTu**be" and "Osm**And**"
 # — brands the rubric lets the judge justify, not identifiers (measured on the
 # first real artifact, 2026-11-26).
+# `proxy disabled` is the server's own English body, shown verbatim by the
+# player's status line until the head a176c2ed (`Deezer proxy disabled (503)`,
+# `08-lecteur.xml`, run 45953439457): `nz-audio`'s `SourceError` now names the
+# cause in French by status alone, so its return is a regression, not a wording.
 BANNED = re.compile(
-    r"TODO|FIXME|lorem|stub|null|Exception|Traceback|\bMB[0-9]+\b|snake_case|\b[a-z]{2,}[A-Z][a-z]{2,}\b"
+    r"TODO|FIXME|lorem|stub|null|Exception|Traceback|\bMB[0-9]+\b|snake_case"
+    r"|proxy disabled|\b[a-z]{2,}[A-Z][a-z]{2,}\b"
 )
 
 BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
