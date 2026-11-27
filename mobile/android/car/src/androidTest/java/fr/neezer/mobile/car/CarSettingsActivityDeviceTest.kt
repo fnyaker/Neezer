@@ -10,6 +10,8 @@ import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -117,6 +119,34 @@ class CarSettingsActivityDeviceTest {
                 assertTrue("aucune barre d'opacité", bar != null)
                 bar!!.progress = 57
                 assertEquals("l'opacité n'a pas suivi", 0.57f, prefs.overlayAlpha, 0.001f)
+            }
+        }
+    }
+
+
+    @Test
+    fun theContentStartsBelowTheStatusBarInset() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val intent = Intent(context, CarSettingsActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        ActivityScenario.launch<CarSettingsActivity>(intent).use { scenario ->
+            scenario.onActivity { activity ->
+                val decor = activity.window.decorView
+                val insets = ViewCompat.getRootWindowInsets(decor)
+                val statusBarTop = insets?.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+                )?.top ?: 0
+                // The first child of the content LinearLayout is the first card/row.
+                val content = activity::class.java.getDeclaredField("content")
+                    .apply { isAccessible = true }.get(activity) as LinearLayout
+                val firstChild = content.getChildAt(0)
+                val loc = IntArray(2)
+                firstChild.getLocationInWindow(loc)
+                assertTrue(
+                    "first child top ${loc[1]} < status bar inset $statusBarTop",
+                    loc[1] >= statusBarTop,
+                )
             }
         }
     }
