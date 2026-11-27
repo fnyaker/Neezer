@@ -53,9 +53,15 @@ class LoudnessRepairTest(unittest.TestCase):
         if not shutil.which("ffmpeg"):
             self.skipTest("ffmpeg")
 
-    def _archived(self, name="tone.flac", source="sine=frequency=440:duration=3,volume=8"):
-        """A Track row on real audio: archived, unanalysed gain, no Deezer."""
-        path = _tone(os.path.join(self.archive, name), source=source)
+    def _archived(self, name="tone.flac", source="sine=frequency=440:duration=3,volume=8",
+                  audio=True):
+        """A Track row on real audio: archived, unanalysed gain, no Deezer.
+
+        ``audio=False`` gives a row that has the shape without paying ffmpeg,
+        for the tests that never measure anything (`plan`)."""
+        path = os.path.join(self.archive, name)
+        if audio:
+            _tone(path, source=source)
         with self.app.app_context():
             root = library.get_root_folder(self.archive)
             row = library.upsert_track(raw_track(77, "Up"), root, "FLAC")
@@ -130,7 +136,7 @@ class LoudnessRepairTest(unittest.TestCase):
     def test_the_plan_counts_a_lost_loudness_so_the_nightly_window_runs(self):
         from neezer.webui import analysis as wa
 
-        track_id = self._archived()
+        track_id = self._archived(audio=False)
         self._lost_row(track_id)
         with self.app.app_context():
             p = wa.plan()
