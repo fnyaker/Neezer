@@ -268,11 +268,15 @@ player_evidence() {
         return 0
     fi
 
-    # The mid-gesture capture: the sheet's own header bounds give the finger's
-    # column and start; the swipe lasts 3 s, so a shot at ~1 200 ms lands
-    # mid-drag BY CONSTRUCTION. The `sleep` is inside a gesture the device is
-    # performing, and the coordinates are the control's own — the two rules the
-    # plan forbids elsewhere do not apply here.
+    # The mid-gesture capture: the header's bounds give the finger's ROW; the
+    # finger starts at the middle of the screen (a press on a button is not a
+    # drag) and goes DOWN — the only direction the sheet accepts at rest
+    # (NowPlaying.kt: "an upward one has nowhere to go"). The swipe lasts 3 s, so
+    # a shot at 1.6 s lands mid-drag BY CONSTRUCTION: 53 % of the 1 440 px path
+    # is 43 % of the 676 dp sheet, above its 28 % dismissal threshold, and the
+    # release finishes the run. The `sleep` is inside a gesture the device is
+    # performing, and the row is the control's own — the two rules the plan
+    # forbids elsewhere do not apply here.
     bounds="$(grep -F 'Réduire le lecteur' "$evidence/screens/08-lecteur.xml" | head -1 |
         sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p')"
     if [[ -z "$bounds" ]]; then
@@ -281,20 +285,30 @@ player_evidence() {
     fi
     read -r x1 y1 x2 y2 <<<"$bounds"
     read -r width height < <(ui_screen)
-    x=$(((x1 + x2) / 2))
+    x=$((width / 2))
     y0=$(((y1 + y2) / 2))
-    y_end=$((y0 - height * 4 / 10))
+    y_end=$((y0 + height * 6 / 10))
     adb_dev shell input swipe "$x" "$y0" "$x" "$y_end" 3000 >/dev/null &
     swipe=$!
-    sleep 1.2
+    sleep 1.6
     adb_dev exec-out screencap -p >"$evidence/screens/11-lecteur-glisse.png"
-    dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
-    printf 'shot=11-lecteur-glisse\n'
+    printf 'shot=11-lecteur-glisse direction=bas\n'
     wait "$swipe" 2>/dev/null || true
-    sleep 4
+    # The tree is taken AFTER the gesture on purpose: uiautomator waits for
+    # inactivity, so during a drag it returns the last stable state — which is
+    # how 11 came out identical to 09. After the release the sheet is closed and
+    # the tree is the home's; it differs from 09, exactly what C4 asks ("the
+    # gesture had an effect").
+    sleep 1
+    dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
+    if cmp -s "$evidence/screens/09-lecteur-suivant.xml" \
+              "$evidence/screens/11-lecteur-glisse.xml"; then
+        verdict 0
+        fail_screen "le glissement du lecteur n'a rien fait (11 = 09)"
+    fi
     if [[ -z "$(app_pid)" ]]; then
         verdict 0
-        fail_screen "the app's process is gone after the mid-gesture drag"
+        fail_screen "the app's process is gone after the downward drag"
     fi
 }
 
@@ -302,9 +316,19 @@ player_evidence() {
 # `release-signin.sh` prints its own verdicts; they are kept in a file as well so
 # the cover count below is read from the run and not from a grep of the console.
 step "release journey: sign in first (release-signin.sh)"
+# Le banc vit aussi longtemps que le parcours : sans lui, la bibliothèque peint
+# « Hors ligne » et la pochette du titre suivant n'arrive jamais (mesuré : 03 et
+# 08/09 des runs 45818870854 et 45878251375). `release-signin.sh` arrête le sien
+# à la sortie ; ici on lui donne `$walk` en main et c'est ce trap qui le rend.
+walk="$(mktemp -d)"
+handoff_cleanup() {
+    NEEZER_PERF_STATE="$walk/perf" "$here/perf-server.sh" stop >/dev/null 2>&1 || true
+    rm -rf "$walk"
+}
 signin_log="$(mktemp)"
-trap 'rm -f "$signin_log"; evidence_finish' EXIT
-if ! "$here/release-signin.sh" --serial "$serial" 2>&1 | tee "$signin_log"; then
+# UN seul trap : bash remplace le précédent, et `rm -f "$signin_log"` avec lui.
+trap 'handoff_cleanup; rm -f "$signin_log"; evidence_finish' EXIT
+if ! "$here/release-signin.sh" --serial "$serial" --handoff "$walk" 2>&1 | tee "$signin_log"; then
     verdict 0
     note "the release sign-in failed; the journey starts from a signed-in home"
     exit 1
@@ -339,14 +363,10 @@ check_app "the Accueil door"
 shot 01-accueil
 
 # The player's four captures happen HERE, on the home the sign-in has just
-# painted, and not at the end of the walk: `release-signin.sh` owns its bench
-# server and STOPS it on exit (its own `cleanup`), so every step after it runs
-# offline — the tabs are shell and still open, but a screen that re-fetches its
-# data paints empty (measured: at the end of the walk the home reads « Ta
-# bibliothèque est vide pour l'instant », no « Lire … » card to tap, run
-# 45798045049). The home painted by the sign-in is the one state with its cards,
-# so the player is opened from it; the sheet is dismissed before the walk
-# continues.
+# painted: the bench now survives the sign-in (`--handoff`, above), but the home
+# is still the one state with its « Lire … » cards already loaded and no tap in
+# between, so the player is opened from it; the sheet is dismissed before the
+# walk continues.
 if [[ -n "$evidence" ]]; then
     player_evidence
     # Back on the home whatever the player did: the drag closes the sheet, a
@@ -368,6 +388,12 @@ open_door "Rechercher" "Rechercher" "Recherche Neezer"
 shot 02-rechercher
 open_door "Bibliothèque" "Biblio" "Bibliothèque Neezer"
 shot 03-bibliotheque
+# Un échec nomme sa cause (règle 2) : « Hors ligne » alors que le banc tourne est
+# un défaut du parcours, pas une réponse de la personne.
+if ui_text | grep -qF "Hors ligne"; then
+    verdict 0
+    fail_screen "la bibliothèque est hors ligne alors que le banc tourne"
+fi
 open_door "Podcasts" "Podcasts" "Podcasts Neezer"
 shot 04-podcasts
 open_door "Accueil (retour)" "Accueil" "Accueil Neezer"
