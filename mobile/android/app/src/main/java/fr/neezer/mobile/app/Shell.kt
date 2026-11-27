@@ -27,6 +27,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination
@@ -239,10 +240,18 @@ fun TabPager(
  * (modèles, `remember`, défilement) survit. C'est ce qui permet au pager des
  * onglets de vivre sous le `NavHost` sans se montrer derrière une fiche ou
  * Réglages (lot SB2).
+ *
+ * **Cachée, la couche sort aussi de l'arbre d'accessibilité** : `clearAndSetSemantics`
+ * retire tout son sous-arbre de la sémantique, donc TalkBack n'annonce pas un
+ * écran qu'on ne voit pas, et un test qui cherche « la première zone qui
+ * défile » ne tombe pas sur le pager des onglets caché derrière Réglages
+ * (mesuré : `ShellSmokeTest.settingsShowsTheRustVersion` et `CrashCardTest`
+ * échouaient sans ça, sur l'émulateur).
  */
 @Composable
 fun KeepComposed(shown: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Layout(content = content, modifier = modifier.fillMaxSize()) { measurables, constraints ->
+    val semantics = if (shown) Modifier else Modifier.clearAndSetSemantics { }
+    Layout(content = content, modifier = modifier.fillMaxSize().then(semantics)) { measurables, constraints ->
         val placeables = if (shown) measurables.map { it.measure(constraints) } else emptyList()
         layout(constraints.maxWidth, constraints.maxHeight) {
             placeables.forEach { it.place(0, 0) }

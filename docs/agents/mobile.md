@@ -7733,6 +7733,14 @@ recomposées et rechargées. `beyondViewportPageCount` ne pouvait rien contre ç
 3. **`assertIsNotDisplayed` voit une couche non placée.** C'est la garde du point précédent (une fiche
    poussée cache les onglets sans les démonter), et `performScrollToNode` doit viser la page par un
    `hasAnyAncestor(hasTestTag("page0"))` : les quatre pages composées portent le même texte.
+4. **Une couche composée mais cachée reste dans l'arbre d'ACCESSIBILITÉ, et le pager est une zone
+   qui défile.** Sur l'émulateur, `ShellSmokeTest.settingsShowsTheRustVersion` et `CrashCardTest`
+   échouaient (« no node … contains 'Assistance' ») parce que leur `onAllNodes(hasScrollAction())
+   .onFirst()` tombait sur le pager des onglets caché derrière Réglages : le premier nœud qui défile
+   n'était plus la liste des réglages. `KeepComposed` pose donc `clearAndSetSemantics { }` quand
+   `shown` est faux — TalkBack n'annonce pas un écran qu'on ne voit pas, et un test qui cherche
+   « la première zone qui défile » trouve celle qu'on regarde. (La JVM ne le voit pas : les deux cas
+   ne tournent que sur l'émulateur.)
 
 **Mesuré (JVM, Robolectric `w360dp-h800dp-xhdpi`, JDK 17, Gradle 8.14.7).**
 
