@@ -283,31 +283,42 @@ player_evidence() {
         printf 'player=unavailable cause=no header bounds in 08-lecteur.xml\n'
         return 0
     fi
-    # The queue's veil keeps the POINTER for the length of its fade (NzSheet: a
-    # full-screen clickable Box inside an AnimatedVisibility, a SIBLING of the
-    # sheet): a DOWN landing on it never reaches the player's gesture, so the
-    # sheet does not move at all. `await_text "Réduire le lecteur"` is true the
-    # whole time — the player is UNDER the queue — so the previous head started
-    # the drag on the veil: measured on run 45928645086, where 11 came out
-    # byte-identical to 09 in both directions. Wait for the queue's own title to
-    # leave the tree (the end of the exit animation), then drag.
-    queue_gone=0
-    for _ in $(seq 1 100); do
-        if ! ui_text | grep -qF "File d'attente"; then queue_gone=1; break; fi
-        sleep 0.1
-    done
-    (( queue_gone == 1 )) || printf 'player=the queue sheet is still in the tree\n'
     read -r x1 y1 x2 y2 <<<"$bounds"
     read -r width height < <(ui_screen)
     x=$((width / 2))
     y0=$(((y1 + y2) / 2))
     y_end=$((y0 + height * 6 / 10))
-    adb_dev shell input swipe "$x" "$y0" "$x" "$y_end" 3000 >/dev/null &
-    swipe=$!
-    sleep 1.6
-    adb_dev exec-out screencap -p >"$evidence/screens/11-lecteur-glisse.png"
-    printf 'shot=11-lecteur-glisse direction=bas\n'
-    wait "$swipe" 2>/dev/null || true
+    # DIAGNOSTIC (temporary): the capture is taken ON THE DEVICE during the swipe
+    # (one shell, so `input swipe` and `screencap` start without an adb round
+    # trip), and if the sheet still did not move we replay the same direction
+    # with a fast swipe, to tell "the gesture is dead" from "a long injection is
+    # lost". Both outcomes are printed, then the guard fails as before.
+    adb_dev shell "rm -f /sdcard/11-drag.png; input swipe $x $y0 $x $y_end 3000 >/dev/null 2>&1 & sleep 1.6; screencap -p /sdcard/11-drag.png" >/dev/null 2>&1 || true
+    adb_dev pull /sdcard/11-drag.png "$evidence/screens/11-lecteur-glisse.png" >/dev/null 2>&1 || true
+    printf 'shot=11-lecteur-glisse direction=bas source=device\n'
+    if cmp -s "$evidence/screens/09-lecteur-suivant.png" \
+              "$evidence/screens/11-lecteur-glisse.png"; then
+        printf 'diag png=identical_to_09\n'
+    else
+        printf 'diag png=differs_from_09\n'
+    fi
+    sleep 1
+    dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
+    if cmp -s "$evidence/screens/09-lecteur-suivant.xml" \
+              "$evidence/screens/11-lecteur-glisse.xml"; then
+        printf 'diag long_swipe=noeffect\n'
+        adb_dev shell input swipe "$x" "$y0" "$x" "$((y0 + height * 4 / 10))" 300 >/dev/null 2>&1 || true
+        sleep 2
+        if dump_ui | grep -qF "Réduire le lecteur"; then
+            printf 'diag fast_swipe=noeffect tap=next\n'
+            adb_dev shell input tap "$x" "$y0" >/dev/null 2>&1 || true
+            sleep 2
+            dump_ui | grep -qF "Réduire le lecteur" && printf 'diag tap=stays\n' || printf 'diag tap=left\n'
+        else
+            printf 'diag fast_swipe=closed\n'
+        fi
+        dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
+    fi
     # The tree is taken AFTER the gesture on purpose: uiautomator waits for
     # inactivity, so during a drag it returns the last stable state — which is
     # how 11 came out identical to 09. After the release the sheet is closed and
