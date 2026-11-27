@@ -1018,6 +1018,8 @@ the same `commit_id` is not re-posted). It never runs an emulator, builds nothin
 **Nothing here replaces a test.** The judge is the check the owner asked for in words rather than
 in assertions; a defect it finds gets its own lot, and T1 grows a step for that screen.
 
+- No help lines (owner, 2026-11-27): a hint sentence under a title or setting is « texte inutile » (C5); the SPA keeping one is not a C6 gap. A screen that needs one is redesigned instead.
+
 **Le bouton de fermeture du lecteur se mesure sur sa ZONE TACTILE.** 48 × 48 dp à
 `[53,133]-[179,259]`, haut à 50,7 dp ; l'icône de 24 dp est à 62,9 dp (`08-lecteur.xml`, run
 45839501056). `precheck` lit la boîte cliquable, donc `targets 08-lecteur below_48dp=0` ; on ne
