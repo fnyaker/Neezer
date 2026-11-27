@@ -1,83 +1,99 @@
 package fr.neezer.mobile.feature.nowplaying
 
-import android.os.Build
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.dp
-import fr.neezer.mobile.designsystem.CoverImage
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
+import fr.neezer.mobile.designsystem.LocalNzCoverLoader
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.designsystem.nzBlurBitmap
+import fr.neezer.mobile.designsystem.nzGrooveBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/** The 96 px field the backdrop blurs, and the tag that says it is painted. */
+internal const val PLAYER_BACKDROP_TAG = "player-backdrop"
 
 /**
- * The sleeve under the player: a blurred, scaled copy of the current cover, dimmed
- * by the gradient below it (R3, the SPA's liquid-glass ground).
+ * La pochette du lecteur, floutée : ce que le SPA appelle son fond « liquid
+ * glass » (`MobileNowPlaying.svelte:1415`, `backdrop.js`).
  *
- * **Why a 120 dp copy and not the full-screen one.** `Modifier.blur` renders its
- * content into a separate graphics layer, so its cost is the layer's pixel AREA
- * (S6). The full-screen layer that shipped in MB11 cost the player's first frame
- * p95 **775 ms** on the emulator's SwiftShader (MQ2, 2026-11-24) and was removed.
- * A 120 dp square is ~1/25th of that area, and it is scaled up to cover the screen
- * (`graphicsLayer { scale }`): the result is the same soft field for a texture
- * pipeline that is compiled once. Below API 31 `blur` is ignored (S6), so the
- * fallback is exactly the old picture: the sleeve at 900 dp.
+ * **Une seule voie, sur tous les niveaux d'API.** La version précédente
+ * composait `Modifier.blur` sur une vignette de 120 dp : le modificateur est
+ * **ignoré sous Android 12**
+ * (<https://developer.android.com/develop/ui/compose/graphics/images/customize#blur>),
+ * donc l'app shipped une pochette NETTE à 900 dp sur tout appareil < 12 — le
+ * juge la compte comme « pochette nette » et refuse (C3). Et le `RenderEffect`
+ * plein écran coûtait la première image du lecteur **p95 775 ms** sur le
+ * SwiftShader de l'émulateur (MQ2). Ici, on décode 96 × 96 **une fois par
+ * titre**, on floute ces pixels en Kotlin ([nzBlurBitmap], hors du fil
+ * principal), et on peint le champ : même résultat partout, quelques
+ * millisecondes, aucun programme GPU compilé dans la trame.
  *
- * **`CoverImage(url, 120.dp)` costs one extra decode and ZERO network.**
- * `Core::cover_path` is keyed by the URL only (`nz-core/src/core/covers.rs`), so
- * the file is a cache hit; the size only picks the Coil entry. Do not "optimise"
- * this into a second fetch.
+ * **Sans pochette, la rainure du titre** ([nzGrooveBitmap]) : c'est le cas où
+ * `cover == null` (le titre suivant n'est pas encore là, le serveur est
+ * injoignable) — l'ancien code ne peignait RIEN et laissait le fond `#0C0C0B`
+ * à l'octet (mesuré sur 09/11 de #447).
  *
- * The cover is drawn with `RectangleShape`: the image is scaled up by 3–8×, and
- * the design system's rounded sleeve corners would scale with it into four
- * visible notches on a backdrop that must be seamless.
+ * **Le voile.** `bg` de 0,58 à 0,92 : sur Encre (`#0C0C0B`), le 0,72→0,94
+ * d'avant ne laissait que 28 % de la pochette — un champ `(38,44,49)` que le
+ * juge ne peut pas nommer. À 45 %, le champ vaut `(44,57,70)` : luminance 56,
+ * du texte blanc à 5,9:1, et la teinte de la pochette (chroma 26). La
+ * saturation (1,6, contre 1,25 dans le SPA parce que le voile est plus sombre)
+ * porte la lisibilité SANS toucher à la luminance, donc sans toucher au
+ * contraste des textes. Pas de normalisation de niveau (`levelFactor` du SPA) :
+ * sur un voile sombre elle ne fait que baisser la pochette claire.
  */
 @Composable
 internal fun PlayerBackdrop(cover: String?, seed: String?) {
-    if (cover == null) return
-    val blur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (blur) {
-            val scale = (maxOf(maxWidth, maxHeight) / 120.dp).coerceAtLeast(1f)
-            Box(
-                Modifier
-                    .size(120.dp)
-                    .align(Alignment.Center)
-                    // Scale OUTSIDE the blur: `Modifier.blur` renders into a layer
-                    // bounded by the node's 120 dp size and clips to it, so a scale
-                    // applied inside that layer is cropped back to 120 dp (measured
-                    // on the P1 capture: a small dark rectangle behind the title
-                    // instead of a full-screen field). The outer layer has no clip.
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                    }
-                    .blur(radius = 12.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle),
-            ) {
-                CoverImage(url = cover, sizeDp = 120.dp, seed = seed, shape = RectangleShape)
-            }
-        } else {
-            CoverImage(url = cover, sizeDp = 900.dp, seed = seed)
+    val loader = LocalNzCoverLoader.current
+    val field by produceState<ImageBitmap?>(null, cover, seed) {
+        value = withContext(Dispatchers.Default) {
+            val source = if (cover != null) loader?.bitmap(cover, BACKDROP_PX) else null
+            nzBlurBitmap(source ?: nzGrooveBitmap(seed, BACKDROP_PX))
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
+        field?.let { bitmap ->
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                colorFilter = ColorFilter.colorMatrix(
+                    ColorMatrix().apply { setToSaturation(BACKDROP_SATURATION) },
+                ),
+                modifier = Modifier
+                    .fillMaxSize()
+                    // What a bench waits on: "the field is painted", an event,
+                    // never a sleep (rule: tests wait on events, not clocks).
+                    .testTag(PLAYER_BACKDROP_TAG),
+            )
         }
         Box(
             Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        listOf(
-                            Sillon.colors.bg.copy(alpha = 0.72f),
-                            Sillon.colors.bg.copy(alpha = 0.94f),
-                        ),
+                        0f to Sillon.colors.bg.copy(alpha = 0.58f),
+                        0.25f to Sillon.colors.bg.copy(alpha = 0.50f),
+                        1f to Sillon.colors.bg.copy(alpha = 0.92f),
                     ),
                 ),
         )
     }
 }
+
+/** 96 × 96 = 9 216 px : le flou coûte < 2 ms, décodé une fois par titre. */
+private const val BACKDROP_PX = 96
+/** Plus haut que le SPA (1,25) : le voile d'Encre est plus sombre. */
+private const val BACKDROP_SATURATION = 1.6f

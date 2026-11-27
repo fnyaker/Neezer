@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.onAllNodesWithTag
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
@@ -97,6 +98,22 @@ class NowPlayingGoldenTest {
         rule.composeRule.mainClock.advanceTimeBy(1_200)
         shadowOf(android.os.Looper.getMainLooper()).idle()
         rule.composeRule.waitForIdle()
+        // JF : le fond est calculé hors du fil principal (flou en Kotlin). La
+        // capture attend l'ÉVÉNEMENT « le champ est peint », jamais une horloge ;
+        // la boucle est bornée et `waitUntil` seul ne voit pas un travail fini
+        // sur `Dispatchers.Default`.
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            rule.composeRule.waitForIdle()
+            if (
+                rule.composeRule.onAllNodesWithTag(PLAYER_BACKDROP_TAG)
+                    .fetchSemanticsNodes().isNotEmpty()
+            ) {
+                return
+            }
+            Thread.sleep(10)
+        }
+        error("le champ du lecteur n'a jamais été peint en 10 s")
     }
 
     private fun model(): NowPlayingModel {

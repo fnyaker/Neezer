@@ -6,6 +6,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.LocalNzCoverLoader
@@ -95,10 +96,18 @@ class PlayerCoverReuseTest {
         val requests = mutableListOf<Pair<String, Int>>()
         val keys: Set<Pair<String, Int>> get() = requests.toSet()
 
+        /** Le fond du lecteur demande des PIXELS (JF) : un décodage par pochette. */
+        val decodes = mutableListOf<Pair<String, Int>>()
+
         @Composable
         override fun Image(url: String, sizePx: Int) {
             requests += url to sizePx
             LaunchedEffect(url, sizePx) { service.coverPath(url, sizePx) }
+        }
+
+        override suspend fun bitmap(url: String, sizePx: Int): ImageBitmap? {
+            decodes += url to sizePx
+            return null
         }
     }
 
@@ -135,10 +144,11 @@ class PlayerCoverReuseTest {
     }
 
     /**
-     * The size the strip draws at: the one most sleeves share. P1's player draws
-     * the current cover a SECOND time as a small backdrop copy (120 dp, or 900 dp
-     * under API 31), so "the biggest size" would name the backdrop on the pre-P1
-     * tree and the open assertion would fail before the core seam is ever read.
+     * The size the strip draws at: the one most sleeves share. The player also
+     * asks the backdrop for a 96 px copy of the current cover (JF's blurred
+     * field, on every API now), so "the biggest size" would name the backdrop on
+     * a tree where the strip is smaller — the backdrop is one ask per track, the
+     * strip three at open.
      */
     private fun Recorder.stageSize(): Int =
         keys.groupingBy { it.second }.eachCount().entries
@@ -262,6 +272,23 @@ class PlayerCoverReuseTest {
             "MEASURE t4 cover asks: " +
                 coreAsks.entries.joinToString(" ") { "${it.key}=${it.value}" } +
                 " (stage ${stagePx}px, ${service.coversAsked.size - coreAsks.values.sum()} backdrop asks)",
+        )
+        // Le fond (JF) : un décodage 96 px par pochette DISTINCTE, et pas un de
+        // plus quand un snapshot se ré-émet sans changement de titre.
+        val backdropAsks = recorder.decodes.filter { it.second != stagePx }
+        println(
+            "MEASURE jf backdrop decodes: " +
+                backdropAsks.groupingBy { it }.eachCount().entries
+                    .joinToString(" ") { "${it.key.first}=${it.key.second}px×${it.value}" },
+        )
+        assertTrue(
+            "le fond ne décode qu'à 96 px : ${backdropAsks.map { it.second }.distinct()}",
+            backdropAsks.all { it.second == 96 },
+        )
+        assertEquals(
+            "un seul décodage par pochette distincte pour le fond : $backdropAsks",
+            backdropAsks.toSet().size,
+            backdropAsks.size,
         )
         assertEquals(
             "every sleeve the strip showed is fetched from the core exactly once",

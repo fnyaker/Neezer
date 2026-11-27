@@ -16,6 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /**
  * **L'en-tête du lecteur est à 2 dp sous l'inset** (SB3, `spec-mobile-shell-bugs.md`
@@ -28,6 +29,9 @@ import org.robolectric.annotation.Config
  * régression à `NzSpacing.xs` le fait échouer.
  */
 @RunWith(RobolectricTestRunner::class)
+// NATIVE depuis JF : le lecteur peint un champ de pixels, et les bitmaps de
+// Robolectric LEGACY n'ont pas de natif (comme les goldens).
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-xhdpi")
 class PlayerInsetsTest {
 
