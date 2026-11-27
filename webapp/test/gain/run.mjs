@@ -25,7 +25,7 @@
 // Measured (medium level, gains -10 and -20 dB): 0.676 at the first play,
 // 2.138 after the skip, exactly 10^(-3.4/20) and 10^(6.6/20); with
 // normalization off, every gain node stays at 1.
-import { loadPlaywright, startServer, silence, login, checker, installSessionPrefix } from "../harness.mjs";
+import { loadPlaywright, startServer, silence, login, checker, installSessionPrefix, deezerHost, pathOn } from "../harness.mjs";
 
 const { chromium } = await loadPlaywright();
 const { base, stop } = await startServer();
@@ -62,8 +62,8 @@ const session = (...queue) => ({
 
 async function play(level, queue) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await ctx.route(/dzcdn\.net|api\.deezer\.com/, (r) => r.abort());
-  await ctx.route(/\/api\/stream\//, (r) =>
+  await ctx.route(deezerHost, (r) => r.abort());
+  await ctx.route(pathOn("/api/stream/"), (r) =>
     r.fulfill({ status: 200, body: wav, headers: { "Content-Type": "audio/wav", "Accept-Ranges": "none" } })
   );
   // Every GainNode the graph creates, so the normalization can be read off the
