@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import fr.neezer.mobile.bridge.LoadWhenShown
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.EmptyState
@@ -40,7 +41,7 @@ import uniffi.nz_ffi.Screens
  *   same screen, as in the SPA.
  */
 @Composable
-fun LibraryEntry(tab: String?, nav: NzNavigator, modifier: Modifier = Modifier) {
+fun LibraryEntry(tab: String?, nav: NzNavigator, visible: Boolean = true, modifier: Modifier = Modifier) {
     val core = NzBridge.core
     val screens: Screens? = remember(core) { core?.screens() }
     val service = remember(screens) { screens?.let(::NzLibraryService) }
@@ -63,7 +64,7 @@ fun LibraryEntry(tab: String?, nav: NzNavigator, modifier: Modifier = Modifier) 
     }
 
     val leaf = remember(tab) { LibraryLeaf.of(tab) }
-    LaunchedEffect(model, leaf) { model.load(leaf) }
+    LoadWhenShown(visible, leaf) { model.load(leaf) }
 
     val state by model.state.collectAsState()
     val historyState by historyModel.state.collectAsState()

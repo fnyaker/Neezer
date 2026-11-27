@@ -503,9 +503,12 @@ the platform decoder.
 - Single `MainActivity`, Navigation Compose with type-safe routes, a phone shell (**no top bar**;
   a bottom bar of five items — Accueil / Rechercher / Biblio / Podcasts / Réglages — over which the
   mini-player sits, the full-screen player as a sheet) and a tablet/landscape shell (rail + reading
-  columns, as `DesktopNowPlaying`). The four tab roots live in ONE `HorizontalPager`, so a tab is
-  reachable by tap AND by a horizontal drag; a detail screen gets a single 48 dp `DetailBackRow`
-  instead of a banner. Back goes to the SCREEN, not the route (webapp.md's rule).
+  columns, as `DesktopNowPlaying`). The four tab roots live in ONE `HorizontalPager`, mounted ONCE
+  for the app in `TabLayer` (`app/Shell.kt`) **under** the `NavHost` whose four tab routes draw
+  nothing: a tab is reachable by tap AND by a horizontal drag, and a tab that comes back is never
+  rebuilt (SB2 — its model, its scroll and its data survive, see the SB2 lot). A detail screen gets
+  a single 48 dp `DetailBackRow` instead of a banner. Back goes to the SCREEN, not the route
+  (webapp.md's rule).
 - MB0 wrote `app/.../NavGraph.kt` ONCE with every route of the inventory, each calling an entry
   composable that already exists as a stub in its feature module (`feature/<area>/.../<Area>Entry.kt`).
   **A feature lot fills its module and never edits `NavGraph.kt`**; the SHELL is the exception, and it
@@ -7682,6 +7685,68 @@ commandes du haut se poser 2 dp sous la barre d'état.
 contextuel d'une ligne et les toasts (ils restent dans la zone de contenu, sous la barre) ; le rendu
 interne du lecteur ; ses colonnes sur large (elles couvrent le rail, c'est la conséquence voulue,
 elles ne changent pas de largeur).
+
+### SB2 — Un onglet revenu montre son dernier état (delivered 2026-11-27)
+
+**Le besoin.** Quitter un onglet puis y revenir le reconstruisait : squelette, requêtes, position de
+défilement perdue. La personne veut retrouver l'écran qu'elle a laissé, sans une requête de plus.
+
+**La cause, mesurée.** `NavGraph()` montait **une `TabPager` par route d'onglet**
+(`composable<Routes.Home> { TabPager(…) }`, idem Search, Library, Podcasts). Le tap d'onglet ouvrait
+une nouvelle entrée de navigation, donc une nouvelle instance de pager : les quatre pages étaient
+recomposées et rechargées. `beyondViewportPageCount` ne pouvait rien contre ça.
+
+**Ce qui a changé.**
+
+- `app/Shell.kt` — `KeepComposed(shown)` (**nouveau**) : `Layout` qui garde `content` composé mais ne
+  le mesure ni ne le place quand `shown` est faux. `TabLayer` (**nouveau**) = les quatre racines
+  montées UNE fois, `TabPager` réglé sur `beyondViewportPageCount = Tab.entries.size - 1` (les quatre
+  pages restent composées), et `visible = shown && pager.currentPage == index` passé à chaque page.
+- `app/NavGraph.kt` — le graphe perd `pager` : les quatre routes d'onglet dessinent `TabRouteSlot()`
+  (rien) et disent seulement OÙ l'on est ; `NzApp` monte `TabLayer(shown = selectedIndexOf(destination)
+  in Tab.entries.indices, …)` AVANT `NavGraph`. Les arguments de route (`Search.q`, `Library.tab`)
+  sont **retenus** dans `NzApp` : une route d'onglet ouverte par la barre arrive sans argument, et
+  l'écraser aurait fait recharger au retour.
+- `bridge/.../LoadWhenShown.kt` (**nouveau**) — `LoadWhenShown(visible, key) { load() }` : charge à la
+  PREMIÈRE visibilité puis à chaque changement de clé tant que la surface est visible, jamais parce
+  qu'elle redevient visible. C'est ce qui empêche quatre lectures sur la voie User au lancement une
+  fois les quatre pages composées (règle 1).
+- `feature/{home,search,library,podcasts}` — les quatre entrées prennent `visible: Boolean = true` et
+  remplacent leur `LaunchedEffect` de chargement par `LoadWhenShown` ; `SearchEntry` remplace son
+  `DisposableEffect` par `LaunchedEffect(visible) { if (!visible) model.leave() }` (la page n'est plus
+  disposée : « quitter la recherche » est « la page cesse d'être visible »).
+- `app/src/test/.../ShellTabsTest.kt` — `theTabThatComesBackIsTheSameOne` monte l'ARRANGEMENT RÉEL
+  (vraie `TabLayer`, vraie `TabPagerSync`, `NavHost` minimal, une fiche `Genres` au-dessus) et compte
+  compositions et charges ; `aScrolledTabKeepsItsOffset` garde le défilement d'un onglet sur un
+  aller-retour par la barre. `bridge/src/test/.../LoadWhenShownTest.kt` (**nouveau**) : les quatre cas
+  de la porte.
+
+**Ce que le lot a appris.**
+
+1. **Le pager doit vivre HORS du `NavHost` : un paramètre de plus ne suffit jamais.** La première
+   tentative ne changeait que `beyondViewportPageCount` et mesurait `builds=[2,2,2,2]` après un seul
+   changement d'onglet — c'est le montage par route qui reconstruit, pas le pager. La leçon est dans
+   la structure, pas dans un réglage.
+2. **Une couche composée mais non placée ne charge pas toute seule.** `KeepComposed` ne mesure rien
+   quand `shown` est faux, mais ses effets s'exécutent — d'où la porte `LoadWhenShown` pour les
+   chargements ET pour la visibilité passée aux quatre entrées.
+3. **`assertIsNotDisplayed` voit une couche non placée.** C'est la garde du point précédent (une fiche
+   poussée cache les onglets sans les démonter), et `performScrollToNode` doit viser la page par un
+   `hasAnyAncestor(hasTestTag("page0"))` : les quatre pages composées portent le même texte.
+
+**Mesuré (JVM, Robolectric `w360dp-h800dp-xhdpi`, JDK 17, Gradle 8.14.7).**
+
+- Chronologie du même scénario (lancement → page 1 → retour page 0), comptée par le banc :
+  **avant** `builds = {0=3, 1=2}`, `loads = {0=3, 1=2}` (la page 0 reconstruite et rechargée TROIS
+  fois pour un aller-retour) ; **après** `builds = {0=1, 1=1}`, `loads = {0=1, 1=1}`.
+- Au lancement : **avant** une page composée (`builds = {0=1}`), **après** quatre pages composées
+  (`builds = {0=1, 1=1, 2=1, 3=1}`) et **une** seule chargée (`loads = {0=1}`).
+- `LoadWhenShownTest` : 4 cas verts (invisible 0 charge ; `false → true` 1 ; `true → false → true`
+  toujours 1 ; changement de clé 1 de plus, `null` comptant comme une clé).
+- Aucun golden régénéré : le rendu d'un écran ne change pas (`-Proborazzi.test.verify=true` vert).
+
+**Hors portée.** Le cache et les états `ScreenState` ; les écrans hors pager (fiches, listes poussées,
+qui restent disposés au départ) ; la vitesse du pager, ses ressorts, `PagerDefaults`.
 
 ### S2 — Les écrans alignés : la marge de page, le rythme des sections, la place sous la barre (delivered 2026-11-25)
 

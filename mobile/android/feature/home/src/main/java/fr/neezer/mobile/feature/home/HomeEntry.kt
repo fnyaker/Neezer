@@ -16,6 +16,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import fr.neezer.mobile.bridge.LoadWhenShown
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.EmptyState
@@ -38,7 +39,7 @@ import uniffi.nz_ffi.Screens
  * - « Reprendre » opens the player, « Explorer » opens the search.
  */
 @Composable
-fun HomeEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
+fun HomeEntry(nav: NzNavigator, visible: Boolean = true, modifier: Modifier = Modifier) {
     val core = NzBridge.core
     val screens: Screens? = remember(core) { core?.screens() }
     val service = remember(screens) { screens?.let(::NzHomeService) }
@@ -56,7 +57,10 @@ fun HomeEntry(nav: NzNavigator, modifier: Modifier = Modifier) {
         return
     }
 
-    LaunchedEffect(model) { model.load() }
+    // SB2 : la page reste composée quand la personne change d'onglet, donc le
+    // chargement est piloté par la visibilité (`LoadWhenShown`), pas par la
+    // composition.
+    LoadWhenShown(visible, model) { model.load() }
 
     val state by model.state.collectAsState()
 

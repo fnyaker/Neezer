@@ -3,13 +3,13 @@ package fr.neezer.mobile.feature.search
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import fr.neezer.mobile.bridge.LoadWhenShown
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.EmptyState
@@ -36,7 +36,7 @@ import uniffi.nz_ffi.SearchScope
  * - a pasted playlist link opens **MB9's** import route.
  */
 @Composable
-fun SearchEntry(q: String?, nav: NzNavigator, modifier: Modifier = Modifier) {
+fun SearchEntry(q: String?, nav: NzNavigator, visible: Boolean = true, modifier: Modifier = Modifier) {
     val core = NzBridge.core
     val screens: Screens? = remember(core) { core?.screens() }
     val service = remember(screens) { screens?.let(::NzSearchService) }
@@ -54,10 +54,13 @@ fun SearchEntry(q: String?, nav: NzNavigator, modifier: Modifier = Modifier) {
         return
     }
 
-    LaunchedEffect(model, q) { model.start(q) }
+    LoadWhenShown(visible, q) { model.start(q) }
 
-    // Leaving remembers what was really searched (the SPA's `onDestroy`).
-    DisposableEffect(model) { onDispose { model.leave() } }
+    // Leaving remembers what was really searched (the SPA's `onDestroy`). La
+    // page n'est plus DISPOSÉE (SB2) : « quitter la recherche » est « la page
+    // cesse d'être visible ». `leave()` ne fait rien si aucun terme n'a été
+    // cherché, donc la composition initiale (`visible = false`) est sans effet.
+    LaunchedEffect(visible) { if (!visible) model.leave() }
 
     val state by model.state.collectAsState()
     SearchScreen(

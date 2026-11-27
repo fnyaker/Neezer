@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import fr.neezer.mobile.bridge.LoadWhenShown
 import fr.neezer.mobile.bridge.NzBridge
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.CoverImage
@@ -72,6 +73,7 @@ import uniffi.nz_ffi.ShowData
 @Composable
 fun PodcastsEntry(
     nav: NzNavigator,
+    visible: Boolean = true,
     modifier: Modifier = Modifier,
     /** The seam a JVM test and a render use; the app passes nothing. */
     service: PodcastService? = AppPodcasts.service(),
@@ -81,7 +83,7 @@ fun PodcastsEntry(
     val model = remember(service, scope) {
         service?.let { PodcastsModel(it, scope) }
     }
-    LaunchedEffect(model) { model?.start() }
+    LoadWhenShown(visible, Unit) { model?.start() }
     if (model == null) {
         CoreUnavailable(modifier = modifier)
         return

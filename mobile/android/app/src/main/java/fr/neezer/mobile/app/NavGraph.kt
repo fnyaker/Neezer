@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
@@ -19,14 +18,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.filter
 import androidx.navigation.NavDestination
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -176,6 +178,23 @@ fun NzApp(graph: AppGraph) {
     val backStackEntry by nav.currentBackStackEntryAsState()
     val destination = backStackEntry?.destination
 
+    // SB2 : une route d'onglet ouverte par la barre arrive SANS argument (la
+    // porte ne connaît que la route) ; les arguments déjà lus sont donc retenus,
+    // sinon le terme cherché et le sous-onglet de la bibliothèque seraient
+    // effacés, `LoadWhenShown` verrait une nouvelle clé et rechargerait au
+    // retour. Seule une entrée qui PORTE l'argument l'écrase (un lien profond).
+    var searchQuery by remember { mutableStateOf<String?>(null) }
+    var libraryTab by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(backStackEntry) {
+        val entry = backStackEntry ?: return@LaunchedEffect
+        when {
+            entry.destination.hasRoute<Routes.Search>() ->
+                entry.toRoute<Routes.Search>().q?.let { searchQuery = it }
+            entry.destination.hasRoute<Routes.Library>() ->
+                entry.toRoute<Routes.Library>().tab?.let { libraryTab = it }
+        }
+    }
+
     // L1 : les quatre racines d'onglet vivent dans UN pager, hissé ici pour que
     // la barre et le routeur lisent le même état — une image, deux lecteurs.
     // `TabPagerSync` est la seule couture entre « la page où le doigt s'est
@@ -261,7 +280,14 @@ fun NzApp(graph: AppGraph) {
                 }
             },
             content = {
-                NavGraph(graph, nav, pager, startRoute)
+                TabLayer(
+                    shown = selectedIndexOf(destination) in Tab.entries.indices,
+                    nav = graph,
+                    pager = pager,
+                    searchQuery = searchQuery,
+                    libraryTab = libraryTab,
+                )
+                NavGraph(graph, nav, startRoute)
                 TrackActionsHost()
                 // M2 : la SEULE surface où un toast est dessiné. Il y avait
                 // quarante appels à `NzToasts.show` sur master (réglages, file,
@@ -354,14 +380,15 @@ private fun WideShell(nav: NavHostController, destination: NavDestination?) {
 }
 
 /**
- * The graph itself: every route opens its entry composable, and the four tab
- * roots open the shell's pager (so a horizontal drag moves them).
+ * The graph itself: every route opens its entry composable. The four TAB routes
+ * draw nothing — the pages live once in [TabLayer], under this `NavHost` (SB2):
+ * the routes only say where the person is, for the back stack, the bar's
+ * selection and the deep links.
  */
 @Composable
 private fun NavGraph(
     graph: AppGraph,
     nav: NavHostController,
-    pager: PagerState,
     startDestination: Any,
 ) {
     val navigator: NzNavigator = graph
@@ -388,10 +415,8 @@ private fun NavGraph(
         composable<Routes.Login> { LoginEntry(nav = navigator) }
         composable<Routes.Invite> { entry -> InviteEntry(entry.toRoute<Routes.Invite>().code, navigator) }
         composable<Routes.Onboarding> { OnboardingEntry(nav = navigator) }
-        composable<Routes.Home> { TabPager(navigator, pager) }
-        composable<Routes.Search> { entry ->
-            TabPager(navigator, pager, searchQuery = entry.toRoute<Routes.Search>().q)
-        }
+        composable<Routes.Home> { TabRouteSlot() }
+        composable<Routes.Search> { TabRouteSlot() }
         composable<Routes.Artist> { entry -> ArtistEntry(entry.toRoute<Routes.Artist>().id, navigator) }
         composable<Routes.Album> { entry -> AlbumEntry(entry.toRoute<Routes.Album>().id, navigator) }
         composable<Routes.Credits> { entry -> CreditsEntry(entry.toRoute<Routes.Credits>().name, navigator) }
@@ -400,11 +425,9 @@ private fun NavGraph(
             entry -> SharedPlaylistEntry(entry.toRoute<Routes.SharedPlaylist>().id, navigator)
         }
         composable<Routes.Import> { entry -> ImportEntry(entry.toRoute<Routes.Import>().url, navigator) }
-        composable<Routes.Library> { entry ->
-            TabPager(navigator, pager, libraryTab = entry.toRoute<Routes.Library>().tab)
-        }
+        composable<Routes.Library> { TabRouteSlot() }
         composable<Routes.History> { HistoryEntry(nav = navigator) }
-        composable<Routes.Podcasts> { TabPager(navigator, pager) }
+        composable<Routes.Podcasts> { TabRouteSlot() }
         composable<Routes.Show> { entry -> ShowEntry(entry.toRoute<Routes.Show>().id, navigator) }
         composable<Routes.Releases> { ReleasesEntry(nav = navigator) }
         composable<Routes.ReleaseShelf> {
@@ -422,6 +445,12 @@ private fun NavGraph(
         }
     }
 }
+
+/**
+ * Une route d'onglet ne dessine rien : la page est dans [TabLayer], sous le graphe.
+ */
+@Composable
+private fun TabRouteSlot() = Unit
 
 /**
  * A tab switch: one entry per tab on the back stack, its scroll position kept —

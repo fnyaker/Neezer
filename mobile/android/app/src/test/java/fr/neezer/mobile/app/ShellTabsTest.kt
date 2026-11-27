@@ -5,21 +5,31 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -27,6 +37,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeWithVelocity
 import androidx.compose.ui.unit.Density
@@ -34,15 +45,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.navigation.NavDestination
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import fr.neezer.mobile.bridge.LoadWhenShown
 import fr.neezer.mobile.bridge.NzNavigator
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTabBar
 import fr.neezer.mobile.designsystem.NzTheme
 import java.io.File
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -130,7 +144,7 @@ class ShellTabsTest {
         ).readText()
         assertTrue(
             "la page de l'accueil ne dessine pas HomeEntry",
-            shell.contains("Tab.Accueil -> HomeEntry(nav)"),
+            shell.contains("Tab.Accueil -> HomeEntry(nav, visible = visible)"),
         )
         rule.onNodeWithTag("page0").assertExists()
     }
@@ -363,6 +377,92 @@ class ShellTabsTest {
         assertEquals("cinq items ne partagent pas 360 dp en 72 dp", 72.dp, bounds.width)
     }
 
+    /**
+     * **Un onglet revenu montre son dernier état** (lot SB2, spec
+     * `spec-mobile-shell-bugs.md` §C) : le banc monte l'ARRANGEMENT RÉEL — les
+     * quatre pages dans une seule couche sous le `NavHost`, les routes d'onglet
+     * vides, la vraie `TabPagerSync` et la vraie porte `LoadWhenShown`.
+     *
+     * Ce que le cas prouve, dans l'ordre :
+     *
+     *  1. au lancement, les quatre pages sont composées (`builds` = 1 chacune) et
+     *     UNE seule charge (`loads` = page 0) : une installation neuve ne lance
+     *     pas quatre lectures avant d'avoir peint l'accueil (règle 1) ;
+     *  2. glisser vers la page 1 ne reconstruit RIEN (`builds` inchangé) et charge
+     *     la page 1 une fois ;
+     *  3. revenir sur la page 0 ne recharge pas (`loads[0]` reste 1) ;
+     *  4. une fiche poussée au-dessus cache la couche sans la démonter, et le
+     *     retour la remontre sans une reconstruction ni une requête.
+     */
+    @Test
+    fun theTabThatComesBackIsTheSameOne() {
+        arrangedShell()
+
+        assertEquals(
+            "les quatre pages ne sont pas composées une fois chacune au lancement",
+            mapOf(0 to 1, 1 to 1, 2 to 1, 3 to 1),
+            builds.toMap(),
+        )
+        assertEquals(
+            "au lancement, une seule page doit CHARGER (l'accueil)",
+            mapOf(0 to 1),
+            loads.toMap(),
+        )
+
+        rule.runOnIdle { scope!!.launch { pager!!.animateScrollToPage(1) } }
+        settle()
+        assertEquals("le glissement n'a pas posé la page 1", 1, pager!!.currentPage)
+        assertEquals("une page quittée puis... non, ici: la page 1 n'a pas chargé", mapOf(0 to 1, 1 to 1), loads.toMap())
+        assertEquals(
+            "changer d'onglet a reconstruit une page (builds=$builds)",
+            mapOf(0 to 1, 1 to 1, 2 to 1, 3 to 1),
+            builds.toMap(),
+        )
+
+        rule.runOnIdle { scope!!.launch { pager!!.animateScrollToPage(0) } }
+        settle()
+        assertEquals("la page 0 a été reconstruite au retour (builds=$builds)", 1, builds[0])
+        assertEquals("la page 0 a rechargé au retour (loads=$loads)", 1, loads[0])
+
+        // Une fiche poussée : « fiche » est dessinée, la couche d'onglets reste
+        // composée mais n'est plus placée (KeepComposed).
+        rule.runOnIdle { navController!!.navigate(Routes.Genres) }
+        settle()
+        rule.onNodeWithText("fiche").assertIsDisplayed()
+        rule.onNodeWithTag("page0").assertIsNotDisplayed()
+        assertEquals("pousser une fiche a reconstruit une page", mapOf(0 to 1, 1 to 1, 2 to 1, 3 to 1), builds.toMap())
+
+        rule.runOnIdle { navController!!.popBackStack() }
+        settle()
+        rule.onNodeWithTag("page0").assertIsDisplayed()
+        assertEquals("revenir de la fiche a reconstruit la page 0", 1, builds[0])
+        assertEquals("revenir de la fiche a rechargé la page 0", 1, loads[0])
+    }
+
+    /**
+     * **Un onglet défilé garde son défilement** (garde du lot SB2, pas sa preuve :
+     * le `SaveableStateHolder` d'avant le tenait déjà). Un aller-retour d'onglet
+     * par la BARRE — la vraie porte — laisse la ligne 80 en place.
+     */
+    @Test
+    fun aScrolledTabKeepsItsOffset() {
+        arrangedShell()
+        rule.onNodeWithTag("page0").performScrollToNode(hasText("ligne 80"))
+        // Les quatre pages sont composées (SB2) : la ligne 80 existe dans chacune,
+        // donc la lecture vise celle de la page 0 par son ancêtre.
+        val row80 = hasText("ligne 80") and hasAnyAncestor(hasTestTag("page0"))
+        rule.onNode(row80).assertIsDisplayed()
+
+        rule.onNodeWithContentDescription("Rechercher").performClick()
+        settle()
+        assertEquals(1, pager!!.currentPage)
+        rule.onNodeWithContentDescription("Accueil").performClick()
+        settle()
+
+        assertEquals("l'aller-retour n'a pas ramené l'accueil", 0, pager!!.currentPage)
+        rule.onNode(row80).assertIsDisplayed()
+    }
+
     /** The plan's own settle: frames advanced, then a bounded wait — never a sleep. */
     private fun settle() {
         rule.waitForIdle()
@@ -376,6 +476,93 @@ class ShellTabsTest {
 
     /** The destination the REAL router reported at the last composition. */
     private var lastDestination: NavDestination? = null
+
+    /** Une page s'est-elle composée, et combien de fois (SB2 : doit rester 1). */
+    private val builds = mutableMapOf<Int, Int>()
+
+    /** Une page a-t-elle CHARGÉ, et combien de fois (SB2 : 1, seulement visible). */
+    private val loads = mutableMapOf<Int, Int>()
+
+    /** Le vrai routeur de l'arrangement, pour pousser une fiche et revenir. */
+    private var navController: androidx.navigation.NavHostController? = null
+
+    /** La portée du banc, pour animer le pager comme la barre le fait. */
+    private var scope: kotlinx.coroutines.CoroutineScope? = null
+
+    /**
+     * L'arrangement que `NzApp` monte depuis SB2 : la couche d'onglets UNE fois,
+     * Sous le `NavHost`, dont les quatre routes d'onglet ne dessinent rien. Le
+     * slot `page` compte les compositions et passe la visibilité à la vraie
+     * [LoadWhenShown].
+     */
+    private fun arrangedShell() {
+        builds.clear()
+        loads.clear()
+        rule.setContent {
+            NzTheme(motion = NzMotionLevel.Full) {
+                val nav = rememberNavController()
+                navController = nav
+                val entry by nav.currentBackStackEntryAsState()
+                val destination = entry?.destination
+                lastDestination = destination
+                val state = rememberPagerState(initialPage = 0) { Tab.entries.size }
+                pager = state
+                val coroutineScope = rememberCoroutineScope()
+                scope = coroutineScope
+                fun openTab(tab: Tab) {
+                    opened += tab
+                    nav.navigate(routeOf(tab)) {
+                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                }
+                TabPagerSync(destination, state) { tab -> openTab(tab) }
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        val onTab = selectedIndexOf(destination) in Tab.entries.indices
+                        TabLayer(
+                            shown = onTab,
+                            nav = FakeNav,
+                            pager = state,
+                            searchQuery = null,
+                            libraryTab = null,
+                        ) { index ->
+                            // Une « construction » = une entrée en composition (lint
+                            // refuse `remember` qui rend `Unit`) ; une page gardée
+                            // composée n'y entre qu'une fois.
+                            DisposableEffect(index) {
+                                builds[index] = (builds[index] ?: 0) + 1
+                                onDispose { }
+                            }
+                            LoadWhenShown(onTab && state.currentPage == index) {
+                                loads[index] = (loads[index] ?: 0) + 1
+                            }
+                            ScrolledPage(index)
+                        }
+                        NavHost(navController = nav, startDestination = Routes.Home) {
+                            composable<Routes.Home> { Unit }
+                            composable<Routes.Search> { Unit }
+                            composable<Routes.Library> { Unit }
+                            composable<Routes.Podcasts> { Unit }
+                            composable<Routes.Genres> { Text("fiche") }
+                        }
+                    }
+                    TabBarHost(
+                        destination = destination,
+                        pager = state,
+                        scope = coroutineScope,
+                        onOpenTab = { tab -> openTab(tab) },
+                        onOpenSettings = {
+                            settings++
+                            nav.navigate(Routes.Settings()) { launchSingleTop = true }
+                        },
+                    )
+                }
+            }
+        }
+        settle()
+    }
 
     /**
      * The shell as `NzApp` mounts it: one `NavHost` for the four tab routes, the
@@ -428,4 +615,22 @@ class ShellTabsTest {
 @Composable
 private fun FakePage(index: Int) {
     Box(Modifier.fillMaxSize().testTag("page$index")) { Text("page $index") }
+}
+
+/**
+ * Une page d'onglet assez longue pour défiler, 100 lignes : le défilement doit
+ * survivre à un changement d'onglet sans reconstruction.
+ */
+@Composable
+private fun ScrolledPage(index: Int) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .testTag("page$index")
+            .verticalScroll(rememberScrollState()),
+    ) {
+        repeat(100) { row ->
+            Box(Modifier.fillMaxWidth().height(48.dp)) { Text("ligne $row") }
+        }
+    }
 }
