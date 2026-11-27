@@ -59,6 +59,12 @@ class AudioFxPhaseTest {
         rule.onNodeWithText("Sortie audio").assertExists()
         rule.onNodeWithText("Égaliseur").assertExists()
         rule.onNodeWithText("Lecture des réglages…").assertDoesNotExist()
+        // Une ligne d'aide sous un titre ou un réglage est du « texte inutile »
+        // (C5, décision du propriétaire 2026-11-27). Cette garde nomme les
+        // phrases que l'écran portait ; elle échoue sur le code d'avant.
+        for (line in HELP_LINES) {
+            rule.onNodeWithText(line, substring = true).assertDoesNotExist()
+        }
 
         val full = inPlaceSpecs(NzMotion(NzMotionLevel.Full))
         assertEquals(NzDur.Fast, (full.fade as TweenSpec<*>).durationMillis)
@@ -108,5 +114,25 @@ class AudioFxPhaseTest {
                 below >= above + gap,
             )
         }
+    }
+
+    private companion object {
+        /** Les phrases d'aide que « Lecture & son » portait, retirées le 2026-11-27. */
+        val HELP_LINES = listOf(
+            "Le chemin du son jusqu'à",
+            "Pour écouter avec un seul écouteur",
+            "Réunit les deux canaux dans chaque oreille",
+            "Ces effets traitent le son",
+            "Gain fixe par titre",
+            "Renforce le grave",
+            "Dix bandes de 31 Hz",
+            "Ajustez chaque bande",
+            "Comment un titre laisse la place",
+            "Les deux titres se superposent",
+            "Suivant et précédent s'enchaînent",
+            "Démarre et termine chaque titre",
+            "sans interrompre la lecture",
+            "La mesure démarre avec la lecture",
+        )
     }
 }

@@ -144,7 +144,7 @@ internal const val AUDIOFX_CONTENT = "contenu"
 
 @Composable
 private fun OutputCard(model: AudioFxModel, state: FxState) {
-    FxCard(FxCopy.OUTPUT_TITLE, FxCopy.OUTPUT_SUB) {
+    FxCard(FxCopy.OUTPUT_TITLE) {
         FxChoiceRow(
             options = FxCopy.OUTPUT_MODES.map { it.first },
             selected = FxCopy.OUTPUT_MODES.indexOfFirst { it.second == state.output }.coerceAtLeast(0),
@@ -195,8 +195,8 @@ private fun OutputCard(model: AudioFxModel, state: FxState) {
 
 @Composable
 private fun PanCard(model: AudioFxModel, state: FxState) {
-    FxCard(FxCopy.PAN_TITLE, FxCopy.PAN_SUB) {
-        FxSwitchRow(FxCopy.MONO, FxCopy.MONO_HINT, state.mono, model::setMono)
+    FxCard(FxCopy.PAN_TITLE) {
+        FxSwitchRow(FxCopy.MONO, null, state.mono, model::setMono)
         Spacer(Modifier.height(NzSpacing.s))
         // The slider carries no value of its own: the summary line below already
         // says « Stéréo · 30 % à gauche », and at a 200 % font scale the repeated
@@ -240,9 +240,8 @@ private fun PanCard(model: AudioFxModel, state: FxState) {
 
 @Composable
 private fun AudioCard(model: AudioFxModel, state: FxState) {
-    FxCard(FxCopy.AUDIO_TITLE, FxCopy.AUDIO_SUB) {
+    FxCard(FxCopy.AUDIO_TITLE) {
         Text(FxCopy.NORMALIZATION, style = Sillon.type.label, color = Sillon.colors.tx)
-        Text(FxCopy.NORMALIZATION_HINT, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
         Spacer(Modifier.height(NzSpacing.xs))
         FxChoiceRow(
             options = FxCopy.NORM_LEVELS.map { it.first },
@@ -253,7 +252,6 @@ private fun AudioCard(model: AudioFxModel, state: FxState) {
         )
         Spacer(Modifier.height(NzSpacing.m))
         Text(FxCopy.BASS, style = Sillon.type.label, color = Sillon.colors.tx)
-        Text(FxCopy.BASS_HINT, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
         Spacer(Modifier.height(NzSpacing.xs))
         FxSlider(
             value = state.bass,
@@ -266,8 +264,8 @@ private fun AudioCard(model: AudioFxModel, state: FxState) {
 
 @Composable
 private fun EqualizerCard(model: AudioFxModel, state: FxState) {
-    FxCard(FxCopy.EQ_TITLE, FxCopy.EQ_SUB) {
-        FxSwitchRow(FxCopy.EQ_SWITCH, FxCopy.EQ_SWITCH_HINT, state.eqEnabled, model::setEqEnabled)
+    FxCard(FxCopy.EQ_TITLE) {
+        FxSwitchRow(FxCopy.EQ_SWITCH, null, state.eqEnabled, model::setEqEnabled)
         Spacer(Modifier.height(NzSpacing.m))
 
         PresetsBlock(model, state)
@@ -455,7 +453,7 @@ private fun FadersBlock(model: AudioFxModel, state: FxState) {
 
 @Composable
 private fun TransitionsCard(model: AudioFxModel, state: FxState) {
-    FxCard(FxCopy.TRANSITIONS_TITLE, FxCopy.TRANSITIONS_SUB) {
+    FxCard(FxCopy.TRANSITIONS_TITLE) {
         FxSwitchRow(
             FxCopy.CROSSFADE,
             FxCopy.CROSSFADE_HINT,
@@ -496,13 +494,12 @@ private fun TransitionsCard(model: AudioFxModel, state: FxState) {
 
 // -- the pieces ----------------------------------------------------------------
 
-/** The card's shape: a title, one sentence, then the controls. */
+/** The card's shape: a title, then the controls. */
 @Composable
-private fun FxCard(title: String, subtitle: String, content: @Composable () -> Unit) {
+private fun FxCard(title: String, content: @Composable () -> Unit) {
     NzCard(Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
             Text(title, style = Sillon.type.title, color = Sillon.colors.tx)
-            Text(subtitle, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
             Spacer(Modifier.height(NzSpacing.xs))
             content()
         }
@@ -540,7 +537,7 @@ private fun FxBandsWrap(content: @Composable () -> Unit) {
 @Composable
 private fun FxSwitchRow(
     title: String,
-    hint: String,
+    hint: String?,
     checked: Boolean,
     onChange: (Boolean) -> Unit,
     enabled: Boolean = true,
@@ -552,7 +549,9 @@ private fun FxSwitchRow(
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = Sillon.type.label, color = Sillon.colors.tx)
-            Text(hint, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
+            if (hint != null) {
+                Text(hint, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
+            }
         }
         // The switch's own name for TalkBack, in SEMANTICS and not as a label
         // beside it: `NzSwitch` draws a label inline, and MB16 measured that a
