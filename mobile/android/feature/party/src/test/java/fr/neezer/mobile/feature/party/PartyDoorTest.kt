@@ -9,7 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
-import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -67,8 +66,9 @@ class PartyDoorTest {
         settle()
         rule.onNodeWithContentDescription(PartyCopy.DOOR).performClick()
         settle()
-        val width = rule.onNodeWithText(PartyCopy.START).getUnclippedBoundsInRoot().width
-        assertTrue("button width $width < 200.dp", width.value >= 200f)
+        val bounds = rule.onNodeWithText(PartyCopy.START).getUnclippedBoundsInRoot()
+        val width = bounds.right - bounds.left
+        assertTrue("button width $width < 200.dp", width >= 200.dp)
     }
 
     @Test
