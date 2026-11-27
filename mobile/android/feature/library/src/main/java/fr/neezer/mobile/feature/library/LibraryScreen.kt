@@ -108,8 +108,12 @@ class LibraryActions(
     /** « Nouvelle playlist » de la feuille d'ajout. */
     val newPlaylist: (String) -> Unit = {},
     val removeDislike: (TrackRow) -> Unit = {},
-    /** The history leaf's body — `HistoryScreen`, owned by the same lot. */
-    val historyBody: @Composable () -> Unit = {},
+    /**
+     * The history leaf's rows, as items of the library's own list
+     * ([rememberHistoryItems]) — never a `HistoryScreen`, whose `LazyColumn` would
+     * be nested in this one and crash on an unbounded height.
+     */
+    val historyItems: @Composable () -> (LazyListScope.() -> Unit) = { {} },
 )
 
 /**
@@ -184,6 +188,8 @@ fun LibraryScreen(
     // Read here, in the composition: `leaf`/`trackRows` run in the LazyColumn's
     // scope, where a `CompositionLocal` cannot be read.
     val specs = Sillon.motion.itemSpecs()
+    // The History leaf's items too: its pane and day grouping are composition reads.
+    val historyItems = if (state.leaf == LibraryLeaf.History) actions.historyItems() else null
 
     BoxWithConstraints(
         modifier
@@ -210,7 +216,7 @@ fun LibraryScreen(
                     LeafTools(state, actions, openSort = { sortSheet = true })
                 }
                 when (state.leaf) {
-                    LibraryLeaf.History -> item(key = "history") { actions.historyBody() }
+                    LibraryLeaf.History -> historyItems?.invoke(this)
                     else -> leaf(state, actions, columns, playingKey, listWindow, openSectionMenu, pane, specs)
                 }
             }

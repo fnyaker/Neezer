@@ -8682,3 +8682,15 @@ barre échouent (nœud introuvable) ; avec l'ancien `return` sur liste vide, le 
 **Hors portée.** `CarSettingsActivity.kt` et `PlayerSheet.kt` (lot JH1), le nombre d'items de la
 barre (Podcasts reste), l'i18n. Le S2 mesurait le héros comme premier bloc ; son assertion lit
 désormais la barre, le rythme de 32 dp entre les deux restant la règle.
+
+## Historique : jamais un `LazyColumn` dans un `LazyColumn`
+
+**Règle.** Une feuille de la Bibliothèque ajoute des *items* à la liste de l'écran ; elle ne pose pas
+un écran qui a sa propre `LazyColumn`. **Pourquoi.** La feuille « Historique » dessinait
+`HistoryScreen` dans un `item` de la `LazyColumn` de la Bibliothèque : hauteur non bornée, donc
+`IllegalStateException: Vertically scrollable component was measured with an infinity maximum height
+constraints` à l'ouverture, l'app mourait. **Correctif.** `rememberHistoryItems(…, showHead)` rend un
+`LazyListScope.() -> Unit` (lecture de composition faite avant) que `HistoryScreen` et la feuille
+(`LibraryActions.historyItems`) emploient ; les clés sont préfixées `history-` (la liste de la
+Bibliothèque a déjà son `head`). **Preuve.** `LibraryHistoryLeafTest` lève l'exception sur l'ancien
+code et passe après.

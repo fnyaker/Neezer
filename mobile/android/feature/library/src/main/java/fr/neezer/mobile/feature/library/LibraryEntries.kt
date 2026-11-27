@@ -130,8 +130,8 @@ fun LibraryEntry(tab: String?, nav: NzNavigator, visible: Boolean = true, modifi
             openImport = { nav.go(AppLink.Import(url = "")) },
             newPlaylist = model::newPlaylist,
             removeDislike = model::removeDislike,
-            historyBody = {
-                HistoryScreen(
+            historyItems = {
+                rememberHistoryItems(
                     state = historyState,
                     actions = HistoryActions(
                         setFilter = historyModel::setFilter,
@@ -144,6 +144,7 @@ fun LibraryEntry(tab: String?, nav: NzNavigator, visible: Boolean = true, modifi
                         openRecap = { nav.go(AppLink.Recap(year = null)) },
                         openSearch = { nav.go(AppLink.Search(q = null)) },
                     ),
+                    showHead = false,
                 )
             },
         ),
