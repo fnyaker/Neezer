@@ -2089,6 +2089,76 @@ class WebUITestCase(unittest.TestCase):
         self.app.deezer.fetch_cover = lambda md5, size=1000: None
         self.assertEqual(self.client.get("/api/cover/999999").status_code, 404)
 
+    def test_a_cover_we_already_fetched_is_served_from_our_disk(self):
+        """Art on our disk is ours to serve — the 302 is for what we do NOT
+        hold. The album path never read the cover cache, so a sleeve the Subsonic
+        side had already fetched was still handed to the device as a third-party
+        address (and, on a network that blocks *.dzcdn.net, never painted)."""
+        self._login()
+        t = self._make_deezer_track(sng_id="1", archived=False)
+        t.album.cover_md5 = "md5cover"
+        t.album.save()
+        with self.app.app_context():
+            self.app.cache.set(f"{t.album.id}-deezer-cover", b"CACHEDJPEG")
+        self.app.deezer.fetch_cover = mock.Mock(side_effect=AssertionError("Deezer was called"))
+        rv = self.client.get("/api/cover/" + str(t.album.id))
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_data(), b"CACHEDJPEG")
+
+    def test_an_album_that_lost_its_art_hash_finds_its_cover_again(self):
+        """A row with no ``cover_md5`` (imported from a payload without
+        ``ALB_PICTURE``) used to 404 every time, on every client. The provider
+        is asked once, its answer written on the album, and the sleeve loads."""
+        from neezer.db import Album
+
+        self._login()
+        t = self._make_deezer_track(sng_id="1", archived=False)
+        self.assertIsNone(t.album.cover_md5)
+        self.app.deezer.get_album = lambda alb_id: {"ALB_PICTURE": "repaired"}
+        self.app.deezer.fetch_cover = (
+            lambda md5, size=1000: b"REPAIRED" if md5 == "repaired" else None
+        )
+        rv = self.client.get("/api/cover/" + str(t.album.id))
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_data(), b"REPAIRED")
+        self.assertEqual(Album[t.album.id].cover_md5, "repaired")
+
+    def test_an_album_with_a_hash_still_answers_the_cdn_without_asking_deezer(self):
+        """Deezer switched off or down is not a verdict on the sleeve: a row
+        that names a hash is answered with the CDN 302 and NO provider call, so
+        the device's own route to the CDN still paints it."""
+        self._login()
+        t = self._make_deezer_track(sng_id="1", archived=False)
+        t.album.cover_md5 = "md5cover"
+        t.album.save()
+        self.app.deezer.fetch_cover = mock.Mock(side_effect=AssertionError("Deezer was called"))
+        rv = self.client.get("/api/cover/" + str(t.album.id))
+        self.assertEqual(rv.status_code, 302)
+        self.assertIn("md5cover", rv.headers["Location"])
+
+    def test_an_artist_cover_is_fetched_once_then_served_from_our_disk(self):
+        """The fetched bytes had no reader: every paint of a screenful of
+        portraits asked Deezer (and its shared, priority-throttled limiter)
+        again. One fetch, then 0 — what makes a shelf of sleeves cost one
+        request each instead of one per paint."""
+        from neezer.deezer import ids
+
+        self._login()
+        self._make_deezer_track(sng_id="1", archived=False)  # artist 500
+        calls = []
+
+        def fake_fetch_image(kind, deezer_id, size="xl"):
+            calls.append((kind, deezer_id))
+            return b"ARTISTJPEG"
+
+        self.app.deezer.fetch_image = fake_fetch_image
+        url = "/api/cover/" + str(ids.artist_uuid("500"))
+        for _ in range(3):
+            rv = self.client.get(url)
+            self.assertEqual(rv.status_code, 200)
+            self.assertEqual(rv.get_data(), b"ARTISTJPEG")
+        self.assertEqual(calls, [("artist", "500")])
+
     def test_stream_local_track_by_uuid(self):
         self._login()
         t = self._make_local_track()
