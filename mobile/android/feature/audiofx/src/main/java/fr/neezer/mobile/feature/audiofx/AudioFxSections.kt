@@ -196,7 +196,7 @@ private fun OutputCard(model: AudioFxModel, state: FxState) {
 @Composable
 private fun PanCard(model: AudioFxModel, state: FxState) {
     FxCard(FxCopy.PAN_TITLE) {
-        FxSwitchRow(FxCopy.MONO, null, state.mono, model::setMono)
+        FxSwitchRow(FxCopy.MONO, state.mono, model::setMono)
         Spacer(Modifier.height(NzSpacing.s))
         // The slider carries no value of its own: the summary line below already
         // says « Stéréo · 30 % à gauche », and at a 200 % font scale the repeated
@@ -234,7 +234,6 @@ private fun PanCard(model: AudioFxModel, state: FxState) {
                 selected = state.balance == 0f,
             )
         }
-        Text(FxCopy.PAN_APPLIED, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
     }
 }
 
@@ -265,7 +264,7 @@ private fun AudioCard(model: AudioFxModel, state: FxState) {
 @Composable
 private fun EqualizerCard(model: AudioFxModel, state: FxState) {
     FxCard(FxCopy.EQ_TITLE) {
-        FxSwitchRow(FxCopy.EQ_SWITCH, null, state.eqEnabled, model::setEqEnabled)
+        FxSwitchRow(FxCopy.EQ_SWITCH, state.eqEnabled, model::setEqEnabled)
         Spacer(Modifier.height(NzSpacing.m))
 
         PresetsBlock(model, state)
@@ -442,11 +441,13 @@ private fun FadersBlock(model: AudioFxModel, state: FxState) {
             }
         }
     }
-            Text(
-                text = if (state.eqEnabled) "±16 dB par bande." else "Inactif : activez l'égaliseur.",
-                style = Sillon.type.bodySmall,
-                color = Sillon.colors.dim,
-            )
+            if (!state.eqEnabled) {
+                Text(
+                    text = "Inactif",
+                    style = Sillon.type.bodySmall,
+                    color = Sillon.colors.dim,
+                )
+            }
         }
     }
 }
@@ -456,7 +457,6 @@ private fun TransitionsCard(model: AudioFxModel, state: FxState) {
     FxCard(FxCopy.TRANSITIONS_TITLE) {
         FxSwitchRow(
             FxCopy.CROSSFADE,
-            FxCopy.CROSSFADE_HINT,
             state.crossfadeEnabled,
             { on -> model.setCrossfade(on, state.crossfadeS) },
         )
@@ -470,7 +470,6 @@ private fun TransitionsCard(model: AudioFxModel, state: FxState) {
         Spacer(Modifier.height(NzSpacing.m))
         FxSwitchRow(
             FxCopy.SKIP_FADE,
-            FxCopy.SKIP_FADE_HINT,
             state.crossfadeOnSkip,
             { on -> model.setSkipFade(on, state.crossfadeSkipS) },
             enabled = state.crossfadeEnabled,
@@ -483,7 +482,7 @@ private fun TransitionsCard(model: AudioFxModel, state: FxState) {
             enabled = state.crossfadeEnabled && state.crossfadeOnSkip,
         )
         Spacer(Modifier.height(NzSpacing.m))
-        FxSwitchRow(FxCopy.TRIM, FxCopy.TRIM_HINT, state.trim, model::setTrim)
+        FxSwitchRow(FxCopy.TRIM, state.trim, model::setTrim)
         Text(
             text = FxCopy.trimThreshold(state.trimDb),
             style = Sillon.type.bodySmall,
@@ -537,7 +536,6 @@ private fun FxBandsWrap(content: @Composable () -> Unit) {
 @Composable
 private fun FxSwitchRow(
     title: String,
-    hint: String?,
     checked: Boolean,
     onChange: (Boolean) -> Unit,
     enabled: Boolean = true,
@@ -547,12 +545,12 @@ private fun FxSwitchRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = Sillon.type.label, color = Sillon.colors.tx)
-            if (hint != null) {
-                Text(hint, style = Sillon.type.bodySmall, color = Sillon.colors.dim)
-            }
-        }
+        Text(
+            text = title,
+            style = Sillon.type.label,
+            color = Sillon.colors.tx,
+            modifier = Modifier.weight(1f),
+        )
         // The switch's own name for TalkBack, in SEMANTICS and not as a label
         // beside it: `NzSwitch` draws a label inline, and MB16 measured that a
         // label inside a row with a weighted child squeezes the row to a

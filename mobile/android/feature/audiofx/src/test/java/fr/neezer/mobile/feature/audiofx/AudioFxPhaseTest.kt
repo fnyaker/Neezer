@@ -133,6 +133,13 @@ class AudioFxPhaseTest {
             "Démarre et termine chaque titre",
             "sans interrompre la lecture",
             "La mesure démarre avec la lecture",
+            "Appliqué immédiatement",
+            "Superpose la fin et le début",
+            "Fondu court sur suivant et précédent",
+            "Coupe les silences en début et fin",
+            "±16 dB par bande",
+            "activez l'égaliseur",
+            "Le serveur mesure les bords au seuil",
         )
     }
 }

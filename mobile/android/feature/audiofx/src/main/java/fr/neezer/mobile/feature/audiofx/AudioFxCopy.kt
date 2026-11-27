@@ -20,7 +20,6 @@ internal object FxCopy {
     const val LEFT = "Gauche"
     const val RIGHT = "Droite"
     const val CENTRE = "Centre"
-    const val PAN_APPLIED = "Appliqué immédiatement."
 
     const val AUDIO_TITLE = "Audio"
 
@@ -59,17 +58,13 @@ internal object FxCopy {
 
     const val TRANSITIONS_TITLE = "Transitions"
     const val CROSSFADE = "Fondu enchaîné"
-    const val CROSSFADE_HINT = "Superpose la fin et le début."
     const val CROSSFADE_DURATION = "Durée"
     const val SKIP_FADE = "Adoucir les changements manuels"
-    const val SKIP_FADE_HINT = "Fondu court sur suivant et précédent."
     const val SKIP_DURATION = "Durée"
     const val TRIM = "Tronquer les silences"
-    const val TRIM_HINT = "Coupe les silences en début et fin."
 
     /** The threshold is the SERVER's measurement, not a device setting. */
-    fun trimThreshold(db: Int) =
-        "Le serveur mesure les bords au seuil de $db dBFS, le même pour tous les titres."
+    fun trimThreshold(db: Int) = "Seuil serveur · $db dBFS"
 
     fun reduceVolume(cut: String) = "Réduire le volume de $cut"
     fun volumeReduced(cut: String) = "Volume réduit de $cut"
