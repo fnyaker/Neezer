@@ -1033,6 +1033,15 @@ fait échouer le `Judge gate` d'une PR qui ne touche même pas le lecteur. Le co
 atterrir sur la PREMIÈRE PR jugée, et les PR `ui` suivantes se rebasent après son merge (mesuré sur
 #447 et #458, 2026-11-27).
 
+**Balayer les 11 écrans AVANT de demander un jugement, parce que `precheck` ne voit pas le C5.**
+`banned` compte les chaînes anglaises et les noms d'outil ; une phrase française d'aide sous un titre
+ne compte nulle part (`banned=0` et `precheck: ok=68 fail=0` sur la tête que le juge a bloquée). Le
+juge, lui, la voit, et #447 s'est fait bloquer deux passages de suite sur des écrans que la PR ne
+touchait pas : 05/07 (corrigés par #474) puis `02-rechercher` (« Aucun style analysé pour
+l'instant : « Toutes les stations » en propose un. », `ExplorerStylesSection.kt`). Un passage coûte
+8–12 min de Sonnet : lire les `text=` des 11 `*.xml` de l'artefact et retirer toute phrase qui
+explique au lieu de nommer un libellé, une donnée ou un état, dans la même PR.
+
 **Le corps du serveur ne s'affiche jamais.** La ligne d'état du lecteur porte la cause d'un échec :
 `nz-audio`'s `SourceError::Provider` garde le corps anglais du serveur pour le journal et `Debug`,
 et son `Display` nomme la cause en français à partir du seul statut

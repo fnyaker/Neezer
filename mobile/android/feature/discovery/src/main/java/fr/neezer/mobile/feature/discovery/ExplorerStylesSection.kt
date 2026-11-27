@@ -160,9 +160,9 @@ fun ExplorerPreview(
                     DISCOVERY_EMPTY -> NzAppear(visible = true) {
                         Text(
                             if (state.data?.source == "none") {
-                                "Votre historique d'écoute est encore vide : les styles que vous écoutez le plus apparaîtront ici. « Toutes les stations » lance un genre sans historique."
+                                "Votre historique d'écoute est encore vide."
                             } else {
-                                "Aucun style analysé pour l'instant : « Toutes les stations » en propose un."
+                                "Aucun style analysé pour l'instant."
                             },
                             style = Sillon.type.bodySmall,
                             color = Sillon.colors.dim,
