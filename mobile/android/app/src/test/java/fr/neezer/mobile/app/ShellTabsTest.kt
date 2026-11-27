@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.navigation.NavDestination
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -116,14 +117,6 @@ class ShellTabsTest {
         override fun openPlayer() = Unit
 
         override fun openQueue() = Unit
-    }
-
-    /** The route the shell's `open(tab)` navigates to, as the router spells it. */
-    private fun routeOf(tab: Tab) = when (tab) {
-        Tab.Accueil -> Routes.Home
-        Tab.Rechercher -> Routes.Search()
-        Tab.Bibliotheque -> Routes.Library()
-        Tab.Podcasts -> Routes.Podcasts
     }
 
     @Test
@@ -396,7 +389,7 @@ class ShellTabsTest {
      */
     @Test
     fun theTabThatComesBackIsTheSameOne() {
-        arrangedShell()
+        shell(withScrolledPages = true)
 
         assertEquals(
             "les quatre pages ne sont pas composées une fois chacune au lancement",
@@ -446,7 +439,7 @@ class ShellTabsTest {
      */
     @Test
     fun aScrolledTabKeepsItsOffset() {
-        arrangedShell()
+        shell(withScrolledPages = true)
         rule.onNodeWithTag("page0").performScrollToNode(hasText("ligne 80"))
         // Les quatre pages sont composées (SB2) : la ligne 80 existe dans chacune,
         // donc la lecture vise celle de la page 0 par son ancêtre.
@@ -461,6 +454,74 @@ class ShellTabsTest {
 
         assertEquals("l'aller-retour n'a pas ramené l'accueil", 0, pager!!.currentPage)
         rule.onNode(row80).assertIsDisplayed()
+    }
+
+    /**
+     * **Un onglet referme Réglages** (lot SB1, spec `spec-mobile-shell-bugs.md`) :
+     * depuis Réglages, un tap sur un onglet ouvre CET onglet et laisse Réglages
+     * derrière. Le banc appelle la VRAIE `openTab` de production.
+     *
+     * Avant le lot, `popUpTo(start) { saveState = true }` + `restoreState = true`
+     * sauvegardait la pile `[Bibliothèque, Réglages]` entre la destination
+     * courante et la route, donc `restoreState` remettait Réglages au sommet : le
+     * tap semblait sans effet. La KDoc de `NavController.popBackStack` le dit :
+     * `saveState` sauvegarde « the back stack and the state of all destinations »
+     * entre les deux.
+     */
+    @Test
+    fun aTabFromSettingsLeavesSettings() {
+        shell()
+        // [Accueil] → Bibliothèque → Réglages → Bibliothèque.
+        rule.runOnIdle { navController!!.openTab(Tab.Bibliotheque) }
+        settle()
+        rule.runOnIdle { navController!!.navigate(Routes.Settings()) { launchSingleTop = true } }
+        settle()
+        assertEquals(
+            "Réglages n'est pas l'écran courant avant le tap",
+            Routes.Settings::class.qualifiedName,
+            navController!!.currentBackStackEntry?.destination?.route?.substringBefore("?"),
+        )
+
+        rule.runOnIdle { navController!!.openTab(Tab.Bibliotheque) }
+        settle()
+        val nav = navController!!
+        assertTrue(
+            "le tap d'onglet depuis Réglages n'a pas ouvert Bibliothèque " +
+                "(destination=${nav.currentBackStackEntry?.destination?.route})",
+            nav.currentBackStackEntry!!.destination.hasRoute<Routes.Library>(),
+        )
+        assertTrue(
+            "la pile n'est pas [Accueil, Bibliothèque] " +
+                "(précédent=${nav.previousBackStackEntry?.destination?.route})",
+            nav.previousBackStackEntry!!.destination.hasRoute<Routes.Home>(),
+        )
+    }
+
+    /**
+     * **Réglages ne ressuscite pas** : un aller-retour d'onglets de plus ne le
+     * remet pas au sommet (c'était la pile sauvegardée `[Bibliothèque, Réglages]`
+     * que `restoreState` restaurait).
+     */
+    @Test
+    fun settingsDoesNotComeBackOnALaterTabSwitch() {
+        shell()
+        rule.runOnIdle { navController!!.openTab(Tab.Bibliotheque) }
+        settle()
+        rule.runOnIdle { navController!!.navigate(Routes.Settings()) { launchSingleTop = true } }
+        settle()
+        rule.runOnIdle { navController!!.openTab(Tab.Bibliotheque) }
+        settle()
+
+        rule.runOnIdle { navController!!.openTab(Tab.Accueil) }
+        settle()
+        rule.runOnIdle { navController!!.openTab(Tab.Bibliotheque) }
+        settle()
+
+        val route = navController!!.currentBackStackEntry?.destination?.route ?: ""
+        assertTrue(
+            "Réglages est revenu au sommet après un aller-retour (destination=$route)",
+            navController!!.currentBackStackEntry!!.destination.hasRoute<Routes.Library>(),
+        )
     }
 
     /** The plan's own settle: frames advanced, then a bounded wait — never a sleep. */
@@ -490,12 +551,16 @@ class ShellTabsTest {
     private var scope: kotlinx.coroutines.CoroutineScope? = null
 
     /**
-     * L'arrangement que `NzApp` monte depuis SB2 : la couche d'onglets UNE fois,
-     * Sous le `NavHost`, dont les quatre routes d'onglet ne dessinent rien. Le
-     * slot `page` compte les compositions et passe la visibilité à la vraie
-     * [LoadWhenShown].
+     * La coquille telle que `NzApp` la monte : les quatre onglets dans UNE
+     * `TabLayer` sous le `NavHost` (dont les routes d'onglet ne dessinent rien),
+     * la vraie `TabPagerSync`, la vraie barre et la VRAIE `openTab` de
+     * production — c'est le seul moyen qu'un cas dise la vérité sur la
+     * navigation.
+     *
+     * [withScrolledPages] remplace le texte de page par une page de 100 lignes,
+     * pour le cas qui garde le défilement d'un onglet.
      */
-    private fun arrangedShell() {
+    private fun shell(withScrolledPages: Boolean = false) {
         builds.clear()
         loads.clear()
         rule.setContent {
@@ -509,13 +574,11 @@ class ShellTabsTest {
                 pager = state
                 val coroutineScope = rememberCoroutineScope()
                 scope = coroutineScope
+                // Les deux portes de la coquille (la barre et un règlement de page)
+                // passent par la même fonction de production.
                 fun openTab(tab: Tab) {
                     opened += tab
-                    nav.navigate(routeOf(tab)) {
-                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
+                    nav.openTab(tab)
                 }
                 TabPagerSync(destination, state) { tab -> openTab(tab) }
                 Column(Modifier.fillMaxSize()) {
@@ -538,13 +601,14 @@ class ShellTabsTest {
                             LoadWhenShown(onTab && state.currentPage == index) {
                                 loads[index] = (loads[index] ?: 0) + 1
                             }
-                            ScrolledPage(index)
+                            if (withScrolledPages) ScrolledPage(index) else FakePage(index)
                         }
                         NavHost(navController = nav, startDestination = Routes.Home) {
-                            composable<Routes.Home> { Unit }
-                            composable<Routes.Search> { Unit }
-                            composable<Routes.Library> { Unit }
-                            composable<Routes.Podcasts> { Unit }
+                            composable<Routes.Home> { }
+                            composable<Routes.Search> { }
+                            composable<Routes.Library> { }
+                            composable<Routes.Podcasts> { }
+                            composable<Routes.Settings> { Text("réglages") }
                             composable<Routes.Genres> { Text("fiche") }
                         }
                     }
@@ -564,51 +628,6 @@ class ShellTabsTest {
         settle()
     }
 
-    /**
-     * The shell as `NzApp` mounts it: one `NavHost` for the four tab routes, the
-     * pager above it, the bar below it. The two doors the shell offers (a bar tap
-     * and a settle) call the same `openTab`, exactly as `nav.open(tab)` does.
-     */
-    private fun shell() {
-        rule.setContent {
-            NzTheme(motion = NzMotionLevel.Full) {
-                val nav = rememberNavController()
-                val entry by nav.currentBackStackEntryAsState()
-                val destination = entry?.destination
-                lastDestination = destination
-                val state = rememberPagerState(initialPage = 0) { Tab.entries.size }
-                pager = state
-                val scope = rememberCoroutineScope()
-                fun openTab(tab: Tab) {
-                    opened += tab
-                    nav.navigate(routeOf(tab)) { launchSingleTop = true }
-                }
-                TabPagerSync(destination, state) { tab -> openTab(tab) }
-                Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        NavHost(navController = nav, startDestination = Routes.Home) {
-                            composable<Routes.Home> { TabPager(FakeNav, state, page = { FakePage(it) }) }
-                            composable<Routes.Search> { TabPager(FakeNav, state, page = { FakePage(it) }) }
-                            composable<Routes.Library> { TabPager(FakeNav, state, page = { FakePage(it) }) }
-                            composable<Routes.Podcasts> { TabPager(FakeNav, state, page = { FakePage(it) }) }
-                            composable<Routes.Settings> { Text("réglages") }
-                        }
-                    }
-                    TabBarHost(
-                        destination = destination,
-                        pager = state,
-                        scope = scope,
-                        onOpenTab = { tab -> openTab(tab) },
-                        onOpenSettings = {
-                            settings++
-                            nav.navigate(Routes.Settings()) { launchSingleTop = true }
-                        },
-                    )
-                }
-            }
-        }
-        settle()
-    }
 }
 
 /** A page the pager can move: it fills the whole width and says which one it is. */

@@ -201,7 +201,7 @@ fun NzApp(graph: AppGraph) {
     // arrêté » et « la route où la personne est ».
     val pager = rememberPagerState(initialPage = 0) { Tab.entries.size }
     val scope = rememberCoroutineScope()
-    TabPagerSync(destination, pager) { tab -> nav.open(tab) }
+    TabPagerSync(destination, pager) { tab -> nav.openTab(tab) }
 
     // A link that STARTED the app (a shared `neezer://` view, a post's link) is
     // kept by the graph until the `NavHost` has a graph — `attach` cannot open it,
@@ -265,7 +265,7 @@ fun NzApp(graph: AppGraph) {
                         destination = destination,
                         pager = pager,
                         scope = scope,
-                        onOpenTab = { tab -> nav.open(tab) },
+                        onOpenTab = { tab -> nav.openTab(tab) },
                         onOpenSettings = { nav.openSettings() },
                     )
                 }
@@ -370,7 +370,7 @@ private fun WideShell(nav: NavHostController, destination: NavDestination?) {
                 selected = selected == index,
                 onClick = {
                     val tab = tabOfPage(index)
-                    if (tab != null) nav.open(tab) else nav.openSettings()
+                    if (tab != null) nav.openTab(tab) else nav.openSettings()
                 },
                 icon = { Icon(item.glyph, size = 24.dp, contentDescription = null) },
                 label = { Text(item.label) },
@@ -453,11 +453,22 @@ private fun NavGraph(
 private fun TabRouteSlot() = Unit
 
 /**
- * A tab switch: one entry per tab on the back stack, its scroll position kept —
- * the SPA's rule, so tapping Bibliothèque twice does not stack two libraries.
- * The pager's own page follows, in `TabPagerSync`.
+ * Un changement d'onglet : la porte de la barre et celle du rail.
+ *
+ * **Aucun état de pile n'est sauvegardé ni restauré.** La version d'avant passait
+ * `popUpTo(startDestination) { saveState = true }` + `restoreState = true` : le
+ * KDoc de `NavController.popBackStack` dit que `saveState` sauvegarde « the back
+ * stack and the state of all destinations » entre la destination courante et la
+ * route — donc Réglages, poussé au-dessus de l'onglet, était sauvegardé AVEC lui
+ * et `restoreState` le restaurait au sommet : l'écran des paramètres revenait et
+ * le tap semblait sans effet (mesuré par `ShellTabsTest.aTabFromSettingsLeavesSettings`).
+ *
+ * Ce que la pile perd (la position de défilement d'un onglet) est tenu par la
+ * composition depuis SB2 : les quatre pages du pager ne sont jamais disposées.
+ * `launchSingleTop` reste : taper Bibliothèque deux fois n'empile pas deux
+ * bibliothèques.
  */
-private fun NavHostController.open(tab: Tab) {
+internal fun NavHostController.openTab(tab: Tab) {
     val route = when (tab) {
         Tab.Accueil -> Routes.Home
         Tab.Rechercher -> Routes.Search()
@@ -465,9 +476,9 @@ private fun NavHostController.open(tab: Tab) {
         Tab.Podcasts -> Routes.Podcasts
     }
     navigate(route) {
-        popUpTo(graph.findStartDestination().id) { saveState = true }
+        popUpTo(graph.findStartDestination().id) { saveState = false }
         launchSingleTop = true
-        restoreState = true
+        restoreState = false
     }
 }
 

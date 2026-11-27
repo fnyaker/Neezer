@@ -7756,6 +7756,54 @@ recomposées et rechargées. `beyondViewportPageCount` ne pouvait rien contre ç
 **Hors portée.** Le cache et les états `ScreenState` ; les écrans hors pager (fiches, listes poussées,
 qui restent disposés au départ) ; la vitesse du pager, ses ressorts, `PagerDefaults`.
 
+### SB1 — Un onglet referme Réglages (delivered 2026-11-27)
+
+**Le besoin.** Depuis Réglages — ou n'importe quelle route non-onglet — un tap sur un onglet ouvre
+**cet onglet** et laisse Réglages derrière. Le propriétaire : « je tape Bibliothèque, ça ne fait
+rien » (2026-11-26).
+
+**La cause.** `open(tab)` faisait `popUpTo(startDestination) { saveState = true }` +
+`restoreState = true`. Le KDoc de `NavController.popBackStack` est explicite : `saveState` sauvegarde
+« the back stack **and the state of all destinations** » entre la destination courante et la route.
+Réglages, poussé au-dessus de l'onglet, était donc sauvegardé AVEC lui, et `restoreState` le
+remettait au sommet au tap suivant : la destination après le tap était `Routes.Settings`, pas
+`Routes.Library`.
+
+**Ce qui a changé.**
+
+- `app/NavGraph.kt` — `open` devient `openTab`, `internal` (le test JVM l'appelle), et cesse de
+  sauvegarder/restaurer la pile : `popUpTo(start) { saveState = false }`, `restoreState = false`,
+  `launchSingleTop` inchangé. Les trois appelants (le règlement du pager, la barre, le rail) suivent.
+  `openSettings()` ne change pas : `launchSingleTop` empêche déjà deux Réglages empilés, et depuis une
+  fiche le retour doit rendre la fiche.
+- `app/src/test/.../ShellTabsTest.kt` — le banc monte désormais l'arrangement réel et appelle la
+  VRAIE `openTab` (plus de faux local) ; `aTabFromSettingsLeavesSettings` et
+  `settingsDoesNotComeBackOnALaterTabSwitch` sont les deux gardes.
+
+**Ce que le lot a appris.**
+
+1. **Un test qui réimplémente la navigation ne prouve rien sur la navigation.** Le banc d'avant
+   appelait une `openTab` locale (`navigate(route) { launchSingleTop = true }`) : elle n'avait pas le
+   défaut, donc aucun cas ne pouvait l'attraper. Rendre la fonction `internal` et l'appeler est ce
+   qui a produit les deux échecs attendus.
+2. **`saveState` sauvegarde les destinations AU-DESSUS de l'onglet, pas seulement l'onglet.** C'est
+   ce qui déplace le bug de « l'onglet se reconstruit » (SB2) vers « l'onglet ne s'ouvre pas ».
+3. **Ce que la pile perdait est tenu par la composition** (SB2) : retirer `saveState` ne coûte plus
+   la position de défilement, donc la simplification est sûre. Sans SB2, elle l'aurait perdue.
+
+**Mesuré (JVM, Robolectric, même banc).**
+
+- Avant le correctif, les deux cas échouent avec la destination lue
+  `fr.neezer.mobile.app.Routes.Settings?section={section}` — exactement le symptôme du propriétaire.
+- Après : destination `Routes.Library`, pile `[Accueil, Bibliothèque]` (précédent = `Routes.Home`) ;
+  un aller-retour de plus (`Accueil` → `Bibliothèque`) laisse `Routes.Library` au sommet, Réglages
+  disparu.
+- `ShellTabsTest` : **12 cas, 0 échec** (les 10 de L1/SB2 inchangés).
+
+**Hors portée.** `openSettings()` et le cinquième item de la barre ; la restauration d'état par
+`rememberSaveable` dans les fiches poussées ; le shell large (il utilise la même `openTab`, donc il
+est corrigé par la même ligne).
+
 ### S2 — Les écrans alignés : la marge de page, le rythme des sections, la place sous la barre (delivered 2026-11-25)
 
 **Le besoin.** Chaque écran avait sa propre géométrie : l'accueil à 16 dp en haut, la recherche à
