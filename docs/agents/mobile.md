@@ -873,6 +873,19 @@ the same `commit_id` is not re-posted). It never runs an emulator, builds nothin
 **Nothing here replaces a test.** The judge is the check the owner asked for in words rather than
 in assertions; a defect it finds gets its own lot, and T1 grows a step for that screen.
 
+**Le bouton de fermeture du lecteur se mesure sur sa ZONE TACTILE.** 48 × 48 dp à
+`[53,133]-[179,259]`, haut à 50,7 dp ; l'icône de 24 dp est à 62,9 dp (`08-lecteur.xml`, run
+45839501056). `precheck` lit la boîte cliquable, donc `targets 08-lecteur below_48dp=0` ; on ne
+mesure pas l'icône (décision du propriétaire, 2026-11-26). Si un futur artefact fait apparaître un
+`FAIL` sur 08, vérifier d'abord que le nœud mesuré est le cliquable (48) et non l'icône (24) avant
+de toucher au code.
+
+**Un défaut du parcours bloque TOUTES les PR `ui`, pas seulement celle qui touche l'écran fautif.**
+La grille s'applique à l'artefact de la tête, pas aux fichiers de la PR : un C3/C4 resté sur master
+fait échouer le `Judge gate` d'une PR qui ne touche même pas le lecteur. Le correctif doit donc
+atterrir sur la PREMIÈRE PR jugée, et les PR `ui` suivantes se rebasent après son merge (mesuré sur
+#447 et #458, 2026-11-27).
+
 ### Measures (every lot that touches what they measure writes them in its PR)
 
 | Measure | How | Measured (emulator-5660, API 35 x86_64, KVM, swiftshader, `-no-audio`, 2026-11-24; the MQ2 follow-up rows below were re-run on **emulator-5640**, same image; no real phone was attached — `adb devices` empty — so no real-phone column exists yet) |
@@ -882,7 +895,7 @@ in assertions; a defect it finds gets its own lot, and T1 grows a step for that 
 | RAM | **Counted bytes** of the Rust stores (`NzCore::memory()`), PSS of the APP's own process (`dumpsys meminfo fr.neezer.mobile`) as a secondary figure | PSS **87 518 208 B (83,5 MiB)** after a whole journey with a 4 000-title queue (target ≤ 120 MB at rest: met). **Counted bytes**, now that `Assistance` builds its report at open: **3 462 806 o** — `file 6 472 o`, `listes 3 456 334 o` — after the 8 000 favourites and the 4 000-row playlist. The 4 000-title QUEUE itself did not load in that run (its first title's transcode exceeded the harness's 20 s on a loaded machine), so `file` holds only the album's two titles; the queue's own count is owed a quieter run. The 30-minute flat-growth check is still owed. |
 | CPU / battery | `/proc/<pid>/stat` utime+stime, screen off (`KEYCODE_SLEEP`), Doze forced (`dumpsys deviceidle force-idle` + `battery unplug`); 10 minutes for the ExoPlayer comparison, 31 minutes for the final app; the same 45 s Opus 320 title through a stock Media3 ExoPlayer 1.10.1 APK in a foreground service | **Après MQ2-follow-up** : app **64 200 ms / 1 865 s = 3,442 % of one core**, **42 titres distincts, 0 rechargement**, cache audio **vidé** avant le run (43 spools créés pendant → tout streamé), service de premier plan tenu 31 min (`SOAK` line in the section). MQ2's reference app run **14 110 ms / 601 s = 2,348 %** (14 titles, the queue then looped — the defect MQ2-follow-up fixed ; 10 min, service non-premier-plan, session média déjà détruite, `media_descriptions: 0`) ; ExoPlayer **32 910 ms / 601 s = 5,476 %** → **0,63× the baseline**, under the **1,3×** threshold that reopens the engine decision (**7,12 %**). MB3c's own 30-minute streamed run measured 52 420 ms / 1 755 s = 2,99 % (test app, no notification/UI) : le phone réel est à **1,15×** — le prix du premier plan. Les sondes événements/spool à 10 ms sont gardées (le fil d'événements pesait 0,8 %) ; le back-pressure du décodeur reste à 2 ms parce que 5 ms casse la listen party (**−1 770 ms**). |
 | Network | `NzCore::stats()` per screen tag, cold and warm; counted at the peer (the bench server's access log) for one journey | **36 requests** for a whole journey: `/api/stream` 6, `/api/me` 6, `/api/playlist` 6, `/api/album` 2, `/api/search?q=storm` **1**, the home's seven (`/api/releases`, `/api/moods`, `/api/recommend`, `/api/recap`, `/api/discover`, `/api/flow`, `/api/explorer`) once each plus a second pass, `OPTIONS /api/playlist-folders` 2. One request per screen, **no fan-out**; a warm screen costs 0. Bytes (one response each, curl against the same server): `/api/me` **354 B**, 8 000 favorites **4 393 538 B** in ONE request, the 4 000-title playlist **2 196 137 B**, the 50-title one **28 296 B**, the album **1 464 B**, the search **25 752 B**, a 45 s Opus 320 stream **1 891 231 B**. The SPA's bench read 672 kB for 4 000 favourites (D17), i.e. 168 B/row against the phone's 549 B/row for the same route — one request in both, a payload-shape difference to investigate (follow-up). |
-| Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open **before p50 24,5 / p95 775,0 ms**, **after p50 19,7 / p95 161,4 ms** (3 iterations; MQ2's first record was p50 14,6 / p95 562,5). The cause was NOT a decoded sleeve — no `NzCoverLoader` is wired in this tree, every cover is its deterministic groove — but the full-screen `Modifier.blur` of the player's backdrop: a `RenderEffect` renders the subtree into an offscreen layer, and SwiftShader then compiled five programs (`CircleOp`, `FillRectOp`, `EllipseOp`, `TextureOp`) in the frame: **676 ms `DrawFrames`, of which 511 ms `flush commands`**. Without the blur the first frame still pays SwiftShader's first-use `FillRectOp` program (61 ms) and `eglSwapBuffers` (41 ms); it is the software rasteriser, not the app, so **16,7 ms stays the phone budget and is owed a device run**. Scroll budgets p95 ≤ 16,7 / p99 ≤ 25 remain MET on the emulator. |
+| Smoothness | Macrobenchmark `FrameTimingMetric` on: library scroll (8 000), queue scroll (4 000), full-screen player open | favourites 8 000: **p50 7,6 / p95 9,2 / p99 10,3 ms**; playlist 4 000: **p50 7,6 / p95 9,5 / p99 49,4 ms**; player open **before p50 24,5 / p95 775,0 ms**, **after p50 19,7 / p95 161,4 ms** (3 iterations; MQ2's first record was p50 14,6 / p95 562,5). The cause was NOT a decoded sleeve — no `NzCoverLoader` is wired in this tree, every cover is its deterministic groove — but the full-screen `Modifier.blur` of the player's backdrop: a `RenderEffect` renders the subtree into an offscreen layer, and SwiftShader then compiled five programs (`CircleOp`, `FillRectOp`, `EllipseOp`, `TextureOp`) in the frame: **676 ms `DrawFrames`, of which 511 ms `flush commands`**. Without the blur the first frame still pays SwiftShader's first-use `FillRectOp` program (61 ms) and `eglSwapBuffers` (41 ms); it is the software rasteriser, not the app, so **16,7 ms stays the phone budget and is owed a device run**. Scroll budgets p95 ≤ 16,7 / p99 ≤ 25 remain MET on the emulator. **Depuis JF (2026-11-27) le fond ne paie plus de `RenderEffect`** : il décode 96 × 96 et floute en Kotlin, **0,38 ms par flou** mesurés sur le JVM (`PlayerBackdropTest`), une fois par titre, hors du fil principal ; `playerOpen` reste tenu à **≤ baseline + 10 %** par la porte nocturne (`perf-gate.py`), qui nomme les deux nombres — le chiffre d'émulateur de ce changement est dû au prochain passage sur une machine à KVM. |
 | Underruns | `output_stats().underruns` (AAudio `getXRunCount` / AudioTrack `getUnderrunCount`) and `rebuffers` | AAudio probe (MQ1's `aaudio-probe.c`): **0 xrun** over 60 s at 48 000 Hz, 500 ms buffer. During the 30-minute soak `dumpsys media.audio_flinger` read `Normal mixer raw underrun counters: partial=0 empty=0`. **rebuffers: 0** during the journey's playback, read from the report's `rebuffers : N` — the app's own `Core::rebuffers` (one increment per `SeekDeferred`: the SOURCE starved, never the mixer) is now counted and drawn by `Assistance` with no tap. The run's playback was the archived album, so 0 is the expected value for it. The throttled `gsm`/`edge` profile was not run. |
 | APK | `apkanalyzer`/`measure.sh apk` on the release build | **universal 54 580 998 B (52,1 MB)** for three ABIs, **arm64-v8a 21 473 481 B (20,5 MB)**, armeabi-v7a 16 574 985, x86_64 25 841 660 — the 45 MB target is a *download's* and every per-ABI APK meets it with room (the universal keeps all three ABIs for sideloading: see *MQ2 — la taille*). `classes.dex` 8 293 956 B; `libnz_ffi.so` arm64-v8a **16 322 520 B**, armeabi-v7a 11 473 160, x86_64 20 739 864 — the 9 MB target is MISSED by 1,8×, and cannot be met: **4 571 020 B (23 %) are the `panic = "unwind"` tables UniFFI's error contract requires** and the rest is the 1:1 feature code (*MQ2 — la taille* measures every step and names the refused levers). The CI ceiling is `mobile/tools/size-guard.sh`. |
 | Coexistence | `mobile/tools/coexist.sh` on emulator-5620 (API 35 x86_64, `-no-window -no-audio`, boot **10 s**): old APK then native APK on the SAME device; packages, launchers, processes, media services; each channel downloaded from a local server (`/api/android/apk` vs `/api/android/native-apk?abi=`) and updated; uninstall one, check the other; then `NzMediaServiceTest` against `mobile/tools/tone-server.py` | **both installed** (old 7 979 817 B / native universal 54 633 838 B, data dirs `/data/user/0/{org.nsupysonic.app,fr.neezer.mobile}`), **both launched** (pids 2031 / 2067 alive together), **both media services declared**; channels: old **7 979 816 B** `org.nsupysonic.app`, native **54 633 848 B** `fr.neezer.mobile`, both byte-identical to the files served, `X-NS-Version 9.0.0 / 9.1.0`; updates **9001 → 9002** on each, the other app's `versionCode` and `lastUpdateTime` unchanged; uninstall old → native stays, uninstall native → old stays; final state both installed. **Playback: 7/7 `NzMediaServiceTest` pass** on the rebased tree (clock moved, AAudio 48 000 Hz / 500 ms, **0 underrun**, queue advanced through 4 titles, notification title/artist/artwork, headset keys, focus/noisy). Native splits: arm64-v8a **21 489 457 B**, armeabi-v7a **16 587 250 B**, x86_64 **25 861 732 B**. |
@@ -6068,6 +6081,18 @@ only its two seams changed:
    épingler/monter) and asserts the drawn pill is still 40 dp and the back
    circle 44 dp; Robolectric needs `@GraphicsMode(NATIVE)`, LEGACY measures
    one pixel per character.
+   Hors de l'artefact, quatre contrôles restaient sous le plancher et AUCUNE
+   capture ne les voyait : la poignée de déplacement du lecteur voiture (44 dp),
+   « Je suis passager » (30 dp), le champ de recherche (30 dp) et les touches de
+   clavier sur un écran compact (42 dp). `iconButton` prend un `touchDp` (boîte
+   48, cercle 44 dessiné dedans), la touche passager grandit à 48 avec un
+   `InsetDrawable` vertical de 9 dp, et le clavier compact passe à 48.
+   `CarTargetsTest` (Robolectric, NATIVE) instancie `CarPlayerView` (mesuré à
+   411 × 866 dp) et `CarSearchView` (mesuré à 640 dp de large : dix touches ne
+   peuvent pas faire 48 dp dans 411, et le fichier nomme lui-même « a 640 dp car
+   screen ») avec un `CarHost` factice, parcourt **toutes** les vues cliquables
+   annoncées (`IMPORTANT_FOR_ACCESSIBILITY_NO` exclu, la règle de `precheck`) et
+   imprime `MEASURE car targets: <n> vues, 0 sous 48 dp`.
 
 
 **Measured.**
@@ -7637,12 +7662,12 @@ est une copie floue de la pochette courante, et la colonne vit dans les barres s
 - **`beyondViewportPageCount` reste 0**, contre le `1` du plan. Les voisines sont déjà composées par
   le peek (`pageSpacing = 14.dp` et le `contentPadding` qui centre la case) ; `1` compose une
   quatrième pochette jamais vue. Mesuré : **+2 décodages par changement avec `1`, +1 avec `0`**.
-- **Le fond est une copie 120 dp, floue, mise à l'échelle.** `PlayerBackdrop` (son fichier) dessine
-  `blur(12.dp)` (API 31+) et couvre l'écran par un `graphicsLayer` **extérieur** au blur : la couche
-  du blur est bornée à 120 dp et rogne ce qu'on mettrait à l'échelle dedans (mesuré : un petit
-  rectangle sombre derrière le titre au lieu du champ plein écran). Sous API 31, repli à l'ancienne
-  image 900 dp. La pochette de fond est dessinée en `RectangleShape` : ses coins arrondis, mis à
-  l'échelle 3 à 8 fois, feraient quatre encoches visibles.
+- **Le fond est la pochette, floutée en Kotlin.** `PlayerBackdrop` (son fichier) demande les
+  PIXELS au seam (`NzCoverLoader.bitmap(url, 96)`), floute 96 × 96 hors du fil principal
+  (`nzBlurBitmap`, flou boîte séparable, 3 passes, rayon 5) et peint le champ, saturé à 1,6 ; sans
+  pochette il peint la rainure du titre (`nzGrooveBitmap`, le MÊME dessin que `CoverImage` depuis
+  `nzPaintGroove`). C'est la seule voie sur tous les niveaux d'API — voir la section *JF* pour les
+  raisons (le `Modifier.blur` 120 dp de P1 ignorait `blur` sous API 31 et coûtait 775 ms de p95).
 - **La colonne dans les barres.** `statusBarsPadding()` puis `navigationBarsPadding()` avant les
   4 dp du lot (M5). Et `CoverImage(url, sizeDp = size)` (M12) : la pochette se dessine à la taille
   de sa case, plus dans une boîte 420 dp rognée en haut à gauche.
@@ -7652,8 +7677,9 @@ même défaut de contrat : le lecteur redemandait ce qu'il avait déjà. La corr
 requête ni travail de fond ; elle retire même une page décodée par ouverture.
 
 **Mesuré.** `PlayerCoverReuseTest` (Robolectric, 360 dp, un chargeur factice qui enregistre chaque
-`Image(url, sizePx)`, file de 6 titres) : ouverture = **3 pochettes distinctes** à la taille de la
-scène (512 px) plus **1** copie de fond à 240 px (le décodage 120 dp, zéro réseau) ; chaque `next()`
+`Image(url, sizePx)` et chaque `bitmap(url, sizePx)`, file de 6 titres) : ouverture = **3 pochettes
+distinctes** à la taille de la scène (512 px) plus **1** décodage de fond à 96 px (zéro réseau) ;
+chaque `next()`
 = **+1** (la nouvelle voisine, `/api/cover/3` puis `/api/cover/4`) ; un snapshot réémis sans
 changement de piste = **0**. `p1TheSleeveFillsItsSlot` tourne aux trois largeurs (360/600/1280) :
 **3 cases, 3 pochettes**, chaque rect dessiné égal à sa case à **1 dp près**, et l'en-tête à **≥ 4 dp
@@ -7673,6 +7699,76 @@ il se lit avant `captureP1`, comme le fait `player()` dans le même fichier.
 
 **Hors portée.** Le geste de fermeture (P2), la rail de position, le transport, les panneaux, les
 colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fond du SPA (`lib/backdrop.js`).
+
+### JF — les défauts du juge, et le lecteur qui suit le doigt (delivered 2026-11-27)
+
+**La règle.** Ce que le juge compte doit être corrigé à la source, pas dans le juge : la grille et
+`precheck.py` ne changent pas. Cinq défauts, cinq réponses.
+
+- **Le mode voiture touche 48 dp partout, y compris là où la capture ne regarde pas** (C48 porté,
+  puis complété). Voir la règle 5 de *The rule each seam had to learn*, plus haut : les treize
+  cibles de `07-mode-voiture` plus les quatre contrôles hors artefact (poignée 44, passager 30,
+  champ 30, touches compactes 42), tenus par `CarSettingsActivityLaunchTest` et `CarTargetsTest`.
+- **Le fond du lecteur est la pochette, floutée, ou la rainure du titre.** `Modifier.blur` est
+  ignoré sous Android 12
+  ([Android](https://developer.android.com/develop/ui/compose/graphics/images/customize#blur)) :
+  l'ancien repli peignait la pochette NETTE à 900 dp sur tout appareil < 12 (le juge la compte
+  « pochette nette », C3), et à partir de 12 le `RenderEffect` plein écran coûtait la première
+  image **p95 775 ms** sur SwiftShader (MQ2). Une seule voie désormais : décoder 96 × 96, flouter
+  ces pixels en Kotlin (`nzBlurBitmap`, hors du fil principal, une fois par titre), peindre le
+  champ saturé à 1,6. Sans pochette, `nzGrooveBitmap` peint la rainure du titre : l'ancien code
+  sortait sur `cover == null` et laissait `Sillon.colors.bg` à l'octet (mesuré sur 09/11 de #447).
+  Le voile passe de 0,72→0,94 à 0,58/0,50/0,92 : sur Encre, 68-72 % de fond ne laissaient que 28 %
+  de la pochette — un champ `(38,44,49)`, chroma 11, que le juge ne peut pas nommer. À 45 % le
+  champ vaut `(44,57,70)` (luminance 56, texte blanc à 5,9:1, chroma 26). La saturation porte la
+  lisibilité sans toucher à la luminance ; la normalisation de niveau du SPA (`levelFactor`) a été
+  considérée puis écartée : sur un voile sombre elle ne fait que baisser la pochette claire.
+  Référence de forme : Haze (<https://github.com/chrisbanes/haze>), qui capture une source et
+  floute, avec un repli obligatoire.
+- **Le lecteur suit le doigt ; c'est le BANC qui glissait dans le mauvais sens.** Le geste du
+  parcours partait vers le HAUT (`y_end = y0 - height * 4 / 10`) alors que la feuille ne se ferme
+  que vers le bas et refuse explicitement un glissement vers le haut au repos (`NowPlaying.kt`,
+  « an upward one has nowhere to go »). Le suivi 1:1 est déjà tenu par `PlayerSheetGestureTest`
+  (`theSheetFollowsTheFingerOneToOne`, 60 dp de doigt = 60 dp de feuille ± 1 ; six images puis un
+  fling qui atterrit sur le cran fermé). Aucune ligne du lecteur ne change : le parcours glisse vers
+  le bas (60 % de la hauteur, 3 000 ms, capture à 1,6 s = 43 % de la feuille, au-dessus du seuil de
+  28 %), puis prend l'arbre APRÈS la relâche — `uiautomator` attend l'inactivité, donc un dump
+  pendant le geste rend le dernier état stable, ce qui avait produit un 11 identique à 09. Un garde
+  `cmp` échoue si les deux arbres sont identiques. Références du comportement attendu :
+  [anchoredDraggable](https://developer.android.com/develop/ui/compose/touch-input/pointer-input/drag-swipe-fling#anchoredDraggable),
+  [feuilles Material 3](https://developer.android.com/develop/ui/compose/components/bottom-sheets) et
+  Apple, *Designing Fluid Interfaces* (WWDC 2018, les deux ressorts 28 % / 125 dp/s).
+- **Le banc du parcours vit jusqu'à la dernière porte.** `release-signin.sh` arrêtait son serveur à
+  la sortie (`trap cleanup EXIT`), donc tout ce qui suit la connexion était hors ligne : la
+  bibliothèque peignait « Tes favoris n'ont pas pu se charger — Hors ligne » et la pochette du
+  titre suivant n'arrivait jamais (08/09). `--handoff <dir>` confie le serveur et le certificat TLS
+  à l'appelant, qui les garde jusqu'à la fin ; une porte Bibliothèque qui lit « Hors ligne » alors
+  que le banc tourne échoue en nommant sa cause.
+- **Le bouton de fermeture n'avait rien à corriger** : voir *Le juge*, zone tactile 48 × 48.
+
+**Mesuré.** `PlayerBackdropTest` (Robolectric, NATIVE, la pochette du banc) : le flou garde la
+moyenne à **±2 par canal** ((194,214,231) → (193,212,229)) et l'écart entre pixels voisins tombe de
+**140 à 10** ; il coûte **0,38 ms** (96 × 96, 3 passes, rayon 5) et **0,73 ms** avec la rainure. Le
+champ du lecteur aux trois points du juge : **10 % luminance 114** (70 avant), **45 % chroma 26**
+(11 avant), **90 % à 31 du fond** (0 avant). Sans pochette : le champ quitte le fond de **48** en
+haut et **41** au milieu, chroma **43** (le fond d'Encre est à 0-1), donc la rainure et non un
+aplat. Le même rendu sous **API 30 et API 34** est identique à **0 par canal** — la fin du fossé
+« sous API 31 ». `PlayerCoverReuseTest` compte désormais le décodage de fond : **1 par pochette
+distincte à 96 px, 0 requête réseau**, et 0 sur un snapshot réémis. `CarTargetsTest` imprime
+`MEASURE car targets: <n> vues, 0 sous 48 dp` pour le lecteur (411 × 866 dp) et la recherche
+(compacte et non compacte, 640 dp de large).
+
+**Deux assertions du plan corrigées, avec le nombre mesuré.** (1) La table B.4 annonçait
+`(44,57,70)` à 45 % : c'est le calcul avec l'ANCIEN voile (0,72→0,94), pas avec les arrêts du
+correctif (0,58/0,50/0,92), qui laissent exprès passer la pochette — mesuré (82,90,97), luminance
+86, chroma 26. L'assertion « luminance(10 %) − luminance(45 %) ≥ 40 » mesurait donc le voile ; elle
+compare désormais le haut et le bas (`114 − 35 = 79`), ce que « un dégradé, pas un aplat » veut
+dire. (2) « σ ≥ 1 » pour la rainure floutée était trop serré (σ mesuré 0,63 : un flou de rayon 5
+sur des anneaux de 6 px lisse presque tout) ; « pas un aplat » se lit à la TEINTE, et le chroma
+mesuré est 43 contre 0-1 pour le fond.
+
+**Hors portée.** La réécriture du geste (`AnchoredDraggable`, `ModalBottomSheet`), la grille du juge,
+`precheck.py`, les PR `ui` autres que la première jugée (elles se rebasent après le merge).
 
 ### X1 — L'écran qui entre : 200 ms, 8 dp, et rien pour un balayage d'onglet (delivered 2026-11-26)
 
