@@ -61,7 +61,7 @@ them cost the person their patience.
    `tools/perf_api.py`, `webapp/test/clicks/run.mjs`, `webapp/test/ui/run.mjs`,
    `webapp/test/requests/run.mjs` (all in [commands.md](docs/agents/commands.md)).
 5. **Premium UI.** Every screen looks like a senior design team sweated it: no cramped controls, no
-   default-looking widget, no micro-freeze, no emoji (glyphs through `Icon.svelte`), French UI copy.
+   default-looking widget, no micro-freeze, no emoji (glyphs through `Icon.svelte`), no help or explanatory lines (a screen is clear without them; if it is not, fix the screen), French UI copy.
    When a layout feels off it IS off — fix the small inconsistencies too.
 6. **Everything configurable is configurable from the web UI** (Réglages), API keys and credentials
    included; only file paths may stay config-file-only. A value set in the UI lives in `Meta` and
@@ -212,8 +212,7 @@ read by `docker/entrypoint.sh`; the pre-rebrand `SUPYSONIC_*` names still work) 
 
 ## Keeping these notes useful
 
-- This file stays under 16 KB (`tests/test_agent_docs.py` checks it, and that every area file is
-  listed in the table). New detail goes into the area file it belongs to.
+- This file stays under 16 KB (`tests/test_agent_docs.py`). New detail goes in area files.
 - An area note states the rule, why it exists, and the number that proved it — not a changelog.
 - Stale notes are worse than none: when code changes a documented behaviour, update the note in
   the same PR.
