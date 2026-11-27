@@ -88,6 +88,13 @@ def setup_deezer(app):
 
             _dm.resume_if_interrupted(app)
 
+            # Covers fetched before the store existed live only in the cache:
+            # the first boot after the upgrade copies them next to the sounds,
+            # and a run cut by a restart picks itself back up.
+            from .deezer import coverstore as _cs
+
+            _cs.autostart(app)
+
             from . import trackcredits
 
             trackcredits.start_if_needed(app)

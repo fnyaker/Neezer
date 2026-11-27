@@ -5737,6 +5737,14 @@ def _album_cover_response(cid, vetted):
     local = library.album_cover_file(alb)
     if local:
         return send_file(local, conditional=True)
+    # The store next: once this server has fetched the sleeve it is OURS, kept
+    # with the archive, and a cache wipe or a restart must not cost it. One
+    # stat, where the embedded fallback below would decode the audio.
+    from ..deezer import coverstore
+
+    stored = coverstore.local_cover(_cover_archive_dir(), "album", alb.id)
+    if stored:
+        return send_file(stored, mimetype="image/jpeg", conditional=True)
     for tr in alb.tracks.where(Track.last_modification > 0).limit(20):
         if (vetted or _may_access_track(tr)) and os.path.isfile(tr.path):
             found = _serve_embedded_cover(tr)
@@ -5762,6 +5770,11 @@ def _album_cover_response(cid, vetted):
     return jsonify({"error": "not found"}), 404
 
 
+def _cover_archive_dir():
+    """The archive root that holds ``Covers/`` (no provider object needed)."""
+    return (current_app.config.get("DEEZER") or {}).get("archive_dir")
+
+
 def _safe_cover_path(path, provider, cache):
     """``path`` when it lives under the archive or the cover cache, else None.
 
@@ -5771,7 +5784,11 @@ def _safe_cover_path(path, provider, cache):
     """
     if not path:
         return None
-    for root in (getattr(provider, "archive_dir", None), getattr(cache, "_cache_dir", None)):
+    roots = (
+        getattr(provider, "archive_dir", None) or _cover_archive_dir(),
+        getattr(cache, "_cache_dir", None),
+    )
+    for root in roots:
         if not root:
             continue
         try:
@@ -5824,30 +5841,24 @@ def cover_response(cid, *, vetted=False):
     cache = current_app.cache
     try:
         if not _valid_id(cid):
-            # A UUID that is not an album: artist/playlist/podcast art, which
-            # only the provider can name. Fetched once, kept on our disk (see
-            # `deezer_cover_path`) — the DEVICE never has to reach the CDN.
-            if provider is None:
-                return jsonify({"error": "not found"}), 404
-            path = archive.deezer_cover_path(provider, cache, cid)
+            # A UUID that is not an album: artist/playlist/podcast art. Read
+            # from the archive store first; only a sleeve we do NOT hold costs a
+            # provider call (see `deezer_cover_path`), and a provider that is
+            # switched off still serves what is on disk.
+            path = archive.deezer_cover_path(provider, cache, cid, _cover_archive_dir())
             if path:
                 safe = _safe_cover_path(path, provider, cache)
                 if safe:
                     return send_file(safe, mimetype="image/jpeg", conditional=True)
             return jsonify({"error": "not found"}), 404
-        if provider is None:
-            return jsonify({"error": "not found"}), 404
-        key = f"deezer-cover-{cid}"
-        if cache.has(key):
-            return send_file(cache.get(key), mimetype="image/jpeg", conditional=True)
-        if track is not None and track.album is not None and track.album.cover_md5:
-            md5 = track.album.cover_md5
-        else:
-            md5 = provider.get_track_info(cid).get("ALB_PICTURE")
-        data = provider.fetch_cover(md5) if md5 else None
-        if not data:
-            return jsonify({"error": "not found"}), 404
-        return send_file(cache.set(key, data), mimetype="image/jpeg", conditional=True)
+        # A track's sleeve is its album's, and it lives in the archive store:
+        # the same file the album endpoint writes, read with no Deezer call.
+        path = archive.deezer_cover_path(provider, cache, cid, _cover_archive_dir())
+        if path:
+            safe = _safe_cover_path(path, provider, cache)
+            if safe:
+                return send_file(safe, mimetype="image/jpeg", conditional=True)
+        return jsonify({"error": "not found"}), 404
     except Exception:
         logger.debug("Cover fallback failed", exc_info=True)
         return jsonify({"error": "not found"}), 404
@@ -6182,6 +6193,7 @@ from . import genreshare  # noqa: E402,F401  isort:skip
 from . import export  # noqa: E402,F401  isort:skip
 from . import credits  # noqa: E402,F401  isort:skip
 from . import diskmigrate  # noqa: E402,F401  isort:skip
+from . import coverstore  # noqa: E402,F401  isort:skip
 from . import party  # noqa: E402,F401  isort:skip
 from . import remote  # noqa: E402,F401  isort:skip
 from . import youtube  # noqa: E402,F401  isort:skip

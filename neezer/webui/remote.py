@@ -352,6 +352,8 @@ POLICY = {
     "analysis_schedule_set": "admin",
     "archive_migrate_start": "admin",
     "archive_migrate_status": "admin",
+    "archive_covers_start": "admin",
+    "archive_covers_status": "admin",
     "genre_relabel": "admin",
     "genre_sounds": "admin",
     "genre_share_export": "admin",
