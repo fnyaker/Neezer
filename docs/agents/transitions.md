@@ -143,6 +143,14 @@ animates the overlay's `background-color` alpha instead of its opacity (rule M8)
 - **M10 — `collapse` (height) only for small blocks.** It costs one layout per frame (12 layouts measured over
   200 ms). Allowed for an accordion/details body under ~400 px tall that is not above a non-windowed list of
   more than 200 nodes; otherwise expand instantly and fade the content in (`fadeIn`).
+- **M16 — Nothing that appears on its own animates into place by moving the layout.** A transition may
+  change opacity and `transform`; it may not change the height or the flow position of what it appears
+  in, or every line that lands shoves the screen (the synced lyric line did: the carousel and the
+  transport jumped 43.8 px per line at 412x915, CLS 0.0643). The box holds its size (`cur-lyric` is
+  three lines tall, empty or not, `height` fixed) and `swap` fades/leans the line inside it; a notice
+  floats (`position: fixed`) instead of being inserted above the page. `webapp/test/ui/run.mjs`
+  (`SHIFT_ONLY=1`) holds the sum of `layout-shift` at 0. A displacement the PERSON caused (a sheet, a
+  tab, an accordion) stays M10's business.
 - **M11 — No stagger, no spring overshoot, no parallax.** One element, one curve. Stagger multiplies cost on
   300-tile grids and reads as "heavy"; overshoot is Apple's "very little" at best and looks cheap on the web.
 - **M12 — Hand-offs by event, not by clock.** When a covering layer opens (full-screen player), what it hides

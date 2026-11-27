@@ -781,11 +781,14 @@
     box-shadow: 0 30px 70px color-mix(in srgb, var(--bg) 70%, transparent);
   }
 
-  /* current synced lyric line, above the cover (up to 3 lines) */
+  /* current synced lyric line, above the cover (up to 3 lines). Fixed at
+     three lines, empty or not, so a line arriving, going away or wrapping
+     never moves the cover, the pills or the transport under it. */
   .cur-lyric {
-    min-height: 26px;
-    /* grid stack: the crossfading lines share one cell, so the box grows to
-       fit the tallest line instead of clipping long ones to a single row */
+    height: calc(3 * 1.3 * 1.1rem);
+    overflow: hidden;
+    /* grid stack: the crossfading lines share one cell, centred in the box
+       instead of growing it */
     display: grid;
     justify-items: center;
     align-items: center;
@@ -1344,9 +1347,6 @@
     .cover,
     .main.steer .cover {
       width: min(24vh, 100%);
-    }
-    .cur-lyric {
-      min-height: 20px;
     }
     .t {
       font-size: 26px;

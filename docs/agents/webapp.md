@@ -79,6 +79,19 @@ pages, sheets, menus, rows, lists, the player's chrome — is [transitions.md](t
   The watcher is keyed on `currentId` — a STRING, because `current` re-emits its object on every
   progress tick — and guarded on the sleeve URL it asked for, NOT a counter: replacing a queue emits
   A, null, A, and a counter loses A's answer and leaves the fallback up forever (seen in the browser).
+- **A spontaneous element reserves its space or floats; it never moves the rest.** What appears,
+  disappears or changes size on its own — not because the person tapped — must not push the screen:
+  the synced lyric line above the sleeve is the worst case (it appears, empties and wraps to three
+  rows while the song plays), so its box is ALWAYS three lines tall (`MobileNowPlaying`,
+  `DesktopNowPlaying`), empty included, and its swap animates opacity and transform only. Notices
+  and the "serveur ne répond pas" banner float under the top bar (`Notices.svelte`, `App.svelte`)
+  instead of entering the page's flow. Measured (`test/ui/run.mjs`, `SHIFT_ONLY=1`, six lines with
+  an empty one and a three-row one): the carousel's top went from 118.1 px with an empty line to
+  161.8 px with a three-row one (43.8 px of jump at 412x915, 42.4 px at 360x640, a one-row line
+  133.6) and the transport moved with it, CLS **0.0643 / 0.0825**; after, every box is still and
+  CLS **0** at both sizes. Dismissing the perf server's own notice moved the page by **120 px**
+  (200 → 80) before, **0** after.
+  A user-opened panel (a sheet, a tab, a menu) is out of scope: its expansion IS the person's action.
 - **A sleeve change is a WALK, not a cut** (`app.css`, `lib/backdrop.js`,
   `DesktopNowPlaying`/`MobileNowPlaying`). `--cover-ac` is a registered `<color>` (`@property`), so
   Pochette's whole accent — `--ac`, `--btn`, `--hrt`, `--ac-mark`, which are `var(--cover-ac)` —
