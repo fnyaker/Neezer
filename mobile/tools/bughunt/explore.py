@@ -1149,8 +1149,16 @@ class Walker:
             self.current = None
             self.forget()
 
+    # A screen a person can come back to has a NAME. A loading placeholder and
+    # the proxy's own 503 notice are states, not screens: the pass discovered
+    # them at run 45929355454 (three of them, 0 element each) and paid the full
+    # restore cycle — `am force-stop` + the tap path — to re-open nothing.
+    TRANSIENT = ("Chargement", "Deezer proxy disabled")
+
     def discover(self, after: dict, path: list[tuple[int, int]]) -> None:
         name = after["name"]
+        if name.startswith(self.TRANSIENT):
+            return
         existing = self.by_name.get(name)
         if existing is not None:
             if existing.hash != after["hash"] and "·" not in existing.name:
@@ -1487,6 +1495,15 @@ def scenario_burst(walker: Walker) -> dict:
     adb.tap(*next_point)
     walker.dump()
     title_one = media_title(adb)
+    # 40 taps at 100 ms restart the stream 40 times: the player is BUFFERING at
+    # the last one on this bench (measured, run 45929355454: `playing=0` with
+    # `title_changed=1`). The owner's symptom is a track that never starts, not
+    # one that starts 2 s later — so wait for PLAYING, then measure the clock.
+    for _ in range(30):
+        if playback_state(adb) == "PLAYING":
+            break
+        time.sleep(0.5)
+    playing = 1 if playback_state(adb) == "PLAYING" else 0
     clock_a = media_position(adb)
     time.sleep(1.5)
     clock_b = media_position(adb)
@@ -1499,13 +1516,13 @@ def scenario_burst(walker: Walker) -> dict:
     changed = 1 if title_after and title_before and title_after != title_before else 0
     changed_again = 1 if title_one and title_after and title_one != title_after else 0
     advanced = 1 if (clock_a is not None and clock_b is not None and clock_b > clock_a) else 0
-    playing = 1 if playback_state(adb) == "PLAYING" else 0
+    playing_end = 1 if playback_state(adb) == "PLAYING" else 0
     seconds = int(time.monotonic() - started)
     ok = bool(changed and changed_again and alive and not crash and advanced)
     result["verdict"] = "PASS" if ok else "FAIL"
     result["numbers"] = (f"taps=40 gap_ms=100 playing={playing} title_changed={changed} "
                          f"changed_again={changed_again} clock_delta={'yes' if advanced else 'no'} "
-                         f"crash={len(crash)} seconds={seconds}")
+                         f"playing_end={playing_end} crash={len(crash)} seconds={seconds}")
     result["line"] = (f"skip_burst={'ok' if ok else 'fail'} taps=40 gap_ms=100 playing={playing} "
                       f"title_changed={changed} crash={len(crash)}")
     return result
@@ -1588,14 +1605,24 @@ def scenario_settings(walker: Walker) -> dict:
 
 
 def open_settings_section(walker: Walker, label: str) -> bool:
-    """Open one named row of Réglages, proven by the screen that replaced it."""
-    dump = walker.dump()
-    row = next((w for w in dump.app_wraps if w.word == label and w.n.visible), None)
-    if row is None:
-        return False
-    walker.adb.tap(*walker.tap_point(row))
-    after = walker.dump()
-    return after.ok and not is_settings(after)
+    """Open one named row of Réglages, proven by the screen that replaced it.
+
+    The page scrolls: « Compte » (the only door to « Déconnexion », verified in
+    `SettingsCopy.kt`) sits below the fold, so a lookup on the first dump only
+    ever found the three sections at the top — measured on runs 45924564740 and
+    45929355454, where the session scenario tapped « Sources » and never saw the
+    logout button it was looking for.
+    """
+    for attempt in range(5):
+        dump = walker.dump()
+        row = next((w for w in dump.app_wraps if w.word == label and w.n.visible), None)
+        if row is not None:
+            walker.adb.tap(*walker.tap_point(row))
+            after = walker.dump()
+            return after.ok and not is_settings(after)
+        if attempt < 4:
+            walker.adb.swipe_up(dump.width, dump.height)
+    return False
 
 
 def scenario_session(walker: Walker) -> dict:
@@ -1607,15 +1634,14 @@ def scenario_session(walker: Walker) -> dict:
     if not walker.start_app() or not open_settings(walker):
         result["numbers"] = "« Réglages » introuvable"
         return result
-    dump = walker.dump()
-    sources = next((w for w in dump.app_wraps if w.word == "Sources" and w.n.visible), None)
-    if sources is None:
-        result["numbers"] = f"« Sources » introuvable dans Réglages ({dump.name})"
+    # « Déconnexion » lives in the « Compte » card (`SourcesSections.kt`,
+    # `AccountSection`), behind the « Compte » row of Réglages.
+    if not open_settings_section(walker, "Compte"):
+        result["numbers"] = "« Compte » introuvable dans Réglages"
         return result
-    adb.tap(*walker.tap_point(sources))
     logout = None
     where = ""
-    for attempt in range(10):
+    for attempt in range(8):
         dump = walker.dump()
         where = dump.name
         logout = next((w for w in dump.app_wraps if w.word == "Déconnexion" and w.n.visible), None)

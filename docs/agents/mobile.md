@@ -765,6 +765,20 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
   45924564740, la rafale a fait planter l'app (Bibliothèque → Historique, `IllegalStateException`),
   puis le scénario des réglages a lu ce même tampon et s'est arrêté à `crash=2 controls=0` — un
   verdict qui accusait les réglages du plantage d'un autre écran.
+- **la déconnexion est derrière « Compte », pas « Sources »** : `SettingsCopy.kt` porte la ligne
+  « Compte », `AccountSection` porte la carte « Compte » et son bouton `Déconnexion`. Aux runs
+  45924564740 et 45929355454 le scénario tapait « Sources » et ne trouvait donc jamais le bouton
+  qu'il cherchait (`« Déconnexion » introuvable sur « YouTube Music : reliez… »`). La ligne est
+  sous le pli de la page Réglages : `open_settings_section` glisse jusqu'à elle.
+- **un `Chargement…` et l'avis 503 ne sont pas des écrans** : la passe les découvrait comme des
+  écrans (trois au run 45929355454, 0 élément chacun) et payait pour chacun le cycle complet de
+  restauration (`am force-stop` + le chemin de taps) pour rouvrir rien. `Walker.TRANSIENT` les
+  laisse dans leur transition.
+- **la rafale attend `PLAYING` avant de mesurer l'horloge** : 40 taps en 100 ms relancent 40 fois
+  le flux ; sur ce banc le lecteur est encore `BUFFERING` au dernier (mesuré au run 45929355454 :
+  `playing=0 title_changed=1 changed_again=1`). Le symptôme du propriétaire est un titre qui ne
+  démarre jamais, pas un titre qui démarre 2 s plus tard : la rafale attend `PLAYING` (15 s au
+  plus) puis mesure la position sur 1,5 s, et nomme `playing_end` à part.
 - **un interrupteur Compose n'est pas `checkable`** : mesuré au run 45915988351, `checkable=0` sur
   dix des onze dumps (seules les six cartes d'énergie de l'accueil le portent). Le scénario des
   réglages ouvre donc chaque section de la page Réglages et tape ses contrôles **nommés**, en
