@@ -7709,6 +7709,13 @@ colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fon
   puis complété). Voir la règle 5 de *The rule each seam had to learn*, plus haut : les treize
   cibles de `07-mode-voiture` plus les quatre contrôles hors artefact (poignée 44, passager 30,
   champ 30, touches compactes 42), tenus par `CarSettingsActivityLaunchTest` et `CarTargetsTest`.
+  **Une page qui grandit doit encore tenir dans la fenêtre** : C48 a ajouté une rangée, et
+  `precheck` compte un contrôle qui CHEVAUCHE le bord de l'écran comme sous 48 dp
+  (`targets 07-mode-voiture below_48dp=1 first=« Réinitialiser la position » 169x1dp`, bornes
+  `[84,2398]-[528,2400]`, run 45940308425 — 48 dp à cheval sur 2400 px). Les paragraphes de la page
+  perdent une ligne chacun (la phrase Bluetooth passe de 4 lignes à 2) et les cartes s'espacent de
+  12 dp au lieu de 14 : les 13 cibles restent à 126 px (48 dp) et la dernière carte de l'écran est
+  entière.
 - **Le fond du lecteur est la pochette, floutée, ou la rainure du titre.** `Modifier.blur` est
   ignoré sous Android 12
   ([Android](https://developer.android.com/develop/ui/compose/graphics/images/customize#blur)) :
@@ -7756,6 +7763,12 @@ colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fon
   titre suivant n'arrivait jamais (08/09). `--handoff <dir>` confie le serveur et le certificat TLS
   à l'appelant, qui les garde jusqu'à la fin ; une porte Bibliothèque qui lit « Hors ligne » alors
   que le banc tourne échoue en nommant sa cause.
+- **Une capture attend le mouvement d'entrée.** `await_text` rend la main sur la PREMIÈRE frame de
+  l'écran qui entre, donc `shot` photographiait la page en train de passer par-dessus la
+  précédente : mesuré sur le run 45940308425, `06-lecture-et-son` portait les lignes de Réglages
+  sous « Transitions », une paire cliquable qui se chevauche et une cible de **48 × 22 dp** (le
+  fader de l'égaliseur attrapé en plein fondu). `shot` attend maintenant 350 ms — la durée du
+  mouvement d'entrée (200 ms, x1/S2), pas une devinette — avant le PNG et l'arbre.
 - **Le bouton de fermeture n'avait rien à corriger** : voir *Le juge*, zone tactile 48 × 48.
 
 **Mesuré.** `PlayerBackdropTest` (Robolectric, NATIVE, la pochette du banc) : le flou garde la

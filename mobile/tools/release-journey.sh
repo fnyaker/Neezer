@@ -77,6 +77,14 @@ shot() {
     [[ -n "$evidence" ]] || return 0
     local name="$1"
     mkdir -p "$evidence/screens"
+    # Wait for the push's enter motion before capturing. It is 200 ms (x1/S2: a
+    # fade plus an 8 dp rise), and `await_text` returns on its FIRST frame, so a
+    # capture taken then still contains the page being pushed over. Measured on
+    # run 45940308425: `06-lecture-et-son` had the Réglages rows painted under
+    # « Transitions » and its equaliser row read 48 × 22 dp — one clickable pair
+    # overlapping and one target under 48 dp, both artefacts of the fade. This is
+    # the motion's own duration, not a guess at how long a screen takes.
+    sleep 0.35
     adb_dev exec-out screencap -p >"$evidence/screens/$name.png" ||
         note "screencap failed for $name"
     dump_ui >"$evidence/screens/$name.xml" ||
