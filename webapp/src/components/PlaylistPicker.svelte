@@ -69,7 +69,6 @@
   // Bounded: a person with hundreds of playlists still gets a sheet that opens
   // at once; the filter (shown above six) is how they reach the rest.
   $: visible = shown ? shown.slice(0, LIST_MAX) : shown;
-  $: truncated = !!shown && shown.length > LIST_MAX;
   $: manyPlaylists = (editableList?.length || 0) > 6;
   $: suggestion = suggestName(all);
   $: formTitle = mode === "track" ? "Créer et ajouter" : "Créer";
@@ -266,15 +265,11 @@
           <h2>
             {#if mode === "queue"}Enregistrer la file en playlist{:else if mode === "new"}Nouvelle playlist{:else}Ajouter à une playlist{/if}
           </h2>
-          <p class="sub">
-            {#if track}
+          {#if track}
+            <p class="sub">
               {track.title}{artistLine(track) ? " · " + artistLine(track) : ""}
-            {:else if mode === "queue"}
-              Les titres de la file d'attente, dans l'ordre.
-            {:else}
-              Tu pourras y ajouter des titres ensuite.
-            {/if}
-          </p>
+            </p>
+          {/if}
         </div>
         <button type="button" class="close" on:click={closePlaylistPicker} aria-label="Fermer">
           <Icon name="close" size={18} />
@@ -340,9 +335,6 @@
                 </span>
               </button>
             {/each}
-            {#if truncated}
-              <p class="state">Filtre pour trouver les autres playlists.</p>
-            {/if}
           {/if}
         </div>
 
@@ -369,7 +361,7 @@
         </form>
 
         {#if mode === "queue" && !queueRefs.length}
-          <p class="hint">La file est vide : il n'y a rien à enregistrer.</p>
+          <p class="hint">La file est vide.</p>
         {/if}
       {/if}
     </div>

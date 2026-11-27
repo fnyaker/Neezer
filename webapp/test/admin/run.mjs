@@ -255,8 +255,8 @@ console.log("\n-- 1440x900: the list, search, pagination, invitations, accounts"
     "1440: reopening the created invitation shows no link field"
   );
   check(
-    (await page.getByText("Le lien n'est affiché qu'à sa création").count()) === 1,
-    "1440: the created invitation keeps only the copy action, with its explanation"
+    (await page.getByRole("button", { name: /Copier le lien/ }).count()) === 1,
+    "1440: the created invitation keeps only the copy action"
   );
   await page.locator('.dialog[role="dialog"] button[aria-label="Fermer"]').click();
 
@@ -318,7 +318,7 @@ console.log("\n-- 1440x900: the list, search, pagination, invitations, accounts"
   await page.getByRole("button", { name: "Ouvrir le compte de bench" }).click();
   await page.locator(".dialog[role='dialog']").waitFor({ timeout: 10000 });
   check(
-    (await page.getByText("Vous ne pouvez pas modifier votre propre compte ici.").count()) === 1,
+    (await page.getByText("Compte personnel : non modifiable ici.").count()) === 1,
     "1440: the self account is guarded in the UI"
   );
   const selfActions = await page.locator(".dialog button:disabled").count();

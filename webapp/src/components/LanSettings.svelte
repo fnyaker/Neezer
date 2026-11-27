@@ -346,11 +346,7 @@
       <div>
         <h2>Échange entre appareils désactivé</h2>
         <p class="muted sub">
-          Ce serveur n'accepte plus l'échange direct entre appareils proches. Ce qui est déjà
-          téléchargé reste lisible partout&nbsp;; sans serveur, un appareil ne renouvelle plus sa clé
-          et cesse d'échanger à son expiration.
-          {#if isAdmin}Réactivez-le dans « Serveur », en bas de cette page.{:else}Demandez à
-            l'administrateur du serveur de le réactiver.{/if}
+          {#if isAdmin}Réactivable dans « Serveur ».{:else}Demandez à un administrateur.{/if}
         </p>
       </div>
     </section>
@@ -361,16 +357,9 @@
       <h2>Mes appareils</h2>
       {#if devices.length}<span class="count muted">{devices.length}</span>{/if}
     </div>
-    <p class="muted sub">
-      Chaque appareil s'inscrit seul au premier contact, puis échange ses sons avec les vôtres sur le
-      réseau local.
-    </p>
 
     {#if !devices.length}
-      <p class="empty muted">
-        Aucun appareil inscrit. Ouvrez Neezer sur votre ordinateur ou votre téléphone&nbsp;: il
-        s'inscrira au premier contact avec le serveur.
-      </p>
+      <p class="empty muted">Aucun appareil inscrit.</p>
     {:else}
       <ul class="members">
         {#each devices as d (d.id)}
@@ -456,9 +445,6 @@
 
   <section class="card">
     <h2>Amis de confiance</h2>
-    <p class="muted sub">
-      Un ami de confiance prend vos sons sur ses appareils, et seulement ce que vous lui ouvrez.
-    </p>
 
     <form class="add" on:submit|preventDefault={addFriend}>
       <input
@@ -482,10 +468,7 @@
     {/if}
 
     {#if !shared.length}
-      <p class="empty muted">
-        Aucun ami de confiance pour l'instant. Ajoutez le compte d'une personne du serveur pour
-        l'autoriser à prendre vos sons sur ses appareils.
-      </p>
+      <p class="empty muted">Aucun ami de confiance.</p>
     {:else}
       <ul class="members">
         {#each shared as f (f.user_id)}
@@ -594,11 +577,6 @@
   {#if isAdmin}
     <section class="card">
       <h2>Serveur</h2>
-      <p class="muted sub">
-        Ces deux réglages valent pour tout le serveur&nbsp;: ils décident si les appareils peuvent
-        s'échanger des sons, et combien de temps la clé qu'un appareil présente à ses voisins reste
-        valable.
-      </p>
 
       {#if settingsError}
         <p class="row-error" role="alert">
@@ -615,10 +593,6 @@
         <button class="toggle" role="switch" aria-checked={!!settings.enabled} on:click={toggleFeature}>
           <span class="tg-txt">
             <span class="tg-title">Échanger entre les appareils de ce serveur</span>
-            <span class="tg-hint muted">
-              Coupé, plus aucun appareil ne s'inscrit&nbsp;: ceux qui le sont déjà cessent d'échanger
-              à l'expiration de leur clé. Rien de ce qui est téléchargé ne disparaît.
-            </span>
           </span>
           <span class="sw" class:on={!!settings.enabled}><span class="knob"></span></span>
         </button>
@@ -644,10 +618,7 @@
             <p class="row-error" role="alert"><Icon name="alert" size={14} /><span>{daysError}</span></p>
           {:else}
             <p class="muted small">
-              Un appareil renouvelle sa clé tout seul chaque jour où il joint le serveur. Plus la
-              durée est courte, plus un appareil perdu cesse vite d'échanger&nbsp;; {lan.daysLabel(
-                settings.credential_days,
-              )} par défaut.
+              Renouvelée chaque jour à la connexion · {lan.daysLabel(settings.credential_days)} par défaut.
             </p>
           {/if}
         </div>
@@ -662,11 +633,7 @@
         {/if}
         {#if confirmingRenew}
           <div class="renew">
-            <p class="muted small">
-              Une nouvelle clé signe les appareils à partir de maintenant. Ceux qui sont déjà inscrits
-              gardent la leur jusqu'à leur prochain renouvellement, et l'ancienne clé reste reconnue
-              90 jours&nbsp;: rien ne se coupe.
-            </p>
+            <p class="muted small">Ancienne clé valable 90 jours.</p>
             <div class="acts renew-acts">
               <button class="btn btn-sm btn-ghost danger" on:click={renewKey} disabled={rotating}>
                 {rotating ? "Renouvellement…" : "Confirmer le renouvellement"}

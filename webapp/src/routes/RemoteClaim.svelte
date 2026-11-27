@@ -47,11 +47,11 @@
       </p>
     {:else if phase === "offline"}
       <h1>Pas de connexion</h1>
-      <p class="muted">Le serveur est injoignable pour l'instant.</p>
+      <p class="muted">Serveur injoignable.</p>
       <button class="primary" on:click={claim}><Icon name="refresh" size={17} /> Réessayer</button>
     {:else}
       <h1>Ce lien n'est plus valide</h1>
-      <p class="muted">Il a été coupé ou il a expiré. Demandez-en un nouveau à la personne qui vous l'a envoyé.</p>
+      <p class="muted">Lien coupé ou expiré.</p>
       <button class="ghost" on:click={() => reloadHome()}><Icon name="home" size={17} /> Ouvrir l'app</button>
     {/if}
   </div>

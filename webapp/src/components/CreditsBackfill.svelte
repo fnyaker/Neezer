@@ -75,15 +75,11 @@
       <input type="checkbox" bind:checked={force} />
       Tout recommencer
     </label>
-    <span class="muted small">
-      {#if job?.tracks}
-        {job.tracks} titre{job.tracks > 1 ? "s" : ""} ont leurs crédits (compositeur, auteur, producteur…).
-        {job.completed ? "La bibliothèque archivée avant a été complétée." : "La bibliothèque archivée avant sera complétée au prochain démarrage."}
-      {:else}
-        Compositeur, auteur, producteur de chaque titre, gardés en base pour le lecteur plein écran, sans
-        jamais ralentir la lecture.
-      {/if}
-    </span>
+    {#if job?.tracks}
+      <span class="muted small">
+        {job.tracks} titre{job.tracks > 1 ? "s" : ""} avec crédits
+      </span>
+    {/if}
   {/if}
 </div>
 {#if job?.error}

@@ -172,8 +172,7 @@
             <p class="muted pad">Chargement des genres…</p>
           {:else if !tags.length}
             <p class="muted pad">
-              Aucun genre dans le vocabulaire. Créez-en d'abord dans le studio
-              (Bibliothèque&nbsp;→&nbsp;Genres).
+              Aucun genre dans le vocabulaire.
             </p>
           {:else}
             <input class="q" type="text" placeholder="Filtrer…" bind:value={query} autocomplete="off" />
@@ -189,12 +188,6 @@
             </div>
           {/if}
         </div>
-        <footer>
-          <p class="muted hint">
-            Rien n'est étiqueté à ce stade : vous verrez d'abord, titre par titre, ce
-            que chacun porte déjà et ce qu'en pense le modèle.
-          </p>
-        </footer>
       {:else}
         <div class="summary">
           {#if loadingPreview || !preview}
@@ -204,19 +197,18 @@
             <p>
               <strong>{c.tracks}</strong> titre{c.tracks > 1 ? "s" : ""} dans la bibliothèque{#if c.same}, dont {c.same} déjà {tag.name}{/if}.
               {#if c.other_tag + c.model}
-                <span class="warn">{c.other_tag + c.model} en désaccord</span>, laissé{c.other_tag + c.model > 1 ? "s" : ""} de côté par défaut.
+                <span class="warn">{c.other_tag + c.model} en désaccord</span>, laissé{c.other_tag + c.model > 1 ? "s" : ""} de côté.
               {/if}
             </p>
             {#if c.missing}
               <p class="muted small">
-                {c.missing} titre{c.missing > 1 ? "s ne sont" : " n'est"} pas encore dans la bibliothèque (ajoutez
-                {KIND[scope.kind] || "la sélection"} aux favoris pour les archiver, puis recommencez).
+                {c.missing} titre{c.missing > 1 ? "s" : ""} pas encore dans la bibliothèque.
               </p>
             {/if}
             {#if !preview.model.active}
-              <p class="muted small">Pas encore de modèle entraîné : seules les étiquettes existantes sont comparées.</p>
+              <p class="muted small">Pas encore de modèle entraîné.</p>
             {:else if !preview.model.knows}
-              <p class="muted small">Le modèle actif ne connaît pas encore {tag.name} : son avis est indiqué, sans compter comme un désaccord.</p>
+              <p class="muted small">Le modèle ne connaît pas encore {tag.name}.</p>
             {/if}
             {#if c.no_vector || c.unjudged}
               <p class="muted small">
@@ -487,11 +479,6 @@
     display: flex;
     justify-content: flex-end;
     gap: 10px;
-  }
-  .hint {
-    margin: 0;
-    font-size: 0.78rem;
-    line-height: 1.4;
   }
   .primary,
   .ghost {

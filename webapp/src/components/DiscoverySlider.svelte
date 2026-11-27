@@ -41,7 +41,6 @@
       >
     {/each}
   </div>
-  {#if !compact}<p class="hint muted">{step.hint}</p>{/if}
 </div>
 
 <style>
@@ -146,11 +145,6 @@
   .ticks button.on {
     color: var(--text);
     font-weight: 700;
-  }
-  .hint {
-    margin: 2px 0 0;
-    font-size: 0.82rem;
-    min-height: 1.2em;
   }
   .bare {
     max-width: 520px;

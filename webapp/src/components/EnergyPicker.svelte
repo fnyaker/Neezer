@@ -18,7 +18,6 @@
       role="radio"
       aria-checked={$startEnergy === s.value}
       class:on={$startEnergy === s.value}
-      title={s.hint}
       on:click={() => setStartEnergy(s.value)}
     >
       {#if $startEnergy === s.value}<Icon name="check" size={13} />{/if}

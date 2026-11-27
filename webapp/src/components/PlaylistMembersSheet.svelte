@@ -228,7 +228,6 @@
         on:click={() => removeMember(m)}
         disabled={busy === "member:" + m.id || !$online}
         aria-label={`Retirer ${m.name}`}
-        title="Retirer"
       >
         <Icon name="trash" size={17} />
       </button>
@@ -267,7 +266,7 @@
 
       <div class="body">
         {#if remote}
-          <p class="note">Gérez les collaborateurs depuis votre propre appareil.</p>
+          <p class="note">Depuis votre propre appareil.</p>
         {:else}
           {#if ownerRow}
             <div class="person owner" data-member={ownerRow.id}>
@@ -324,7 +323,7 @@
                   aria-pressed={newRole === "viewer"}
                   on:click={() => (newRole = "viewer")}>Lecture seule</button>
               </div>
-              <p class="hint">La personne doit déjà avoir un compte sur ce serveur.</p>
+              <p class="hint">Compte existant requis.</p>
               <button
                 type="submit"
                 class="btn btn-primary invitebtn"
@@ -343,10 +342,6 @@
                 ne ser{privateTracks > 1 ? "ont" : "a"} pas visible{privateTracks > 1 ? "s" : ""} par les autres.
               </span>
             </p>
-          {/if}
-
-          {#if !canManage && !remote}
-            <p class="foot-note">Seul le propriétaire peut renommer ou supprimer cette playlist.</p>
           {/if}
 
           {#if canLeave}

@@ -176,8 +176,7 @@
           <Icon name={result.ok ? "check" : "alert"} size={16} />
           <span>
             {#if result.ok}
-              Vérifié sur {r.tracks} titres : un même morceau se ressemble à {pct(r.same_track)} %,
-              deux morceaux différents à {pct(r.different_tracks)} %.
+              {r.tracks} titres · même morceau {pct(r.same_track)} % · autre morceau {pct(r.different_tracks)} %
             {:else}
               {r.reason || result.error || "échec de la vérification"}
             {/if}
@@ -200,10 +199,10 @@
         </label>
         <p class="st-dim small">
           <a href={extractor.model_url} target="_blank" rel="noopener">discogs-effnet-bsdynamic-1.onnx</a>
-          (≈ 18 Mo, Essentia). Il reste sur votre serveur.
+          (≈ 18 Mo)
         </p>
       {:else}
-        <p class="small">Configurez <code>cache_dir</code> dans <code>[webapp]</code> pour pouvoir importer un extracteur.</p>
+        <p class="small"><code>cache_dir</code> manquant dans <code>[webapp]</code>.</p>
       {/if}
     </div>
   {/if}

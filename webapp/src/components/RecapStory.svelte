@@ -300,7 +300,6 @@
 
   <div class="foot">
     <span class="count mono">{index + 1} / {ids.length}</span>
-    <span class="hint mono" aria-hidden="true">← →</span>
   </div>
 </div>
 
@@ -439,9 +438,6 @@
   .count {
     font-variant-numeric: tabular-nums;
   }
-  .hint {
-    opacity: 0.7;
-  }
   .sr {
     position: absolute;
     width: 1px;
@@ -461,9 +457,6 @@
     }
     .foot {
       padding: 6px 14px 10px;
-    }
-    .hint {
-      display: none;
     }
   }
   @media (prefers-reduced-motion: reduce) {

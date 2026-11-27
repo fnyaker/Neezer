@@ -799,9 +799,9 @@ test("the spectrum's band count is bounded, stable and pitches with the screen",
 
 test("every world in the loader is in the catalogue, and the reverse", async () => {
   // The loader (worlds/index.js: one literal import() per world, so each is its
-  // own chunk) and the catalogue (worlds/catalogue.js: names and blurbs, no
-  // shader) are separate files so that naming a world costs nothing. They have
-  // to agree, or a gallery offers a world that cannot load.
+  // own chunk) and the catalogue (worlds/catalogue.js: names only, no shader)
+  // are separate files so that naming a world costs nothing. They have to
+  // agree, or a gallery offers a world that cannot load.
   assert.deepEqual([...worldIds()].sort(), Object.keys(WORLD_META).sort());
   const groups = new Set(GROUPS.map((g) => g.id));
   const used = new Set();
@@ -809,7 +809,7 @@ test("every world in the loader is in the catalogue, and the reverse", async () 
     const meta = WORLD_META[id];
     assert.ok(groups.has(meta.group), `${id}: unknown shelf "${meta.group}"`);
     used.add(meta.group);
-    assert.ok(meta.label && meta.blurb, `${id}: no label or blurb`);
+    assert.ok(meta.label, `${id}: no label`);
     const def = await loadWorld(id);
     assert.equal(def?.id, id, `${id}: the module calls itself "${def?.id}"`);
   }

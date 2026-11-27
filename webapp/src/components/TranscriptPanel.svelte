@@ -927,7 +927,6 @@
       <span class="state-ico"><Icon name={loadError.offline ? "cloudOff" : "alert"} size={22} /></span>
       <h3>{loadError.offline ? "Transcription indisponible hors ligne." : "Transcription indisponible."}</h3>
       {#if loadError.message}<p>{loadError.message}</p>{/if}
-      {#if !loadError.offline}<p>Le serveur n'a pas répondu ; le texte reste sur le serveur.</p>{/if}
       <button type="button" class="btn ghost" on:click={refreshPage}>
         <Icon name="refresh" size={16} /> Réessayer
       </button>
@@ -937,13 +936,11 @@
       <div class="state-card">
         <span class="state-ico"><Icon name="cloudOff" size={22} /></span>
         <h3>Épisode non archivé</h3>
-        <p>L'épisode doit d'abord être archivé sur le serveur.</p>
       </div>
     {:else if !admin}
       <div class="state-card">
         <span class="state-ico"><Icon name="transcript" size={22} /></span>
         <h3>Aucune transcription</h3>
-        <p>Aucune transcription pour cet épisode.</p>
       </div>
     {:else if $transcribeSettings.state === "loading" && !canUseSettings}
       <div class="state-card" aria-busy="true">
@@ -953,13 +950,12 @@
       <div class="state-card">
         <span class="state-ico"><Icon name="transcript" size={22} /></span>
         <h3>Transcription indisponible</h3>
-        <p>La transcription n'est pas disponible sur ce serveur.</p>
       </div>
     {:else if $transcribeSettings.state === "error" && !canUseSettings}
       <div class="state-card">
         <span class="state-ico"><Icon name="alert" size={22} /></span>
         <h3>Impossible de vérifier la transcription.</h3>
-        <p>Le serveur n'a pas répondu. Rien n'a été lancé.</p>
+        <p>Le serveur n'a pas répondu.</p>
         <button type="button" class="btn ghost" on:click={() => loadTranscribeSettings(true)}>
           <Icon name="refresh" size={16} /> Réessayer
         </button>
@@ -981,11 +977,7 @@
       <div class="state-card">
         <span class="state-ico"><Icon name="transcript" size={22} /></span>
         <h3>Transcrire cet épisode</h3>
-        <p>Le texte est produit sur ce serveur à partir du fichier archivé. Rien n'est envoyé à un tiers.</p>
-        <p class="small">
-          Un épisode d'une heure demande souvent plus d'une heure de calcul ; le serveur continue si
-          vous fermez cet écran.
-        </p>
+        <p class="small">Le serveur continue si vous fermez.</p>
         <button type="button" class="btn primary" on:click={startEpisode} disabled={actionBusy || retryLeft > 0}>
           <Icon name="transcript" size={16} />
           {actionBusy ? "Envoi…" : retryLeft > 0 ? `Réessayez dans ${retryLeft} s` : "Transcrire cet épisode"}
@@ -997,7 +989,7 @@
     <div class="state-card">
       <span class="state-ico"><Icon name="transcript" size={22} /></span>
       <h3>En attente de transcription…</h3>
-      <p>La file avance ; le serveur continue si vous fermez cet écran.</p>
+      <p>Le serveur continue si vous fermez.</p>
       <span class="bar indeterminate" role="progressbar" aria-label="Progression de la transcription">
         <span data-motion="status"></span>
       </span>
@@ -1014,7 +1006,7 @@
         <span class="state-ico"><Icon name="transcript" size={22} /></span>
         <h3>Transcription en cours — {percent} %</h3>
         <p>{minutes(doneMs)} min transcrites sur {minutes(durationMs) || "?"}</p>
-        <p class="small">Elle se met en pause pendant que vous écoutez.</p>
+        <p class="small">En pause pendant l'écoute.</p>
         <span
           class="bar"
           role="progressbar"
@@ -1051,7 +1043,7 @@
         >
           <span style={`width:${percent}%`}></span>
         </span>
-        <p class="small">Elle se met en pause pendant que vous écoutez.</p>
+        <p class="small">En pause pendant l'écoute.</p>
       </div>
     {/if}
   {:else if status === "stopped"}
@@ -1059,7 +1051,6 @@
       <div class="state-card">
         <span class="state-ico"><Icon name="transcript" size={22} /></span>
         <h3>Transcription arrêtée à {percent} %.</h3>
-        <p>Le texte déjà transcrit reste sur le serveur.</p>
         {#if admin}
           <button type="button" class="btn primary" on:click={resumeEpisode} disabled={actionBusy || retryLeft > 0}>
             {actionBusy ? "Envoi…" : retryLeft > 0 ? `Réessayez dans ${retryLeft} s` : "Reprendre"}
@@ -1090,7 +1081,6 @@
           </button>
         {/if}
       </div>
-      <p class="small">Le texte déjà transcrit reste lisible.</p>
       {#if admin && errorCode && !errorMessage}<p class="small">{errorCode}</p>{/if}
       {#if actionError}<p class="alert" role="alert">{actionError}</p>{/if}
     </div>
@@ -1098,7 +1088,7 @@
     <div class="state-card">
       <span class="state-ico"><Icon name="transcript" size={22} /></span>
       <h3>Transcription vide</h3>
-      <p>Aucune parole n'a été reconnue dans cet épisode.</p>
+      <p>Aucune parole reconnue.</p>
       {#if admin}
         <div class="state-actions">
           <button type="button" class="btn ghost" on:click={openSettings}>
@@ -1145,7 +1135,6 @@
             type="button"
             class="clear"
             aria-label="Effacer la recherche"
-            title="Effacer la recherche"
             on:click={clearSearch}
           >
             <Icon name="close" size={14} />
@@ -1159,7 +1148,6 @@
             class="btn ghost"
             aria-haspopup="menu"
             aria-expanded={exportOpen}
-            title="Exporter la transcription"
             on:click={() => (exportOpen = !exportOpen)}
           >
             <Icon name="download" size={16} /> Exporter
@@ -1182,7 +1170,6 @@
             class="icon-btn"
             aria-label="Options de la transcription"
             aria-expanded={menuOpen}
-            title="Options de la transcription"
             on:click={() => (menuOpen = !menuOpen)}
           >
             <Icon name="more" size={18} />
@@ -1205,7 +1192,7 @@
 
     {#if menu === "relaunch"}
       <div class="confirm" role="group" aria-label="Relancer la transcription">
-        <p>Relancer la transcription ? Le texte actuel sera remplacé.</p>
+        <p>Relancer ? Le texte sera remplacé.</p>
         <div class="langs">
           {#each LANGUAGES as code (code)}
             <button
@@ -1228,7 +1215,7 @@
       </div>
     {:else if menu === "delete"}
       <div class="confirm" role="group" aria-label="Supprimer la transcription">
-        <p>Supprimer la transcription ? Le texte sera perdu ; l'audio reste intact.</p>
+        <p>Supprimer ? Le texte sera perdu.</p>
         <div class="confirm-actions">
           <button type="button" class="btn danger" on:click={removeTranscript} disabled={actionBusy}>
             {actionBusy ? "Suppression…" : "Supprimer"}

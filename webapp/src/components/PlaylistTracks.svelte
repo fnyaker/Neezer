@@ -171,7 +171,7 @@
 </div>
 
 {#if !rows.length}
-  <p class="muted empty">Cette playlist est vide. Ajoutez des titres pour commencer.</p>
+  <p class="muted empty">Cette playlist est vide.</p>
 {/if}
 
 <style>

@@ -430,11 +430,6 @@
       <p class="empty-title">
         {filter === "listen" ? "Aucune écoute dans l'historique" : filter === "skip" ? "Aucun saut dans l'historique" : "Aucune écoute pour l'instant"}
       </p>
-      <p class="empty-text">
-        {filter
-          ? "Change de filtre pour revoir tout ton historique."
-          : "Lance un titre : ce que tu écoutes et ce que tu passes apparaîtra ici, jour par jour."}
-      </p>
       {#if filter}
         <button class="btn btn-ghost" on:click={() => setFilter("")}><Icon name="queue" size={16} /> Voir tout l'historique</button>
       {:else}
@@ -463,7 +458,7 @@
               on:contextmenu={(e) => trackMenu(e, row.ev.track)}
               on:keydown={(e) => menuKey(e, (ev) => trackMenu(ev, row.ev.track))}
             >
-              <button class="ev-cover" on:click={() => play(row.ev)} aria-label={`Lire ${row.ev.track.title}`} title="Lire ce titre">
+              <button class="ev-cover" on:click={() => play(row.ev)} aria-label={`Lire ${row.ev.track.title}`}>
                 <Cover src={row.ev.track.album?.cover} alt="" kind="track" size={48} fallbackId={row.ev.track.id} />
                 <span class="ev-play" aria-hidden="true"><Icon name="play" size={13} /></span>
               </button>
@@ -745,14 +740,6 @@
     font-size: 21px;
     font-weight: 600;
   }
-  .empty-text {
-    max-width: 380px;
-    margin: 0 0 10px;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.5;
-  }
-
   /* -- windowed rows ------------------------------------------------------- */
   .vlist {
     position: relative;

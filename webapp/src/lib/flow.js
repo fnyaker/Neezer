@@ -36,12 +36,12 @@ const PRESSES_MAX = 20;
 
 // The energy notches, as the server names them (energy.py STEPS).
 export const ENERGY_STEPS = [
-  { name: "Libre", value: null, hint: "Le Flow suit votre écoute" },
-  { name: "Très calme", value: 0.1, hint: "Doux, posé" },
-  { name: "Calme", value: 0.3, hint: "Tranquille" },
-  { name: "Modéré", value: 0.5, hint: "Entre les deux" },
-  { name: "Énergique", value: 0.7, hint: "Ça bouge" },
-  { name: "Intense", value: 0.9, hint: "À fond" },
+  { name: "Libre", value: null },
+  { name: "Très calme", value: 0.1 },
+  { name: "Calme", value: 0.3 },
+  { name: "Modéré", value: 0.5 },
+  { name: "Énergique", value: 0.7 },
+  { name: "Intense", value: 0.9 },
 ];
 const NOTCHES = ENERGY_STEPS.slice(1).map((s) => s.value);
 
@@ -95,12 +95,12 @@ export function setStartStyles(list) {
 // Explorer's words — "Prudent" and "Large" — so both screens describe the same
 // breadth the same way.
 export const DIVERSITY_STEPS = [
-  { name: "Prudent", value: 0, hint: "Presque uniquement ce que vous écoutez déjà." },
-  { name: "Proche", value: 0.2, hint: "Votre bibliothèque et ses voisins immédiats." },
-  { name: "Voisin", value: 0.4, hint: "Des artistes proches de vos favoris." },
-  { name: "Exploration", value: 0.6, hint: "Des genres voisins, des artistes à deux pas." },
-  { name: "Aventure", value: 0.8, hint: "Loin de vos habitudes." },
-  { name: "Large", value: 1, hint: "Le plus d'inconnus possible, sans boussole." },
+  { name: "Prudent", value: 0 },
+  { name: "Proche", value: 0.2 },
+  { name: "Voisin", value: 0.4 },
+  { name: "Exploration", value: 0.6 },
+  { name: "Aventure", value: 0.8 },
+  { name: "Large", value: 1 },
 ];
 
 // The notch a level falls on: the NEAREST stop, ties upward — the same rule a

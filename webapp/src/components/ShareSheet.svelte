@@ -1037,10 +1037,6 @@
               <span class="muted">Lecture du lien…</span>
             </div>
           {:else}
-            <p class="linklede">
-              Un lien public, sans compte : la page s'ouvre dans le navigateur et
-              joue ce titre en Opus. Rien n'est téléchargé.
-            </p>
             {#if link}
               <div class="linkbox">
                 <Icon name="link" size={17} />
@@ -1057,7 +1053,7 @@
               </p>
               {#if confirmRevoke}
                 <div class="revoke">
-                  <span class="muted">Révoquer ce lien ? Il cessera de fonctionner immédiatement.</span>
+                  <span class="muted">Révoquer ce lien ?</span>
                   <div class="revoke-actions">
                     <button class="ghost" on:click={() => (confirmRevoke = false)} disabled={linkBusy}>Annuler</button>
                     <button class="danger" on:click={revokeLink} disabled={linkBusy}>Révoquer</button>
@@ -1073,8 +1069,7 @@
             {/if}
             {#if linkError}<p class="linkerr" role="alert">{linkError}</p>{/if}
             <p class="hint muted">
-              Toute personne qui détient le lien peut écouter ce titre. Vous pouvez
-              le révoquer à tout moment, ici ou dans Réglages → Compte.
+              Quiconque a le lien peut l'écouter.
             </p>
           {/if}
         </div>
@@ -1087,7 +1082,7 @@
             </div>
           {:else if waveError}
             <div class="wave-loading">
-              <span class="muted">Forme d'onde indisponible — la sélection reste utilisable.</span>
+              <span class="muted">Forme d'onde indisponible.</span>
             </div>
           {/if}
           <canvas
@@ -1111,7 +1106,7 @@
             style="touch-action: none;"
           ></canvas>
           <div class="wave-tools">
-            <button class="ic" on:click={togglePreview} aria-label="Pré-écoute" title={mode === "clip" ? "Écouter l'extrait" : "Écouter"}>
+            <button class="ic" on:click={togglePreview} aria-label="Pré-écoute">
               <Icon name={previewPlaying ? "pause" : "play"} size={16} />
             </button>
             <span class="ptime muted">{fmtDuration(Math.round(previewTime))}</span>
@@ -1127,7 +1122,7 @@
         {#if mode === "clip"}
           <div class="cliprow" in:fadeIn>
             <div class="bounds">
-              <button class="bound" on:click={() => setEdgeToPlayhead("start")} title="Début = position de pré-écoute">
+              <button class="bound" on:click={() => setEdgeToPlayhead("start")}>
                 <span class="bl muted">Début</span>
                 <span class="bv">{fmtDuration(Math.round(selStart))}</span>
               </button>
@@ -1135,7 +1130,7 @@
                 <span class="bl muted">Durée</span>
                 <span class="bv accent">{fmtDuration(Math.round(clipLen))}</span>
               </span>
-              <button class="bound" on:click={() => setEdgeToPlayhead("end")} title="Fin = position de pré-écoute">
+              <button class="bound" on:click={() => setEdgeToPlayhead("end")}>
                 <span class="bl muted">Fin</span>
                 <span class="bv">{fmtDuration(Math.round(selEnd))}</span>
               </button>
@@ -1147,7 +1142,7 @@
             </div>
           </div>
           <p class="hint muted">
-            Glissez les poignées pour choisir l'extrait — molette ou pincement pour zoomer.
+            Glissez les poignées, molette pour zoomer.
           </p>
         {:else}
           <div class="cliprow" in:fadeIn>
@@ -1457,11 +1452,6 @@
     border: 2px solid var(--bg-hover);
     border-top-color: var(--accent);
     animation: spin 0.7s linear infinite;
-  }
-  .linklede {
-    margin: 0;
-    font-size: 0.92rem;
-    line-height: 1.5;
   }
   .linkbox {
     display: flex;

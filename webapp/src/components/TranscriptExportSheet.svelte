@@ -182,15 +182,6 @@
               </button>
             {/each}
           </div>
-
-          <p class="note muted">
-            <Icon name="download" size={14} />
-            <span>
-              Un fichier ZIP avec un fichier par épisode transcrit, numéroté dans
-              l'ordre d'écoute. Les épisodes sans texte prêt sont listés dans
-              MANQUANTS.txt avec leur état ; rien n'est transcrit au passage.
-            </span>
-          </p>
         {/if}
       </div>
 
@@ -308,18 +299,6 @@
   }
   .fmt .count + .tick {
     margin-left: 4px;
-  }
-  .note {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    font-size: 0.78rem;
-    line-height: 1.45;
-    margin: 14px 20px 0;
-  }
-  .note :global(svg) {
-    flex: none;
-    margin-top: 2px;
   }
   .status {
     margin: 0;

@@ -170,10 +170,6 @@
 {#if !job || job.state === "error" || error}
   <div class="intro" in:fadeIn>
     <h1>Importer une playlist</h1>
-    <p class="muted lead">
-      Colle le lien d'une playlist qu'on t'a partagée : Deezer, Spotify, YouTube ou Apple Music. Chaque titre est
-      retrouvé (ta bibliothèque d'abord), tu l'écoutes tout de suite, et tu la gardes seulement si tu veux.
-    </p>
     <div class="bar">
       <input
         type="url"
@@ -258,7 +254,7 @@
       {:else if canKeep && tracks.length && !keeping}
         <button class="ghost" on:click={openKeep}><Icon name="plus" size={17} /> Enregistrer</button>
       {/if}
-      <button class="ghost subtle" title="Importer un autre lien" aria-label="Importer un autre lien" on:click={() => { job = null; jobId = null; link = ""; }}>
+      <button class="ghost subtle" aria-label="Importer un autre lien" on:click={() => { job = null; jobId = null; link = ""; }}>
         <Icon name="link" size={16} /> <span class="label">Autre lien</span>
       </button>
     </div>
@@ -270,10 +266,6 @@
         <button class="pill" type="submit">Enregistrer</button>
         <button class="ghost" type="button" on:click={() => (keeping = false)}>Annuler</button>
       </form>
-    {:else if job.state === "done"}
-      <p class="note muted">
-        Temporaire : elle reste ici tant que tu ne l'enregistres pas. Les titres se téléchargent quand tu les écoutes.
-      </p>
     {/if}
     {#if job.error && job.state !== "error"}
       <p class="err small" in:fadeIn><Icon name="info" size={15} /> {job.error}</p>
@@ -288,7 +280,6 @@
 
     {#if unsure.length}
       <h2 class="sec">À vérifier <span class="count">{unsure.length}</span></h2>
-      <p class="muted small">Retrouvés à peu près : même artiste, titre très proche.</p>
       <div class="lines">
         <VirtualList items={unsure} estimateHeight={64} key={(it, i) => i} let:item={it}>
           <div class="li">
@@ -308,7 +299,6 @@
 
     {#if missing.length}
       <h2 class="sec">Introuvables <span class="count">{missing.length}</span></h2>
-      <p class="muted small">Aucune version sûre de ces titres. Touche-en un pour le chercher toi-même.</p>
       <div class="lines">
         <VirtualList items={missing} estimateHeight={52} key={(it, i) => i} let:item={it}>
           <div class="li">
@@ -335,10 +325,6 @@
   h1 {
     font-size: clamp(1.8rem, 5vw, 3rem);
     overflow-wrap: anywhere;
-  }
-  .lead {
-    margin: 10px 0 22px;
-    line-height: 1.5;
   }
   .bar {
     display: flex;
@@ -548,9 +534,6 @@
   }
   .note {
     margin: 0 0 16px;
-    font-size: 0.88rem;
-  }
-  .small {
     font-size: 0.88rem;
   }
   .sec {

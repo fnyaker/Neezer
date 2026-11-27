@@ -161,16 +161,11 @@
       <span class="ic"><Icon name="sparkles" size={18} /></span>
       <span class="txt">
         <span class="title">Remplacement automatique</span>
-        <span class="hint">
-          {#if !status.available}
-            Comparaison audio indisponible sur ce serveur (numpy et ffmpeg sont nécessaires,
-            tous deux dans l'image Docker).
-          {:else}
-            L'extrait du titre perdu, servi par sa source, est comparé à l'audio des candidats
-            (fichiers{looked ? `, puis ${looked}` : ""}). À 99&nbsp;% ou plus, c'est le même
-            enregistrement : il est remplacé partout, sans rien demander.
-          {/if}
-        </span>
+        {#if !status.available}
+          <span class="hint">Comparaison audio indisponible sur ce serveur.</span>
+        {:else}
+          <span class="hint">Remplace le même enregistrement à 99 % ou plus.</span>
+        {/if}
       </span>
       <span class="sw" class:on={status.enabled}><span class="knob"></span></span>
     </button>

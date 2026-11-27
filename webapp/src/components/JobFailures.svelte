@@ -74,8 +74,7 @@
 
         {#if hidden}
           <p class="muted small more">
-            … et {hidden} autre{hidden > 1 ? "s" : ""} non détaillé{hidden > 1 ? "s" : ""}
-            (le serveur en garde un échantillon).
+            … et {hidden} autre{hidden > 1 ? "s" : ""} non détaillé{hidden > 1 ? "s" : ""}.
           </p>
         {/if}
 

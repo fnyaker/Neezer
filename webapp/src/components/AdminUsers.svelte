@@ -100,7 +100,7 @@
         : `${countLabel(total, "compte")} · ${countLabel(invites.length, "invitation")} en attente`;
   $: filterHint =
     filter !== "all" && !allLoaded
-      ? `Le filtre porte sur ${countLabel(rows.length, "compte chargé", "comptes chargés")}.`
+      ? `${countLabel(rows.length, "compte chargé", "comptes chargés")}.`
       : "";
   $: chipCounts = {
     all: total + (term ? matchingInvites.length : invites.length),
@@ -801,7 +801,6 @@
     {:else}
       <div class="admin-head">
         <div class="head-copy">
-          <p class="lede">Les comptes de ce serveur et les invitations en attente.</p>
           <p class="count label-mono" role="status" aria-live="polite">
             {countLine}
             {#if loadedAt}<span class="fresh">· Actualisé à {clockTime(new Date(loadedAt).toISOString())}</span>{/if}
@@ -816,7 +815,6 @@
           <button
             class="icon-btn"
             aria-label="Rafraîchir la liste"
-            title="Rafraîchir la liste"
             on:click={refresh}
             disabled={refreshing}
           >
@@ -865,7 +863,7 @@
         {/if}
       </div>
       {#if shortQuery}
-        <p class="search-hint">Saisissez au moins 2 caractères pour filtrer.</p>
+        <p class="search-hint">2 caractères minimum.</p>
       {/if}
 
       <div class="filters" bind:this={chipRow} role="group" aria-label="Filtrer par état">
@@ -934,18 +932,15 @@
               </span>
               {#if filter === "invited" && term}
                 <h2>Aucune invitation ne correspond.</h2>
-                <p>Essayez un autre nom ou retirez la recherche.</p>
                 <button class="btn" on:click={clearFilters}>Effacer les filtres</button>
               {:else if filter === "invited"}
                 <h2>Aucune invitation en attente.</h2>
-                <p>Un lien d'invitation crée un compte membre, une seule fois.</p>
                 <button class="btn primary" on:click={() => openInvite()}>
                   <Icon name="personAdd" size={16} />
                   Inviter quelqu'un
                 </button>
               {:else if hasFilters}
                 <h2>Aucun compte ne correspond.</h2>
-                <p>Essayez un autre nom ou retirez les filtres.</p>
                 <button class="btn" on:click={clearFilters}>Effacer les filtres</button>
                 {#if showMore}
                   <button class="btn ghost" on:click={loadMore} disabled={loadingMore}>
@@ -954,7 +949,6 @@
                 {/if}
               {:else}
                 <h2>Aucun compte pour l'instant.</h2>
-                <p>Invitez la première personne : le lien crée un compte membre, une seule fois.</p>
                 <button class="btn primary" on:click={() => openInvite()}>
                   <Icon name="personAdd" size={16} />
                   Inviter quelqu'un
@@ -1042,7 +1036,7 @@
                           </button>
                         </td>
                         <td>
-                          <span class="role invite-role" title="Rôle à la création">Membre</span>
+                          <span class="role invite-role" >Membre</span>
                         </td>
                         <td>
                           <span class="state {stateKey(row)}">
@@ -1151,7 +1145,7 @@
         {/if}
         {#if capped}
           <p class="search-hint">
-            {MAX_ROWS} comptes chargés. Affinez la recherche pour trouver les autres.
+            {MAX_ROWS} comptes chargés.
           </p>
         {/if}
       {/if}
@@ -1199,7 +1193,6 @@
             <dd>{absoluteTime(detail.expires)} <span class="muted">({expiryLabel(detail.expires)})</span></dd>
           </div>
         </dl>
-        <p class="note">Les liens d'invitation ne sont plus affichés après leur création.</p>
         {#if !$online}
           <p class="guard">Vous êtes hors ligne : cette action demande le serveur.</p>
         {/if}
@@ -1209,7 +1202,6 @@
               <span class="a-ico"><Icon name="copy" size={18} /></span>
               <span class="a-txt">
                 <span class="a-title">Copier le lien</span>
-                <span class="a-desc">Le lien n'est affiché qu'à sa création. Il ne sert qu'à un compte.</span>
               </span>
               <span class="chev"><Icon name="chevronRight" size={18} /></span>
             </button>
@@ -1218,7 +1210,6 @@
               <span class="a-ico"><Icon name="link" size={18} /></span>
               <span class="a-txt">
                 <span class="a-title">Lien non disponible</span>
-                <span class="a-desc">Le lien n'est plus affiché. Renvoyez l'invitation pour en créer un nouveau.</span>
               </span>
             </div>
           {/if}
@@ -1226,7 +1217,6 @@
             <span class="a-ico"><Icon name="refresh" size={18} /></span>
             <span class="a-txt">
               <span class="a-title">Renvoyer l'invitation</span>
-              <span class="a-desc">Révoque l'ancien lien et en crée un nouveau.</span>
             </span>
             <span class="chev"><Icon name="chevronRight" size={18} /></span>
           </button>
@@ -1237,7 +1227,7 @@
             <span class="a-ico"><Icon name="minusCircle" size={18} /></span>
             <span class="a-txt">
               <span class="a-title">Révoquer l'invitation</span>
-              <span class="a-desc">Le lien cesse de fonctionner immédiatement.</span>
+              <span class="a-desc">Lien révoqué immédiatement.</span>
             </span>
             <span class="chev"><Icon name="chevronRight" size={18} /></span>
           </button>
@@ -1258,7 +1248,7 @@
           </div>
         </dl>
         {#if isMe(detail)}
-          <p class="guard">Vous ne pouvez pas modifier votre propre compte ici. Demandez à un autre administrateur.</p>
+          <p class="guard">Compte personnel : non modifiable ici.</p>
         {:else if !$online}
           <p class="guard">Vous êtes hors ligne : ces actions demandent le serveur.</p>
         {/if}
@@ -1273,11 +1263,6 @@
               <span class="a-title">
                 {detail.admin ? "Retirer les droits d'administrateur" : "Nommer administrateur"}
               </span>
-              <span class="a-desc">
-                {detail.admin
-                  ? "Garde le compte, perd les réglages du serveur et les comptes."
-                  : "Accès aux réglages du serveur et à tous les comptes."}
-              </span>
             </span>
             <span class="chev"><Icon name="chevronRight" size={18} /></span>
           </button>
@@ -1289,11 +1274,6 @@
             <span class="a-ico"><Icon name={detail.disabled ? "refresh" : "minusCircle"} size={18} /></span>
             <span class="a-txt">
               <span class="a-title">{detail.disabled ? "Réactiver le compte" : "Désactiver le compte"}</span>
-              <span class="a-desc">
-                {detail.disabled
-                  ? "La personne pourra se reconnecter."
-                  : "Déconnecte la personne partout. Ses données restent."}
-              </span>
             </span>
             <span class="chev"><Icon name="chevronRight" size={18} /></span>
           </button>
@@ -1311,7 +1291,7 @@
             <span class="a-ico"><Icon name="trash" size={18} /></span>
             <span class="a-txt">
               <span class="a-title">Supprimer le compte</span>
-              <span class="a-desc">Définitif. Ses playlists et son historique partent ; l'audio archivé reste.</span>
+              <span class="a-desc">Suppression définitive.</span>
             </span>
             <span class="chev"><Icon name="chevronRight" size={18} /></span>
           </button>
@@ -1463,12 +1443,6 @@
   }
   .head-copy {
     min-width: 0;
-  }
-  .lede {
-    margin: 0 0 5px;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.4;
   }
   .count {
     margin: 0;
@@ -2269,9 +2243,6 @@
     }
     .head-actions {
       justify-content: flex-end;
-    }
-    .lede {
-      display: none;
     }
     .invite-long {
       display: none;

@@ -813,7 +813,7 @@
         {/if}
         {#if nativeBlocked}
           <p class="lc-note" role="status">
-            Partage et enregistrement indisponibles dans l'application. Ouvrez le serveur dans un navigateur.
+            Indisponible ici : ouvrez dans un navigateur.
           </p>
         {/if}
         {#if renderError}
@@ -824,7 +824,7 @@
       <div class="lc-choose">
         {#if lines.length}
           <div class="lc-choose-head">
-            <h3 id={hintId}>Choisissez une à trois lignes</h3>
+            <h3 id={hintId}>Une à trois lignes</h3>
             <span class="lc-count mono" aria-hidden="true">{selected.length} / {MAX_LINES}</span>
           </div>
           <div class="lc-lines lc-scroll" class:timed={hasTimes}>

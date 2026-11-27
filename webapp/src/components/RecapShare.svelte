@@ -593,7 +593,7 @@
         <p class="rs-text">{shownText}</p>
         {#if nativeBlocked}
           <p class="rs-note" role="status" in:fadeIn>
-            Partage et enregistrement indisponibles dans l'application. Ouvrez le serveur dans un navigateur.
+            Ouvrez le serveur dans un navigateur.
           </p>
         {/if}
         {#if renderError}

@@ -17,9 +17,9 @@
 
   const TABS = { artists: "Artistes", albums: "Albums", playlists: "Playlists" };
   const NOTE = {
-    artists: "Décoché : l'artiste n'est plus suivi et ne sera jamais réimporté.",
-    albums: "Décoché : l'album sort de vos favoris et ne sera jamais réimporté.",
-    playlists: "Décochée : jamais importée. Une playlist déjà importée reste la vôtre.",
+    artists: "Décoché : plus suivi, jamais réimporté.",
+    albums: "Décoché : hors favoris, jamais réimporté.",
+    playlists: "Décochée : jamais importée.",
   };
   const kinds = (account.pickable || ["artists"]).filter((k) => TABS[k]);
   let kind = kinds[0];

@@ -26,7 +26,6 @@
   class:loading
   aria-label={label}
   aria-busy={loading}
-  title={label}
   on:click={play}
 >
   <span class="art">

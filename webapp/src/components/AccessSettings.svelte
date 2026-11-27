@@ -114,10 +114,6 @@
 
 <section class="card">
   <h2>Sources et accès</h2>
-  <p class="muted sub">
-    Tout ce qui est déjà sur le serveur est à tout le monde. Ici se règle le reste&nbsp;:
-    qui peut chercher, écouter et ouvrir des pages chez chaque service, et avec quel compte.
-  </p>
 
   {#if failed}
     <p class="muted" role="alert">Impossible de lire les accès&nbsp;: {failed}. <button class="link" on:click={load}>Réessayer</button></p>
@@ -140,24 +136,18 @@
 
         <ul class="feats" aria-label="Ce que fournit {p.name}">
           {#each shared(p) as f (f.id)}
-            <li title={f.help}>
+            <li>
               <span>{f.label}</span>
               <span class="need" class:acc={f.auth === "account"}>{f.auth === "account" ? "compte" : "sans compte"}</span>
             </li>
           {/each}
           {#each personal(p) as f (f.id)}
-            <li class="perso" title={f.help}>
+            <li class="perso">
               <span>{f.label}</span>
               <span class="need acc">personnel</span>
             </li>
           {/each}
         </ul>
-        {#if personal(p).length}
-          <p class="fine muted">
-            Les fonctions personnelles (vos favoris, vos playlists chez {p.name}) ne servent qu'au
-            titulaire du compte et ne se prêtent pas.
-          </p>
-        {/if}
         {#if p.auth_modes.length}
           <p class="fine muted">
             Connexion : {p.auth_modes.map((m) => m.label + (m.app_only ? " (application Android)" : "")).join(" ou ")}.
@@ -225,10 +215,6 @@
 
     {#if facts.length}
       <h3>Sources de faits</h3>
-      <p class="muted fine">
-        Elles ne donnent jamais de son&nbsp;: le serveur s'en sert, pour tout le monde, pour compléter
-        les fiches de la bibliothèque.
-      </p>
       <ul class="facts">
         {#each facts as p (p.id)}
           <li>
@@ -247,7 +233,7 @@
   <section class="card">
     <h2>Groupes</h2>
     <p class="muted sub">
-      Pour prêter un compte à plusieurs personnes d'un coup («&nbsp;Proches&nbsp;», «&nbsp;Famille&nbsp;»).
+      Prêter un compte à plusieurs.
     </p>
     {#if groups.length}
       <ul class="groups">
@@ -263,7 +249,7 @@
               {#if confirmDel === g.id}
                 <button class="ghost-btn danger" on:click={() => removeGroup(g)}>Supprimer ?</button>
               {:else}
-                <button class="icon-btn" aria-label="Supprimer le groupe {g.name}" title="Supprimer (ce qui lui était prêté ne l'est plus)" on:click={() => removeGroup(g)}><Icon name="trash" size={16} /></button>
+                <button class="icon-btn" aria-label="Supprimer le groupe {g.name}" on:click={() => removeGroup(g)}><Icon name="trash" size={16} /></button>
               {/if}
             </div>
             {#if editing === g.id}

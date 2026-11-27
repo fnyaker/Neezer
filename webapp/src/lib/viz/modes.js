@@ -24,46 +24,42 @@ export const MODES = [
   {
     id: "off",
     label: "Aucune",
-    hint: "Le lecteur seul, rien d'animé. Aucun coût.",
+    hint: "Rien d'animé.",
     rhythm: false,
     fullBleed: false,
   },
   {
     id: "bars",
     label: "Barres",
-    hint: "Le spectre en capsules de lumière, avec une vraie résolution dans les graves.",
+    hint: "Spectre en capsules, graves résolus.",
     rhythm: false,
     fullBleed: false,
   },
   {
     id: "pulse",
     label: "Pulsations",
-    hint: "Des champs de couleur au tempo, un par bande de fréquence, sous un verre liquide qui ondule à chaque temps.",
+    hint: "Champs de couleur au tempo.",
     rhythm: true,
     fullBleed: true,
   },
   {
     id: "scope",
     label: "Oscilloscope",
-    hint:
-      "Le signal lui-même, une trace par canal, déclenchée comme sur un vrai " +
-      "oscilloscope. La précision suit le niveau de détail.",
+    hint: "Le signal, une trace par canal.",
     rhythm: false,
     fullBleed: true,
   },
   {
     id: "aurora",
     label: "Aurore",
-    hint: "Rubans lents. L'option calme, et la plus légère en plein écran.",
+    hint: "Rubans lents, l'option calme.",
     rhythm: false,
     fullBleed: true,
   },
   {
     id: "smart",
     label: "Moteur intelligent",
-    hint:
-      "Un monde par genre : la forge pour la frenchcore, le kaléidoscope pour la " +
-      "psytrance, l'horizon pour la synthwave…",
+    hint: "Un monde par genre.",
     rhythm: true,
     fullBleed: true,
   },

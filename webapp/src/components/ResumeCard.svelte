@@ -45,7 +45,6 @@
   {:else}
     <div class="idle" in:fadeIn>
       <span class="idle-title">Rien en cours de lecture.</span>
-      <span class="idle-sub">Choisis une énergie et lance le Flow, ou ouvre un titre depuis Explorer.</span>
       <a class="btn btn-ghost btn-sm" href="#/search"><Icon name="search" size={15} /> Explorer</a>
     </div>
   {/if}
@@ -151,11 +150,6 @@
     font-weight: 600;
     font-size: 20px;
     letter-spacing: -0.01em;
-  }
-  .idle-sub {
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.4;
   }
   .idle .btn {
     margin-top: 4px;

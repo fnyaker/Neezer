@@ -129,9 +129,7 @@
   {:else if channels === null}
     <LoadFailed error={loadError} on:retry={load} />
   {:else if !channels.length}
-    <p class="muted empty" in:fadeIn>
-      Aucun abonnement pour l'instant.{#if $isAdmin}{" "}Cherchez un podcast ci-dessus pour vous abonner.{/if}
-    </p>
+    <p class="muted empty" in:fadeIn>Aucun abonnement pour l'instant.</p>
   {:else}
     <div class="grid" class:hidden={$isAdmin && q.trim()} in:fadeIn>
       {#each channels as c (c.id)}

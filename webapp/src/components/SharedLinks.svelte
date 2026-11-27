@@ -83,10 +83,6 @@
 
 <section class="card">
   <h2>Liens partagés</h2>
-  <p class="sub muted">
-    Chaque lien ouvre une page publique qui joue <strong>ce titre seul</strong>,
-    sans compte et sans téléchargement. Révoquer un lien le coupe immédiatement.
-  </p>
 
   {#if loading}
     <div class="state">
@@ -100,10 +96,7 @@
   {:else if !links.length}
     <div class="state">
       <span class="glyph"><Icon name="link" size={18} /></span>
-      <span class="muted">
-        Aucun lien pour l'instant. Ouvrez le partage d'un titre et choisissez
-        <strong>Lien</strong>.
-      </span>
+      <span class="muted">Aucun lien pour l'instant.</span>
     </div>
   {:else}
     <ul class="links">
@@ -126,14 +119,13 @@
             </span>
           {:else}
             <span class="acts">
-              <button class="icon" on:click={() => copy(l)} aria-label="Copier le lien" title="Copier le lien">
+              <button class="icon" on:click={() => copy(l)} aria-label="Copier le lien">
                 <Icon name="copy" size={17} />
               </button>
               <button
                 class="icon cut"
                 on:click={() => (confirm = l.id)}
                 aria-label="Révoquer le lien"
-                title="Révoquer le lien"
               >
                 <Icon name="trash" size={17} />
               </button>
@@ -155,15 +147,6 @@
   .card h2 {
     margin-top: 0;
     font-size: 1.05rem;
-  }
-  .sub {
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin: 4px 0 12px;
-  }
-  .sub strong {
-    color: var(--text);
-    font-weight: 600;
   }
   .state {
     display: flex;

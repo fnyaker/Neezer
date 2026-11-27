@@ -274,8 +274,7 @@
       class:some={count > 0 && !allOn}
       on:click={toggleAll}
       disabled={!!progress}
-      aria-label={allOn ? "Tout désélectionner" : "Tout sélectionner"}
-      title={allOn ? "Tout désélectionner" : "Tout sélectionner"}>
+      aria-label={allOn ? "Tout désélectionner" : "Tout sélectionner"}>
       {#if allOn}<Icon name="check" size={14} />{:else if count}<Icon name="minus" size={14} />{/if}
     </button>
     {#if progress}
@@ -299,10 +298,7 @@
     {/if}
   </div>
   {#if confirming}
-    <p class="muted confirm-note">
-      Ils disparaîtront de vos playlists et de vos favoris. Le serveur vérifie
-      chacun d'abord : un titre encore lisible quelque part est conservé.
-    </p>
+    <p class="muted confirm-note">Suppression définitive, partout.</p>
   {/if}
 {/if}
 
@@ -358,14 +354,12 @@
                 <button
                   class="sug-prev"
                   on:click={() => togglePreview(c)}
-                  aria-label={$previewing === trackKey(c) ? "Arrêter l'écoute" : "Écouter"}
-                  title="Écouter avant de remplacer">
+                  aria-label={$previewing === trackKey(c) ? "Arrêter l'écoute" : "Écouter"}>
                   <Icon name={$previewing === trackKey(c) ? "pause" : "play"} size={13} />
                 </button>
                 <button
                   class="sug-main"
-                  on:click={() => pick(t, c)}
-                  title={`Remplacer par « ${c.title} » — ${artistLine(c)} · ${c.album?.title || ""}`}>
+                  on:click={() => pick(t, c)}>
                   <span class="sug-txt">
                     <span class="sug-t">
                       {#if offMain(c.source)}<span class="local" title={sourceTitle(c.source)}><Icon name={iconOf(c.source)} size={11} /></span>{:else if c.local}<span class="local" title="Fichier local"><Icon name="cloudOff" size={11} /></span>{/if}

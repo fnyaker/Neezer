@@ -60,7 +60,6 @@
       aria-haspopup="listbox"
       aria-expanded={open}
       aria-label="Qualité de streaming : {LABEL[$quality]}"
-      title="Qualité de streaming"
     >
       <span class="val">{SHORT[$quality]}</span>
       <Icon name="chevronDown" size={11} />

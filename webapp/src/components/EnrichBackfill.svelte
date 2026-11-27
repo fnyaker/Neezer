@@ -72,20 +72,16 @@
       <input type="checkbox" bind:checked={force} />
       Tout recommencer
     </label>
-    <span class="muted small">
-      {#if job && !job.enabled}
-        Désactivé dans la configuration ([enrich] enabled).
-      {:else if job?.coverage?.tried}
-        {foundTotal} titre{foundTotal > 1 ? "s" : ""} complété{foundTotal > 1 ? "s" : ""}{byMethod ? ` (${byMethod})` : ""},
-        {job.coverage.untried} pas encore essayé{job.coverage.untried > 1 ? "s" : ""}.
-        Un titre archivé ou téléversé est complété tout seul, à une requête par seconde.
-      {:else}
-        Date de première sortie, compositeur, parolier et producteur, sans jamais ralentir la lecture.
-      {/if}
-      {#if job && !job.acoustid}
-        L'empreinte sonore (AcoustID) demande l'outil fpcalc et une clé.
-      {/if}
-    </span>
+    {#if job && (!job.enabled || job?.coverage?.tried)}
+      <span class="muted small">
+        {#if !job.enabled}
+          Désactivé dans la configuration ([enrich] enabled).
+        {:else}
+          {foundTotal} titre{foundTotal > 1 ? "s" : ""} complété{foundTotal > 1 ? "s" : ""}{byMethod ? ` (${byMethod})` : ""},
+          {job.coverage.untried} pas encore essayé{job.coverage.untried > 1 ? "s" : ""}.
+        {/if}
+      </span>
+    {/if}
   {/if}
 </div>
 {#if job?.error}

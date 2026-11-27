@@ -60,7 +60,6 @@
 
     <div class="intro">
       <h1 id="login-title">Connexion</h1>
-      <p class="sub">Entre pour retrouver ta musique.</p>
     </div>
 
     <form on:submit={submit} novalidate>
@@ -147,12 +146,6 @@
     font-weight: 700;
     line-height: 1.1;
     letter-spacing: -0.03em;
-  }
-  .sub {
-    margin: 6px 0 0;
-    color: var(--dim);
-    font-size: 14.5px;
-    line-height: 1.5;
   }
   form {
     display: flex;

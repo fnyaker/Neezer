@@ -299,13 +299,6 @@
               </button>
             {/each}
           </div>
-          <p class="muted note">
-            <Icon name="download" size={14} />
-            Un fichier ZIP avec un fichier par titre (numérotés, « Artiste - Titre ») et
-            une playlist .m3u. Les titres pas encore archivés sont récupérés au
-            passage, donc un gros export peut prendre un moment — le téléchargement
-            démarre immédiatement et se poursuit en arrière-plan.
-          </p>
         {/if}
       {:else if mode === "list"}
         <div class="fmts">
@@ -317,18 +310,10 @@
             </button>
           {/each}
         </div>
-        <p class="muted note">
-          <Icon name="info" size={14} />
-          Le nom des titres, pas leur son. Pour Apple Music, Tidal ou Amazon Music
-          (qui n'ouvrent pas leur API)&nbsp;: importez le CSV sur TuneMyMusic ou
-          Soundiiz, qui le recréent là-bas — l'ISRC qu'il contient rend la
-          correspondance exacte.
-        </p>
       {:else if mode === "link"}
         <p class="muted note">
           <Icon name="link" size={14} />
-          Toute personne avec ce lien peut voir la playlist et écouter les titres
-          déjà archivés. Rien n'est modifiable.
+          Lecture seule, sans compte.
         </p>
         {#if linkLoading}
           <p class="muted pad">Chargement…</p>
@@ -365,10 +350,6 @@
           </div>
         {:else}
           <div class="share">
-            <p class="hint muted">
-              Le lien s'ouvre sans compte&nbsp;: lecture des titres archivés uniquement,
-              rien d'autre.
-            </p>
             <button class="pill create" on:click={createLink} disabled={linkBusy || !$online}>
               <Icon name="link" size={17} /> Créer un lien public
             </button>
@@ -387,7 +368,7 @@
             </div>
             {#if job.running}
               <div class="bar" role="progressbar" aria-valuenow={pct} aria-valuemin="0" aria-valuemax="100"><span style="transform:scaleX({(job.stage === "create" ? 100 : pct) / 100})"></span></div>
-              <p class="muted small">{job.matched} trouvé{job.matched > 1 ? "s" : ""} pour l'instant. Vous pouvez fermer : l'export continue sur le serveur.</p>
+              <p class="muted small">{job.matched} trouvé{job.matched > 1 ? "s" : ""}.</p>
             {:else}
               <p class:err={job.error} class="result">
                 <Icon name={job.error ? "alert" : "check"} size={16} />
@@ -851,11 +832,6 @@
   .expiry {
     margin: 6px 0 0;
     font-size: 0.8rem;
-  }
-  .hint {
-    margin: 8px 0 12px;
-    font-size: 0.8rem;
-    line-height: 1.45;
   }
   .pill.create {
     align-self: flex-start;

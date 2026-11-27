@@ -169,7 +169,7 @@ test("a Flow queue saved by an older app goes on, in a session of its own", asyn
 // contract, the names are the UI's (labels say where the thumb is, and a level
 // written by an older build lands on the nearest stop, never between two).
 
-test("diversity has six stops, ascending, each with a French name and a hint", () => {
+test("diversity has six stops, ascending, each with a French name", () => {
   const steps = flow.DIVERSITY_STEPS;
   assert.equal(steps.length, 6);
   assert.equal(steps[0].value, 0);
@@ -178,7 +178,7 @@ test("diversity has six stops, ascending, each with a French name and a hint", (
     assert.ok(steps[i].value > steps[i - 1].value, "the stops ascend");
     assert.notEqual(steps[i].name, steps[i - 1].name, "two stops never share a name");
   }
-  for (const s of steps) assert.ok(s.name && s.hint, `"${s.name}" is labelled`);
+  for (const s of steps) assert.ok(s.name, `"${s.name}" is labelled`);
   assert.equal(steps[0].name, "Prudent");
   assert.equal(steps[5].name, "Large");
 });

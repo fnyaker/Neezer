@@ -237,11 +237,11 @@
         </h2>
         <p class="sub">
           {#if step === "success"}
-            Ce lien ne sera plus affiché. Il ne sert qu'à un compte.
+            Lien affiché une seule fois.
           {:else if source}
-            L'ancien lien sera révoqué immédiatement. Seul le nouveau fonctionnera.
+            L'ancien lien sera révoqué.
           {:else}
-            Le lien crée un compte membre. Il ne sert qu'une fois.
+            Usage unique, un seul compte.
           {/if}
         </p>
       </div>
@@ -277,10 +277,6 @@
           />
           <span class="counter mono">{note.length}/64</span>
         </div>
-        <p class="help">
-          Ce nom ne crée pas de compte et n'est pas montré à la personne invitée :
-          il vous sert seulement à reconnaître le lien.
-        </p>
 
         <div class="label" id="invite-ttl-label">Durée de validité</div>
         <div class="segments" role="radiogroup" aria-labelledby="invite-ttl-label">
@@ -301,10 +297,6 @@
         </div>
       {/if}
 
-      <p class="help">
-        Vous pourrez nommer un administrateur après la création du compte.
-      </p>
-
       {#if error}
         <div class="inline-error" role="alert">
           <Icon name="alert" size={15} />
@@ -316,7 +308,7 @@
       {#if source}
         {#if confirmRevoke}
           <div class="inline-confirm" role="alert">
-            <p>Révoquer l'invitation ? Le lien actuel cessera de fonctionner.</p>
+            <p>Révoquer l'invitation ?</p>
             <div>
               <button class="btn ghost" on:click={() => (confirmRevoke = false)}>
                 Annuler
@@ -360,7 +352,7 @@
 
       <p class="warning">
         <Icon name="alert" size={15} />
-        Copiez ce lien maintenant : il ne sera plus affiché.
+        Copiez ce lien maintenant.
       </p>
 
       <div class="success-actions">
@@ -385,7 +377,7 @@
 
       {#if confirmRevoke}
         <div class="inline-confirm" role="alert">
-          <p>Révoquer ce lien ? Il ne fonctionnera plus.</p>
+          <p>Révoquer ce lien ?</p>
           <div>
             <button class="btn ghost" on:click={() => (confirmRevoke = false)}>
               Annuler
@@ -405,8 +397,7 @@
       {#if confirmClose}
         <div class="inline-confirm" role="alert">
           <p>
-            Fermer sans copier le lien ? Le lien ne sera plus affiché. Vous pourrez
-            renvoyer une invitation, mais ce lien ne reviendra pas.
+            Fermer sans copier le lien ?
           </p>
           <div>
             <button class="btn ghost" on:click={() => (confirmClose = false)}>
@@ -532,12 +523,6 @@
     color: var(--dim);
     font-size: 10.5px;
     pointer-events: none;
-  }
-  .help {
-    margin: 7px 0 18px;
-    color: var(--dim);
-    font-size: 12.5px;
-    line-height: 1.45;
   }
   .segments {
     display: grid;

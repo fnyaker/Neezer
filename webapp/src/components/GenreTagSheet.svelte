@@ -181,8 +181,7 @@
           <p class="muted pad">Chargement des genres…</p>
         {:else if !tags.length}
           <p class="muted pad">
-            Aucun genre dans le vocabulaire. Créez-en d'abord dans le studio
-            (Bibliothèque&nbsp;→&nbsp;Genres).
+            Aucun genre dans le vocabulaire.
           </p>
         {:else}
           <div class="q">
@@ -199,7 +198,7 @@
           </div>
           {#if !query}
             <p class="order muted">
-              {scored ? "Du plus au moins probable pour ce titre" : "Les plus utilisés d'abord"}
+              {scored ? "Du plus au moins probable" : "Les plus utilisés d'abord"}
             </p>
           {/if}
           <div class="grid">
@@ -224,17 +223,13 @@
         {/if}
       </div>
 
-      <footer>
-        {#if currentTagId}
+      {#if currentTagId}
+        <footer>
           <button class="clear" disabled={!!busy} on:click={() => apply(null)}>
             Retirer l'étiquette
           </button>
-        {/if}
-        <p class="muted hint">
-          L'étiquette est la référence&nbsp;: elle prime sur l'analyse et sert
-          d'exemple d'entraînement pour le modèle.
-        </p>
-      </footer>
+        </footer>
+      {/if}
     </div>
   </div>
 {/if}
@@ -397,14 +392,8 @@
     color: var(--text-dim);
     font-size: 0.85rem;
     font-weight: 600;
-    margin-bottom: 8px;
   }
   .clear:hover {
     color: var(--text);
-  }
-  .hint {
-    margin: 0;
-    font-size: 0.78rem;
-    line-height: 1.4;
   }
 </style>

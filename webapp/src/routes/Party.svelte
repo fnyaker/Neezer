@@ -162,15 +162,13 @@
         <span class="big-ic"><Icon name="party" size={30} /></span>
         <h1>{phase === "ended" ? "La party est terminée" : "Cette party n'existe plus"}</h1>
         <p class="muted">
-          {phase === "ended"
-            ? "L'hôte l'a arrêtée. Merci d'avoir écouté."
-            : "Le lien a expiré, ou l'hôte l'a arrêtée. Demandez-lui un nouveau lien."}
+          {phase === "ended" ? "L'hôte l'a arrêtée." : "Lien expiré ou party arrêtée."}
         </p>
       </div>
     {:else if phase === "unsupported"}
       <div class="center msg" in:fadeIn>
         <h1>Navigateur non pris en charge</h1>
-        <p class="muted">Ouvrez ce lien dans un navigateur récent (Chrome, Firefox, Safari).</p>
+        <p class="muted">Ouvrez dans un navigateur récent.</p>
       </div>
     {:else if phase === "left"}
       <div class="center msg" in:fadeIn>
@@ -201,11 +199,11 @@
         {#if phase === "landing"}
           <form class="join" on:submit|preventDefault={join}>
             <label class="party-field">
-              <span class="muted">Votre prénom (visible par l'hôte)</span>
+              <span class="muted">Votre prénom</span>
               <input bind:value={name} maxlength="32" placeholder="Invité" autocomplete="given-name" />
             </label>
             <button class="primary big" type="submit"><Icon name="party" size={20} /> Rejoindre l'écoute</button>
-            <p class="hint muted">Le son démarre calé sur celui de {peek.host}. Gardez l'écran allumé : un téléphone verrouillé coupe le son.</p>
+            <p class="hint muted">Gardez l'écran allumé.</p>
           </form>
         {:else}
           <div class="progress">
@@ -234,10 +232,6 @@
 
           {#if showLatency}
             <div class="latency" transition:fade>
-              <p class="muted">
-                Cet appareil sonne en retard sur les autres (enceinte Bluetooth, barre de son) ? Avancez-le.
-                En avance ? Retardez-le. Réglez à l'oreille, pièce silencieuse, deux appareils côte à côte.
-              </p>
               <TrimControl
                 value={latencyDraft}
                 reported={$view ? $view.osLatency : null}
@@ -628,11 +622,6 @@
     border-radius: 14px;
     background: rgba(0, 0, 0, 0.3);
     border: 1px solid rgba(255, 255, 255, 0.08);
-  }
-  .latency p {
-    margin: 0;
-    font-size: 0.82rem;
-    line-height: 1.45;
   }
   
   .resume {

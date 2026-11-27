@@ -23,7 +23,6 @@
   import { discoveryLevel, loadDiscovery, setDiscovery, DEFAULT_LEVEL } from "../lib/discovery.js";
   import { STYLE_FALLBACK } from "../lib/sillon.js";
   import { styleFamilies, loadStyleRows } from "./StylePicker.svelte";
-  import { fadeIn } from "../lib/motion.js";
   import Icon from "./Icon.svelte";
 
   // A button the caller drives while the Flow starts: the label stays, the
@@ -117,7 +116,6 @@
           </button>
         {/if}
       </div>
-      {#if full}<p class="note" in:fadeIn>Six genres au maximum : retirez-en un pour en ajouter un autre.</p>{/if}
     </section>
 
     <section class="block" aria-labelledby="flow-diversity-title">
@@ -132,14 +130,12 @@
             role="radio"
             aria-checked={i === index}
             class:on={i === index}
-            title={s.hint}
             on:click={() => setDiscovery(s.value)}
           >
             {s.name}
           </button>
         {/each}
       </div>
-      <p class="note" aria-live="polite">{aim.hint}</p>
     </section>
   </div>
 
@@ -279,13 +275,6 @@
     background: var(--ac);
     border-color: transparent;
     color: var(--onac);
-  }
-  .note {
-    margin: -2px 0 0;
-    min-height: 1.2em;
-    font-size: 13px;
-    line-height: 1.35;
-    color: var(--dim);
   }
   .actions {
     display: flex;

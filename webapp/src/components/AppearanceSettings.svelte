@@ -47,11 +47,6 @@
   // on the dark theme it WILL apply to (Encre) rather than pretending it is on.
   $: previewTheme = $theme === "pochette" ? "encre" : $theme;
   $: pair = accentVars(seed, previewTheme) || accentVars(themeAccentOf("encre"), "encre");
-  $: correction = pair.tooDark
-    ? "Trop sombre pour Encre\u00a0: les textes et icônes d'accent prennent une variante éclaircie (4,5:1). Le bouton garde votre couleur, son libellé reste noir ou blanc."
-    : pair.tooLight
-      ? "Trop claire pour Papier\u00a0: les textes et icônes d'accent prennent une variante assombrie (4,5:1). Le bouton garde votre couleur, son libellé reste noir ou blanc."
-      : "";
 
   // Keep the field in step with the store and the theme — but never overwrite
   // what somebody is typing. A blur is handled by onBlur(), which either
@@ -143,11 +138,6 @@
 </script>
 
 <section class="card">
-  <p class="intro">
-    Choisissez l'ambiance. Le thème est retenu sur cet appareil et s'applique tout de
-    suite&nbsp;: rien n'est rechargé, rien n'est renvoyé au serveur.
-  </p>
-
   <div class="grid">
     {#each cards as c (c.id)}
       <button
@@ -170,7 +160,6 @@
             <span class="chosen"><Icon name="check" size={12} /> Choisi</span>
           {/if}
         </span>
-        <span class="hint">{c.hint}</span>
       </button>
     {/each}
   </div>
@@ -182,13 +171,6 @@
         {$customAccent ? (customActive ? "Active" : "Mémorisée") : "Thème"}
       </span>
     </div>
-    <p class="custom-intro" id="accent-help">
-      Une couleur à vous pour les boutons, le cœur et les sélections. Elle s'applique à
-      <strong>Encre</strong> et <strong>Papier</strong>&nbsp;; <strong>Pochette</strong> garde la
-      couleur de la pochette qui joue. Le texte posé dessus passe en noir ou en blanc, et les
-      textes d'accent sont ajustés pour tenir 4,5:1.
-    </p>
-
     <div class="picker">
       <label class="swatch" title="Choisir une couleur">
         <input
@@ -196,7 +178,6 @@
           value={seed}
           on:input={onPick}
           aria-label="Choisir la couleur personnalisée"
-          aria-describedby="accent-help"
         />
       </label>
       <div class="hexbox" class:bad>
@@ -210,7 +191,7 @@
           maxlength="7"
           aria-label="Code hexadécimal de la couleur, sans le dièse"
           aria-invalid={bad}
-          aria-describedby={bad ? "accent-error accent-help" : "accent-help"}
+          aria-describedby={bad ? "accent-error" : undefined}
           on:input={onHexInput}
           on:focus={() => (editing = true)}
           on:blur={onBlur}
@@ -233,24 +214,6 @@
         <p class="msg error" id="accent-error" role="alert">
           <Icon name="alert" size={15} />
           <span>{error}</span>
-        </p>
-      {:else if correction}
-        <p class="msg" role="status">
-          <Icon name="info" size={15} />
-          <span>{correction}</span>
-        </p>
-      {:else}
-        <p class="msg quiet">
-          <Icon name={$customAccent ? "check" : "info"} size={15} />
-          <span>
-            {#if !$customAccent}
-              Aucune couleur personnalisée&nbsp;: le thème garde son accent.
-            {:else if customActive}
-              Contraste vérifié&nbsp;: le texte tient 4,5:1 sur cette couleur.
-            {:else}
-              Mémorisée pour Encre et Papier&nbsp;; Pochette garde la couleur de la pochette.
-            {/if}
-          </span>
         </p>
       {/if}
     </div>
@@ -275,11 +238,6 @@
     </div>
   </div>
 
-  <p class="note">
-    <strong>Pochette</strong> suit la pochette qui joue&nbsp;: l'accent — boutons, sélections,
-    progression — reprend sa couleur dominante et change à chaque titre. Une pochette
-    sans couleur franche laisse l'orange de repli.
-  </p>
 </section>
 
 <style>
@@ -290,13 +248,6 @@
        desktop's 200 px menu leaves a 404 px content column at a 900 px window
        (three 96 px cards, the badge over the next name) and 752 at 1280. */
     container-type: inline-size;
-  }
-  .intro {
-    margin: 0;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.5;
-    max-width: 56ch;
   }
   .grid {
     display: grid;
@@ -421,12 +372,6 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-  .hint {
-    color: var(--dim);
-    font-size: 13px;
-    line-height: 1.35;
-  }
-
   /* -- Couleur personnalisée ------------------------------------------------ */
   /* Separated by a rule, not a second card: it is one more setting on the same
      screen, not another screen with its own frame. */
@@ -467,17 +412,6 @@
     border-color: transparent;
     background: var(--ac);
     color: var(--onac);
-  }
-  .custom-intro {
-    margin: 8px 0 0;
-    color: var(--dim);
-    font-size: 13.5px;
-    line-height: 1.5;
-    max-width: 62ch;
-  }
-  .custom-intro strong {
-    color: var(--tx);
-    font-weight: 600;
   }
   .picker {
     display: flex;
@@ -649,17 +583,6 @@
     color: var(--dim);
     font-size: 12px;
     letter-spacing: 0.08em;
-  }
-  .note {
-    margin: 16px 0 0;
-    color: var(--dim);
-    font-size: 13px;
-    line-height: 1.5;
-    max-width: 62ch;
-  }
-  .note strong {
-    color: var(--tx);
-    font-weight: 600;
   }
   @media (prefers-reduced-motion: reduce) {
     .tcard:active,

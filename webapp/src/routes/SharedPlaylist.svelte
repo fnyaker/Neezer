@@ -186,9 +186,7 @@
     <div class="center msg" in:fadeIn>
       <span class="mark"><Icon name="disc" size={34} /></span>
       <h1>Ce lien n'est plus valide.</h1>
-      <p class="muted">
-        Il a été révoqué ou a expiré. Demandez à son propriétaire d'en créer un nouveau.
-      </p>
+      <p class="muted">Lien révoqué ou expiré.</p>
     </div>
   {:else if phase === "failed"}
     <div class="center msg" in:fadeIn>
@@ -221,10 +219,7 @@
             </button>
           </div>
           {#if !queue.length && data.tracks.length}
-            <p class="note muted">
-              Aucun titre archivé pour l'instant&nbsp;: le propriétaire doit d'abord les
-              archiver pour qu'ils soient écoutables ici.
-            </p>
+            <p class="note muted">Aucun titre archivé pour l'instant.</p>
           {/if}
         </div>
       </section>
@@ -263,7 +258,6 @@
                   <span class="names">
                     <span class="tt">{t.title}</span>
                     <span class="aa">{t.display_artist || t.artist?.name || ""}</span>
-                    <span class="why">Non archivé — le propriétaire doit l'archiver pour qu'il soit écoutable</span>
                   </span>
                   <span class="chip">Non archivé</span>
                   <span class="dur mono">{fmtDuration(t.duration)}</span>
@@ -569,11 +563,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .why {
-    font-size: 0.76rem;
-    color: var(--dim);
-    line-height: 1.35;
   }
   .chip {
     flex: none;

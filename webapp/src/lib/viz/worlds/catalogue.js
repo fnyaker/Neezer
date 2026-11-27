@@ -8,9 +8,8 @@
 // catalogue and the loader agree. The GLSL itself is code-split one chunk per
 // world (./index.js) and fetched the first time that world is on screen.
 //
-// `group` is the gallery's shelf, `blurb` the one line under its name. They are
-// written for a person choosing a picture, not for a programmer: what you will
-// SEE, not how it is made.
+// `group` is the gallery's shelf. The name is all a person gets: the preview
+// above the grid shows what the world looks like.
 //
 // MAINTAINING THIS: a world needs a row here AND a loader in ./index.js. The
 // test suite fails if the two disagree.
@@ -31,76 +30,76 @@ export const GROUPS = [
 
 export const WORLD_META = {
   // --- hard ------------------------------------------------------------------
-  forge: { group: "hard", label: "Forge", blurb: "L'enclume du rawstyle frappée à chaque kick, des gerbes d'étincelles qui roulent au sol, l'hymne en ruban d'or." },
-  cymatics: { group: "hard", label: "Cymatique", blurb: "La mélodie dessinée dans le sable d'une plaque qui vibre : chaque note son motif, et le kick qui fait sauter le sable." },
-  shatter: { group: "hard", label: "Éclats", blurb: "Le cadre vole en éclats de verre qui réfractent la lumière, relancés à chaque kick." },
-  lasers: { group: "hard", label: "Lasers", blurb: "La mainstage vue de la foule : lasers dans la fumée, flammes sur les gros kicks, les mains qui se lèvent sur le drop." },
-  bounce: { group: "hard", label: "Rebond", blurb: "Une sphère douce qui s'écrase sur le kick et rebondit sur le temps, le spectre en couronne." },
-  saw: { group: "hard", label: "Scie", blurb: "Une lame d'acier qui tourne et crache ses étincelles, des dents de scie laser derrière — l'industriel à vif." },
-  stairs: { group: "hard", label: "Arpège", blurb: "Un escalier de lumière dont chaque marche s'allume sur une note de l'arpège." },
-  pingpong: { group: "hard", label: "Ping-pong", blurb: "Un échange au néon : deux raquettes de verre qui renvoient une balle de lumière sur chaque temps." },
-  soundsystem: { group: "hard", label: "Sound system", blurb: "Un mur d'enceintes dont les membranes pompent sous chaque basse, la foule devant." },
-  static: { group: "hard", label: "Parasites", blurb: "La pochette en signal qui se déchire : bandes décalées, pixels triés, blocs corrompus." },
-  microwave: { group: "hard", label: "Micro-ondes", blurb: "Un four vu à travers sa porte grillagée : la lampe qui grésille sur le kick, des arcs qui claquent — et selon le genre, une lame de scie ou du pop-corn qui éclate sur le plateau." },
-  fireworks: { group: "hard", label: "Feu d'artifice", blurb: "Des bouquets aux couleurs d'un vrai spectacle, sur les temps forts, au-dessus de la ville et de l'eau." },
+  forge: { group: "hard", label: "Forge" },
+  cymatics: { group: "hard", label: "Cymatique" },
+  shatter: { group: "hard", label: "Éclats" },
+  lasers: { group: "hard", label: "Lasers" },
+  bounce: { group: "hard", label: "Rebond" },
+  saw: { group: "hard", label: "Scie" },
+  stairs: { group: "hard", label: "Arpège" },
+  pingpong: { group: "hard", label: "Ping-pong" },
+  soundsystem: { group: "hard", label: "Sound system" },
+  static: { group: "hard", label: "Parasites" },
+  microwave: { group: "hard", label: "Micro-ondes" },
+  fireworks: { group: "hard", label: "Feu d'artifice" },
 
   // --- techno & machines -------------------------------------------------------
-  tunnel: { group: "techno", label: "Corridor", blurb: "Un couloir d'acier éclairé par ses anneaux, une lumière qui file au fond à chaque temps, un sol qui les reflète." },
-  warehouse: { group: "techno", label: "Hangar", blurb: "Piliers de béton dans le brouillard, lyres qui balaient la fumée, sol mouillé et stroboscopes." },
-  ridges: { group: "techno", label: "Crêtes", blurb: "Le spectre en lignes de crête qui défilent, à la manière d'Unknown Pleasures." },
-  lattice: { group: "techno", label: "Treillis", blurb: "Un treillis de chrome infini parcouru de courant, traversé au tempo." },
-  circuit: { group: "techno", label: "Circuit", blurb: "Des pistes de circuit imprimé où les impulsions courent sur chaque frappe." },
+  tunnel: { group: "techno", label: "Corridor" },
+  warehouse: { group: "techno", label: "Hangar" },
+  ridges: { group: "techno", label: "Crêtes" },
+  lattice: { group: "techno", label: "Treillis" },
+  circuit: { group: "techno", label: "Circuit" },
 
   // --- trance & psy ------------------------------------------------------------
-  hyperspace: { group: "trance", label: "Hyperespace", blurb: "Les étoiles s'étirent, accélèrent pendant la montée ; au drop, des portes de lumière défilent." },
-  kaleido: { group: "trance", label: "Kaléidoscope", blurb: "Une fractale en miroir qui tourne, zoome et fleurit avec le son." },
-  galaxy: { group: "trance", label: "Galaxie", blurb: "Une galaxie spirale de milliers d'étoiles qui respire avec la basse." },
-  flow: { group: "trance", label: "Flux", blurb: "Un champ de courants colorés qui s'enroule sur lui-même, sans jamais se répéter." },
+  hyperspace: { group: "trance", label: "Hyperespace" },
+  kaleido: { group: "trance", label: "Kaléidoscope" },
+  galaxy: { group: "trance", label: "Galaxie" },
+  flow: { group: "trance", label: "Flux" },
 
   // --- bass & breaks -----------------------------------------------------------
-  wobble: { group: "bass", label: "Wobble", blurb: "Un tube de basse à la forme du LFO, son sillage derrière lui, et du courant qui crépite quand ça pousse." },
-  chrome: { group: "bass", label: "Chrome", blurb: "Une masse de métal liquide dans un studio, qui se déforme sous les basses." },
-  slices: { group: "bass", label: "Découpe", blurb: "Des bandes de papier découpé qui glissent et se décalent sur chaque break." },
+  wobble: { group: "bass", label: "Wobble" },
+  chrome: { group: "bass", label: "Chrome" },
+  slices: { group: "bass", label: "Découpe" },
 
   // --- urbain -----------------------------------------------------------------
-  vinyl: { group: "urban", label: "Vinyle", blurb: "Un disque qui tourne sous la lampe, sa pochette en étiquette." },
-  halo: { group: "urban", label: "Halo", blurb: "Le spectre en couronne de lumière autour de la pochette, dans une fumée que la 808 repousse." },
-  nightdrive: { group: "urban", label: "Route de nuit", blurb: "L'autoroute de nuit derrière une voiture dont les feux stop s'allument sur le kick." },
-  neon: { group: "urban", label: "Néon", blurb: "Une rue mouillée sous des enseignes au néon qui se reflètent." },
+  vinyl: { group: "urban", label: "Vinyle" },
+  halo: { group: "urban", label: "Halo" },
+  nightdrive: { group: "urban", label: "Route de nuit" },
+  neon: { group: "urban", label: "Néon" },
 
   // --- pop & groove ------------------------------------------------------------
-  bokeh: { group: "groove", label: "Bokeh", blurb: "Des disques de lumière floue qui éclosent sur les temps, et des paillettes nettes devant." },
-  discoball: { group: "groove", label: "Boule à facettes", blurb: "La boule tourne et balaie la salle de ses taches de lumière." },
-  silk: { group: "groove", label: "Soie", blurb: "Des rubans de soie qui ondulent au fil de la voix." },
-  artwork: { group: "groove", label: "Pochette vivante", blurb: "Les couleurs de la pochette, fondues en un dégradé qui respire." },
-  plasma: { group: "groove", label: "Lampe à plasma", blurb: "Un globe de plasma : des filaments qui frappent le verre, une décharge qui tourne au drop." },
+  bokeh: { group: "groove", label: "Bokeh" },
+  discoball: { group: "groove", label: "Boule à facettes" },
+  silk: { group: "groove", label: "Soie" },
+  artwork: { group: "groove", label: "Pochette vivante" },
+  plasma: { group: "groove", label: "Lampe à plasma" },
 
   // --- rock & metal ------------------------------------------------------------
-  stage: { group: "rock", label: "Scène", blurb: "Le groupe en contre-jour devant un mur LED qui montre la pochette, les faisceaux dans la fumée, la foule." },
-  inferno: { group: "rock", label: "Brasier", blurb: "Des flammes qui rugissent et des braises qui montent." },
-  storm: { group: "rock", label: "Orage", blurb: "Un ciel d'orage où la foudre tombe sur les frappes." },
+  stage: { group: "rock", label: "Scène" },
+  inferno: { group: "rock", label: "Brasier" },
+  storm: { group: "rock", label: "Orage" },
 
   // --- calme -----------------------------------------------------------------
-  nebula: { group: "calm", label: "Nébuleuse", blurb: "Des nuages de gaz et de poussière d'étoiles, sans un seul à-coup." },
-  aurora: { group: "calm", label: "Aurore", blurb: "Des rideaux d'aurore boréale au-dessus de l'eau." },
-  piano: { group: "calm", label: "Piano", blurb: "Un clavier de lumière : la mélodie monte au-dessus des touches qui la jouent, les accords éclairent la salle." },
-  ocean: { group: "calm", label: "Océan", blurb: "La houle de nuit sous la lune, qui se gonfle avec la basse." },
-  cathedral: { group: "calm", label: "Nef", blurb: "Une rosace gothique et sa lumière dans la poussière, au bout d'une nef de colonnes." },
-  ink: { group: "calm", label: "Encre", blurb: "De l'encre qui s'épanouit dans l'eau, une volute par note." },
-  rain: { group: "calm", label: "Pluie", blurb: "La pluie sur la vitre, les lumières de la ville floues derrière." },
-  fireflies: { group: "calm", label: "Lucioles", blurb: "Une prairie de nuit où les lucioles s'allument sur la mélodie." },
+  nebula: { group: "calm", label: "Nébuleuse" },
+  aurora: { group: "calm", label: "Aurore" },
+  piano: { group: "calm", label: "Piano" },
+  ocean: { group: "calm", label: "Océan" },
+  cathedral: { group: "calm", label: "Nef" },
+  ink: { group: "calm", label: "Encre" },
+  rain: { group: "calm", label: "Pluie" },
+  fireflies: { group: "calm", label: "Lucioles" },
 
   // --- monde -----------------------------------------------------------------
-  carnival: { group: "world", label: "Carnaval", blurb: "Des anneaux de perles en polyrythmie sous des guirlandes d'ampoules." },
-  tropics: { group: "world", label: "Tropiques", blurb: "Le soleil couchant derrière les cocotiers, la mer qui scintille." },
+  carnival: { group: "world", label: "Carnaval" },
+  tropics: { group: "world", label: "Tropiques" },
 
   // --- rétro -----------------------------------------------------------------
-  horizon: { group: "retro", label: "Horizon", blurb: "Le soleil rayé sur la grille néon, les montagnes au loin." },
-  pixels: { group: "retro", label: "Pixels", blurb: "Un écran cathodique, des pixels qui sautent et un sprite qui court." },
+  horizon: { group: "retro", label: "Horizon" },
+  pixels: { group: "retro", label: "Pixels" },
 
   // --- classiques (also the fixed modes) --------------------------------------
-  pulse: { group: "modes", label: "Pulsations", blurb: "Des champs de couleur, un par bande, sous un verre liquide que chaque temps fait onduler." },
-  spectrum: { group: "modes", label: "Spectre", blurb: "Le spectre en capsules de lumière qui respirent avec la dynamique du morceau." },
+  pulse: { group: "modes", label: "Pulsations" },
+  spectrum: { group: "modes", label: "Spectre" },
 };
 
 /** When nothing names a genre at all, the archetype is still a better guess

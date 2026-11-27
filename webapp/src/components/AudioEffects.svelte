@@ -67,14 +67,6 @@
     { id: "direct", label: "Directe" },
     { id: "graph", label: "Traitée" },
   ];
-  const OUTPUT_HINTS = {
-    auto:
-      "Traitée, et directe seulement quand le lecteur mesure que le son se hache (un autoradio Bluetooth, parfois), le temps que ça dure.",
-    direct:
-      "Le son part tel quel vers le système, comme dans n'importe quelle application de musique : la lecture la plus robuste. Les animations suivent une copie du son ; l'égaliseur et les basses sont inactifs, et la normalisation ne fait que baisser les titres trop forts.",
-    graph:
-      "Tout passe par le moteur audio du navigateur : égaliseur, basses, normalisation complète. Déconseillé en Bluetooth sur Android, où ce moteur peut couper des morceaux du son.",
-  };
   const KIND_LABEL = {
     bluetooth: "Bluetooth",
     wired: "Filaire",
@@ -145,10 +137,10 @@
   }
 
   const NORM_LEVELS = [
-    { id: "off", label: "Désactivée", hint: "Volume d'origine" },
-    { id: "low", label: "Basse", hint: "Cible plus calme" },
-    { id: "medium", label: "Normale", hint: "Cible standard" },
-    { id: "high", label: "Élevée", hint: "Cible plus forte" },
+    { id: "off", label: "Désactivée" },
+    { id: "low", label: "Basse" },
+    { id: "medium", label: "Normale" },
+    { id: "high", label: "Élevée" },
   ];
 
   // Master output volume — the same store the desktop player bar drives, exposed
@@ -652,28 +644,16 @@
 
 <section class="card">
   <h2><Icon name="speaker" size={18} /> Sortie audio</h2>
-  <p class="muted sub">
-    Le chemin du son jusqu'à vos écouteurs, votre enceinte ou l'autoradio.
-  </p>
   {#if nativeOffered}
     <button class="toggle native-tg" role="switch" aria-checked={nativeOn} on:click={() => nativePlayer.set(!nativeOn)}>
       <span class="tg-txt">
         <span class="tg-title">Lecteur de l'application</span>
-        <span class="tg-hint muted">
-          Le son est lu par Android lui-même, hors de la page : il continue écran
-          éteint et en Bluetooth comme dans une application de musique.
-          {#if nativeDsp}L'égaliseur, les basses et les animations le suivent.{:else}En essai :
-          l'égaliseur, les basses et les animations ne le suivent pas encore (mettez l'application à jour).{/if}
-        </span>
       </span>
       <span class="sw" class:on={nativeOn}><span class="knob"></span></span>
     </button>
     {#if nativeFailed}
       <div class="out-next native-fail">
-        <span class="muted">
-          Le lecteur de l'application a échoué sur cet appareil ; la page lit la musique à sa place
-          jusqu'à demain ou jusqu'à la prochaine mise à jour de l'application.
-        </span>
+        <span class="muted">Lecteur Android indisponible.</span>
         <button class="g-retry" on:click={clearNativeFault}>Réessayer maintenant</button>
       </div>
     {/if}
@@ -693,7 +673,6 @@
       </button>
     {/each}
   </div>
-  {#if !native}<p class="muted out-hint">{OUTPUT_HINTS[$audioOutput] || OUTPUT_HINTS.auto}</p>{/if}
   <div class="out-status" class:direct={plan.direct}>
     <span class="out-ico"><Icon name={route.kind === "bluetooth" ? "bluetooth" : "speaker"} size={16} /></span>
     <span class="out-txt">
@@ -718,12 +697,6 @@
 {#if !REMOTE}
 <section class="card">
   <h2><Icon name="volume" size={18} /> Mono et balance</h2>
-  <p class="muted sub">
-    Pour écouter avec un seul écouteur, une oreille ou une aide auditive :
-    réunissez les deux canaux, ou déplacez le son vers l'oreille qui entend.
-    Ces réglages ne changent que ce que vous entendez — les animations gardent
-    le stéréo d'origine.
-  </p>
 
   <div class="block">
     <button
@@ -736,10 +709,6 @@
     >
       <span class="tg-txt">
         <span class="tg-title">Mono</span>
-        <span class="tg-hint muted">
-          Réunit les deux canaux dans chaque oreille : plus rien n'est perdu
-          d'un côté, même avec un seul écouteur.
-        </span>
       </span>
       <span class="sw" class:on={pan.mono}><span class="knob"></span></span>
     </button>
@@ -780,7 +749,7 @@
       {#if panDisabled}
         Disponible en lecture traitée.
       {:else}
-        Appliqué immédiatement, sans interrompre la lecture.
+        Appliqué immédiatement.
       {/if}
     </p>
   </div>
@@ -789,24 +758,14 @@
 
 <section class="card">
   <h2><Icon name="sliders" size={18} /> Audio</h2>
-  <p class="muted sub">
-    Ces effets traitent le son dans le navigateur. Ils sont désactivés par
-    défaut ; une fois activés, la lecture passe par le processeur audio (ce qui
-    peut, sur certains mobiles, affecter la lecture en arrière-plan).
-  </p>
 
   <!-- Master volume ------------------------------------------------------- -->
   <div class="block">
     <div class="block-head">
       <span class="block-title">Volume</span>
-      <span class="muted block-hint">
-        Volume de sortie général (identique à la barre du lecteur) — accessible
-        sur mobile, et pratique pour compenser l'égaliseur ou l'amplification
-        des basses.
-      </span>
     </div>
     <div class="slider-row">
-      <button class="vbtn" on:click={() => player.toggleMute()} aria-label="Muet" title="Muet">
+      <button class="vbtn" on:click={() => player.toggleMute()} aria-label="Muet">
         <Icon name={$player.muted || $player.volume === 0 ? "mute" : "volume"} size={18} />
       </button>
       <div
@@ -837,16 +796,10 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Normalisation du volume</span>
-      <span class="muted block-hint">
-        Gain fixe par titre (selon sa loudness ReplayGain analysée par Deezer)
-        pour que tous jouent au même niveau — sans compression ni ajustement
-        pendant la lecture.
-        {#if plan.direct}En lecture directe, elle ne fait que baisser les titres trop forts.{/if}
-      </span>
     </div>
     <div class="seg">
       {#each NORM_LEVELS as n}
-        <button class="seg-btn" class:sel={$normalization === n.id} on:click={() => useNormalization(n.id)} title={n.hint}>
+        <button class="seg-btn" class:sel={$normalization === n.id} on:click={() => useNormalization(n.id)}>
           {n.label}
         </button>
       {/each}
@@ -857,10 +810,7 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Amélioration des basses</span>
-      <span class="muted block-hint">
-        Renforce le grave. Un limiteur automatique évite la saturation.
-        {#if dspNote}<span class="off-note">{dspNote}</span>{/if}
-      </span>
+      {#if dspNote}<span class="muted block-hint"><span class="off-note">{dspNote}</span></span>{/if}
     </div>
     <div class="slider-row">
       <input type="range" min="0" max="1" step="0.01" value={$bassBoost} on:input={(e) => setBass(e.target.value)} style={`--p:${bassPct}%`} aria-label="Amplification des basses" aria-valuetext={`${bassPct} %`} />
@@ -875,20 +825,11 @@
      limiter is working — which is the whole point of the warning. -->
 <section class="card eq-card" bind:this={eqCard}>
   <h2><Icon name="sliders" size={18} /> Égaliseur</h2>
-  <p class="muted sub">
-    Dix bandes de 31 Hz à 16 kHz (±16 dB). Un limiteur de sécurité rattrape les
-    pics en fin de chaîne ; le mètre montre le niveau réel de chaque bande et
-    l'effort du limiteur. Le risque de saturation ne s'affiche que si votre
-    courbe relève le signal, et reste visible jusqu'à votre prochain réglage.
-    {#if dspNote}<span class="off-note">{dspNote}</span>{/if}
-  </p>
+  {#if dspNote}<p class="muted sub"><span class="off-note">{dspNote}</span></p>{/if}
 
   <button class="toggle" role="switch" aria-checked={$eqEnabled} on:click={toggleEq}>
     <span class="tg-txt">
       <span class="tg-title">Égaliseur 10 bandes</span>
-      <span class="tg-hint muted">
-        Ajustez chaque bande (±16 dB), ou partez d'un préréglage.
-      </span>
     </span>
     <span class="sw" class:on={$eqEnabled}><span class="knob"></span></span>
   </button>
@@ -908,7 +849,6 @@
             class:picked={pickedId === p.id && activeId !== p.id}
             data-selected={selected?.id === p.id ? "true" : "false"}
             aria-pressed={activeId === p.id}
-            title="Appliquer « {p.name} »"
             on:click={() => usePreset(p)}
           >
             <span class="pname">{p.name}</span>
@@ -924,7 +864,7 @@
       <div class="pgroup-head">
         <span class="pgroup-title">Mes préréglages</span>
         <span class="pcount mono">{mine.length}</span>
-        <button class="padd" on:click={openNaming} aria-label="Nouveau préréglage" title="Nouveau préréglage">
+        <button class="padd" on:click={openNaming} aria-label="Nouveau préréglage">
           <Icon name="plus" size={16} />
         </button>
       </div>
@@ -937,7 +877,6 @@
               class:picked={pickedId === p.id && activeId !== p.id}
               data-selected={selected?.id === p.id ? "true" : "false"}
               aria-pressed={activeId === p.id}
-              title="Appliquer « {p.name} »"
               on:click={() => usePreset(p)}
             >
               <span class="pname">{p.name}</span>
@@ -957,15 +896,14 @@
   <p class="pstate" aria-live="polite">
     {#if selected}
       {#if selected.builtin}
-        «&nbsp;{selected.name}&nbsp;» · préréglage intégré, non modifiable.
+        «&nbsp;{selected.name}&nbsp;» · intégré
       {:else if dirty}
-        «&nbsp;{selected.name}&nbsp;» · <strong>modifié</strong> — «&nbsp;Mettre à jour&nbsp;» garde ce
-        réglage.
+        «&nbsp;{selected.name}&nbsp;» · <strong>modifié</strong>
       {:else}
-        «&nbsp;{selected.name}&nbsp;» · à jour.
+        «&nbsp;{selected.name}&nbsp;»
       {/if}
     {:else}
-      Réglage personnalisé — enregistrez-le pour le retrouver.
+      Réglage personnalisé
     {/if}
   </p>
 
@@ -1081,11 +1019,6 @@
      and lives in the same tab. -->
 <section class="card">
   <h2><Icon name="shuffle" size={18} /> Transitions</h2>
-  <p class="muted sub">
-    Comment un titre laisse la place au suivant. Le fondu respecte la
-    normalisation : chaque titre garde son propre niveau pendant le
-    chevauchement, aucun des deux ne saute.
-  </p>
 
   <div class="block">
     <button
@@ -1096,12 +1029,7 @@
     >
       <span class="tg-txt">
         <span class="tg-title">Fondu enchaîné</span>
-        <span class="tg-hint muted">
-          Les deux titres se superposent en fin de morceau.
-          {plan.direct
-            ? "En lecture directe, le fondu se fait sur le volume de chacun."
-            : "Comme les effets, cela fait passer la lecture par le moteur audio."}
-        </span>
+        <span class="tg-hint muted">Superpose la fin et le début.</span>
       </span>
       <span class="sw" class:on={$crossfadeEnabled}><span class="knob"></span></span>
     </button>
@@ -1133,10 +1061,7 @@
     >
       <span class="tg-txt">
         <span class="tg-title">Adoucir les changements manuels</span>
-        <span class="tg-hint muted">
-          Suivant et précédent s'enchaînent avec un fondu plus court que celui de
-          fin de titre, sans la coupure sèche au milieu de la forme d'onde.
-        </span>
+        <span class="tg-hint muted">Fondu court sur suivant et précédent.</span>
       </span>
       <span class="sw" class:on={$crossfadeOnSkip}><span class="knob"></span></span>
     </button>
@@ -1167,11 +1092,7 @@
     >
       <span class="tg-txt">
         <span class="tg-title">Tronquer les silences</span>
-        <span class="tg-hint muted">
-          Démarre et termine chaque titre là où le son commence et s'arrête
-          vraiment. Le serveur mesure le fichier une fois, après son archivage :
-          un titre est donc ajusté à partir de la lecture suivante.
-        </span>
+        <span class="tg-hint muted">Coupe les silences en début et fin.</span>
       </span>
       <span class="sw" class:on={$trimSilence}><span class="knob"></span></span>
     </button>
@@ -1219,10 +1140,6 @@
   .native-fail {
     margin: -6px 0 16px;
   }
-  .native-tg .tg-hint {
-    max-width: 62ch;
-    line-height: 1.45;
-  }
   @media (max-width: 420px) {
     .out-seg .long {
       display: none;
@@ -1230,11 +1147,6 @@
     .out-seg .short {
       display: inline;
     }
-  }
-  .out-hint {
-    font-size: 0.8rem;
-    line-height: 1.45;
-    margin: 12px 0 0;
   }
   .out-status {
     display: flex;
