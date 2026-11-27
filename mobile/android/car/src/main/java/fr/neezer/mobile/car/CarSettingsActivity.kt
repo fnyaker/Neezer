@@ -32,6 +32,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import fr.neezer.mobile.car.R
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -68,7 +70,6 @@ class CarSettingsActivity : ComponentActivity() {
     private lateinit var gpsFlow: CarFlow
     private lateinit var layoutFlow: CarFlow
     private lateinit var letterFlow: CarFlow
-    private lateinit var layoutHint: TextView
 
     private enum class Catalogue {
         IDLE,
@@ -136,6 +137,21 @@ class CarSettingsActivity : ComponentActivity() {
             )
         )
         setContentView(scroll)
+        // Android 15 draws every window edge to edge whatever the app asks for:
+        // the scroll view takes the status bar's (and a notch's) height as top
+        // padding, so the title and the back arrow never sit under them — the
+        // judge's `07-mode-voiture` capture showed the header overlapping the
+        // status bar (run 46041172474). Older devices already fit the window,
+        // so only 15 and up takes the inset.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
+                val bars = insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+                )
+                view.setPadding(0, bars.top, 0, 0)
+                insets
+            }
+        }
 
         build()
         refreshPermissions()
@@ -250,7 +266,6 @@ class CarSettingsActivity : ComponentActivity() {
             card,
             toggleRow(
                 "Se placer sur l'app GPS au premier plan",
-                "Le mode apparaît quand une app GPS passe devant, et disparaît avec elle.",
                 car.gpsTrigger,
             ) { car.gpsTrigger = it }
         )
@@ -264,7 +279,6 @@ class CarSettingsActivity : ComponentActivity() {
             card,
             toggleRow(
                 "Aussi au Bluetooth de la voiture",
-                "Sans GPS ou sans statistiques d'usage : le mode apparaît avec le Bluetooth de la voiture.",
                 car.bluetoothTrigger,
             ) { car.bluetoothTrigger = it },
             12
@@ -291,20 +305,12 @@ class CarSettingsActivity : ComponentActivity() {
     /**
      * Where the card was dragged, per navigation app and per size. The card is
      * moved from the overlay itself (the FULL header's move handle, or a long
-     * press + drag on the ULTRA disc); this screen only explains it and forgets
-     * one app or all of them — no dialog, one tap and a toast.
+     * press + drag on the ULTRA disc); this screen only forgets one app or all
+     * of them — no dialog, one tap and a toast.
      */
     private fun positionCard(): LinearLayout {
         val card = newCard()
         addStack(card, cardTitle("Position"))
-        val hint = CarStyle.text(
-            this,
-            "Fais glisser la carte en Grand pour la placer ; mémorisée par app GPS. " +
-                "En Ultra, appui long puis glisse sur le rond.",
-            13f,
-            CarStyle.DIM,
-        ).apply { setLineSpacing(0f, 1.4f) }
-        addStack(card, hint, 6)
 
         positionsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         addStack(card, positionsBox, 12)
@@ -330,7 +336,7 @@ class CarSettingsActivity : ComponentActivity() {
             positionsBox.addView(
                 CarStyle.text(
                     this,
-                    "Aucune position enregistrée — la carte reprend sa place par défaut.",
+                    "Aucune position enregistrée.",
                     13f,
                     CarStyle.DIM,
                 ),
@@ -375,11 +381,10 @@ class CarSettingsActivity : ComponentActivity() {
 
         fun spec(
             label: String,
-            hint: String,
             granted: () -> Boolean,
             ask: () -> Unit,
         ) {
-            val row = permissionRow(label, hint, ask)
+            val row = permissionRow(label, ask)
             permissionRows.add(row to granted)
             addStack(permissionsCard, row)
         }
@@ -387,22 +392,18 @@ class CarSettingsActivity : ComponentActivity() {
         addStack(permissionsCard, cardTitle("Autorisations"))
         spec(
             "Afficher par-dessus les autres apps",
-            "Pour que la barre apparaisse sans quitter le GPS.",
             { CarPermissions.hasOverlay(this) },
         ) { openPermissionSettings(CarPermissions.overlayIntent(this)) }
         spec(
             "Accès aux statistiques d'usage",
-            "Pour détecter l'app GPS au premier plan.",
             { CarPermissions.hasUsageStats(this) },
         ) { openPermissionSettings(CarPermissions.usageIntent()) }
         spec(
             "Localisation",
-            "Pour savoir si tu roules.",
             { CarPermissions.hasLocation(this) },
         ) { askPermissions(CarPermissions.locationPermissions) }
         spec(
             "Bluetooth",
-            "Pour réagir à la connexion de la voiture.",
             { CarPermissions.hasBluetoothConnect(this) },
         ) {
             if (Build.VERSION.SDK_INT >= 31)
@@ -410,19 +411,18 @@ class CarSettingsActivity : ComponentActivity() {
         }
         spec(
             "Microphone",
-            "Pour la recherche vocale en roulant.",
             { CarPermissions.hasMicrophone(this) },
         ) { askPermissions(arrayOf(Manifest.permission.RECORD_AUDIO)) }
         return permissionsCard
     }
 
-    private fun permissionRow(label: String, hint: String, ask: () -> Unit): View {
+    private fun permissionRow(label: String, ask: () -> Unit): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         row.addView(
-            textBlock(label, hint),
+            textBlock(label),
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
         row.addView(
@@ -485,12 +485,6 @@ class CarSettingsActivity : ComponentActivity() {
         renderLayouts()
         addStack(card, layoutFlow, 8)
 
-        layoutHint = CarStyle.text(this, "", 13f, CarStyle.DIM).apply {
-            setLineSpacing(0f, 1.4f)
-        }
-        addStack(card, layoutHint, 10)
-        updateLayoutHint()
-
         addStack(card, monoLabel("LETTRES MAX EN ROULANT"), 14)
         letterFlow = CarFlow(this).apply { gap = d(8) }
         renderLetters()
@@ -502,7 +496,6 @@ class CarSettingsActivity : ComponentActivity() {
             card,
             toggleRow(
                 "Inverser gauche et droite",
-                "Pour les habitudes RTL : le glissé gauche passe au titre suivant.",
                 car.invertSwipe,
             ) { car.invertSwipe = it },
             8
@@ -516,16 +509,7 @@ class CarSettingsActivity : ComponentActivity() {
             layoutFlow.addView(chip(label, car.keyboardLayout == id) {
                 car.keyboardLayout = id
                 renderLayouts()
-                updateLayoutHint()
             })
-        }
-    }
-
-    private fun updateLayoutHint() {
-        layoutHint.text = when (car.keyboardLayout) {
-            "auto" -> "Suit le clavier du téléphone : AZERTY, QWERTY ou QWERTZ selon ta langue. Si tu changes de langue, le mode voiture suit."
-            "abc" -> "Ordre alphabétique 7 × 4 : touches plus larges, plus facile à retrouver sans regarder."
-            else -> "Disposition fixe, quelle que soit la langue du clavier du téléphone. Touches plus étroites qu'en ABC."
         }
     }
 
@@ -560,14 +544,6 @@ class CarSettingsActivity : ComponentActivity() {
         )
         addStack(card, head)
 
-        val hint = CarStyle.text(
-            this,
-            "Épingle celles que tu veux voir en roulant. « Favoris » reste toujours en premier. Tu peux aussi épingler depuis la page d'une playlist dans l'app. Les épinglées restent sur cet appareil, même sans serveur.",
-            13f,
-            CarStyle.DIM,
-        ).apply { setLineSpacing(0f, 1.4f) }
-        addStack(card, hint, 6)
-
         pinsStatus = CarStyle.monoText(this, "", 11f, CarStyle.DIM).apply {
             setPadding(0, d(4), 0, 0)
         }
@@ -590,7 +566,7 @@ class CarSettingsActivity : ComponentActivity() {
             pinsBox.addView(
                 CarStyle.text(
                     this,
-                    "Aucune playlist pour l'instant. Crée-en une dans l'app, puis épingle-la ici.",
+                    "Aucune playlist pour l'instant.",
                     13f,
                     CarStyle.DIM,
                 ).apply { setLineSpacing(0f, 1.4f) },
@@ -877,14 +853,6 @@ class CarSettingsActivity : ComponentActivity() {
         )
         addStack(card, head)
 
-        val hint = CarStyle.text(
-            this,
-            "Plus la barre est opaque, moins on voit la route derrière. Android refuse les touches au-delà de 80 % : le mode voiture s'arrête là.",
-            13f,
-            CarStyle.DIM,
-        ).apply { setLineSpacing(0f, 1.4f) }
-        addStack(card, hint, 6)
-
         val initial = (car.overlayAlpha * 100f).roundToInt().coerceIn(40, 80)
         value.text = "$initial %"
         val bar = SeekBar(this).apply {
@@ -964,19 +932,11 @@ class CarSettingsActivity : ComponentActivity() {
             letterSpacing = 0.08f
         }
 
-    private fun textBlock(title: String, hint: String): View {
-        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        column.addView(CarStyle.text(this, title, 15f, CarStyle.TX))
-        column.addView(
-            CarStyle.text(this, hint, 13f, CarStyle.DIM).apply { setLineSpacing(0f, 1.35f) },
-            topWrap(2)
-        )
-        return column
-    }
+    private fun textBlock(title: String): TextView =
+        CarStyle.text(this, title, 15f, CarStyle.TX)
 
     private fun toggleRow(
         title: String,
-        hint: String,
         initial: Boolean,
         onChange: (Boolean) -> Unit,
     ): View {
@@ -985,7 +945,7 @@ class CarSettingsActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         row.addView(
-            textBlock(title, hint),
+            textBlock(title),
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
         val toggle = CarToggleView(this).apply {

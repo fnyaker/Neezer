@@ -44,7 +44,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import fr.neezer.mobile.bridge.DevicePrompts
 import fr.neezer.mobile.designsystem.EmptyState
@@ -86,9 +85,6 @@ internal fun PlaybackSection(model: SettingsModel, state: SettingsModel.State) {
     val settings = state.settings ?: return
     SettingsCard(
         title = "Qualité demandée au serveur",
-        // Honest in both directions: the engine applies it when the next title
-        // is loaded, and the title already playing keeps its own stream.
-        subtitle = "S'applique au prochain titre ; le titre en cours continue.",
     ) {
         ChoicePills(
             choices = QUALITY_CHOICES.map { it.second },
@@ -113,7 +109,6 @@ internal fun PlaybackSection(model: SettingsModel, state: SettingsModel.State) {
     }
     SettingsCard(
         title = "Mode voiture",
-        subtitle = "Le panneau par-dessus la navigation, les déclencheurs, le placement et les playlists épinglées.",
     ) {
         NzButton(
             text = "Ouvrir les réglages du mode voiture",
@@ -135,14 +130,12 @@ internal fun AppearanceSection(model: SettingsModel, state: SettingsModel.State)
     val settings = state.settings ?: return
     SettingsCard(
         title = "Ambiance",
-        subtitle = "Retenu sur cet appareil, appliqué tout de suite.",
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-            THEME_CHOICES.forEach { (id, label, hint) ->
+            THEME_CHOICES.forEach { (id, label) ->
                 ThemeCard(
                     id = id,
                     label = label,
-                    hint = hint,
                     selected = settings.theme == id,
                     onClick = { model.setTheme(id) },
                 )
@@ -157,7 +150,7 @@ internal fun AppearanceSection(model: SettingsModel, state: SettingsModel.State)
  * when it is the one in force (`AppearanceSettings.svelte`'s swatch).
  */
 @Composable
-private fun ThemeCard(id: String, label: String, hint: String, selected: Boolean, onClick: () -> Unit) {
+private fun ThemeCard(id: String, label: String, selected: Boolean, onClick: () -> Unit) {
     val colors = Sillon.colors
     val preview = Sillon.theme(themeKindOf(id))
     val shape = RoundedCornerShape(NzRadius.field)
@@ -202,16 +195,13 @@ private fun ThemeCard(id: String, label: String, hint: String, selected: Boolean
                     .background(preview.ac, CircleShape),
             )
         }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(label, style = Sillon.type.label, color = colors.tx)
-                if (selected) {
-                    Spacer(Modifier.width(NzSpacing.s))
-                    Icon(NzGlyph.Check, size = 13.dp, tint = colors.acText)
-                    Text("Choisi", style = Sillon.type.labelMono, color = colors.acText)
-                }
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = Sillon.type.label, color = colors.tx)
+            if (selected) {
+                Spacer(Modifier.width(NzSpacing.s))
+                Icon(NzGlyph.Check, size = 13.dp, tint = colors.acText)
+                Text("Choisi", style = Sillon.type.labelMono, color = colors.acText)
             }
-            Text(hint, style = Sillon.type.bodySmall, color = colors.dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -231,7 +221,6 @@ private fun AccentCard(model: SettingsModel, settings: uniffi.nz_ffi.SettingsDat
 
     SettingsCard(
         title = "Couleur personnalisée",
-        subtitle = "Une couleur à vous pour les boutons, le cœur et les sélections.",
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -315,11 +304,6 @@ private fun AccentCard(model: SettingsModel, settings: uniffi.nz_ffi.SettingsDat
             Icon(NzGlyph.HeartFilled, size = 20.dp, tint = pair.ink)
             Text(text = "#${colourHex(pair.surface)}", style = Sillon.type.labelMono, color = colors.dim)
         }
-        Text(
-            text = "L'accent reprend la couleur dominante de la pochette qui joue.",
-            style = Sillon.type.bodySmall,
-            color = colors.dim,
-        )
     }
 }
 
@@ -357,7 +341,6 @@ internal fun VizSection(
     if (onOpen != null) {
         SettingsCard(
             title = "Écran d'animation",
-            subtitle = "Le visualiseur plein écran, sur ce que le lecteur joue en ce moment.",
         ) {
             NzButton(
                 text = "Ouvrir le visualiseur",
@@ -369,16 +352,10 @@ internal fun VizSection(
     }
     SettingsCard(
         title = "Mode éco",
-        subtitle = "Coupe toutes les animations et le fond animé. La lecture et les indicateurs d'état restent.",
     ) {
         NzSwitch(checked = settings.eco, onCheckedChange = model::setEco, label = "Mode éco")
-        Text(
-            text = if (settings.eco) "Aucune transition : tout paraît d'un coup." else "Les transitions suivent les réglages du système.",
-            style = Sillon.type.bodySmall,
-            color = Sillon.colors.dim,
-        )
     }
-    SettingsCard(title = "Visualiseur", subtitle = "Ce qui s'anime pendant la lecture.") {
+    SettingsCard(title = "Visualiseur") {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.m)) {
             Text("Forme", style = Sillon.type.label, color = Sillon.colors.tx)
             NzSegmented(
@@ -432,9 +409,6 @@ internal fun VizSection(
     if (isAdmin && onGenres != null) {
         SettingsCard(
             title = "Studio de genres",
-            subtitle = "Le classifieur connaît les styles avec lesquels il a été écrit. " +
-                "Si le vôtre lui échappe — un sous-genre, une scène, votre propre découpage — " +
-                "créez-le, étiquetez quelques titres et entraînez le modèle ici même.",
         ) {
             NzButton(
                 text = "Ouvrir",
@@ -472,7 +446,6 @@ internal fun DiscoverySection(model: SettingsModel, state: SettingsModel.State) 
     val step = discoveryStepOf(state.discoveryLevel)
     SettingsCard(
         title = "Niveau de découverte",
-        subtitle = "Jusqu'où le Flow et les suggestions « Pour vous » s'éloignent de ce que vous écoutez. Le réglage vous suit sur tous vos appareils.",
     ) {
         Text(step.name, style = Sillon.type.titleSmall, color = colors.tx)
         Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
@@ -484,7 +457,6 @@ internal fun DiscoverySection(model: SettingsModel, state: SettingsModel.State) 
                 )
             }
         }
-        Text(step.hint, style = Sillon.type.bodySmall, color = colors.dim)
     }
     DislikesCard(model, state)
 }
@@ -502,7 +474,6 @@ private fun DislikesCard(model: SettingsModel, state: SettingsModel.State) {
     val section = state.dislikes
     SettingsCard(
         title = "Titres que vous n'aimez pas",
-        subtitle = "Ils ne reviennent plus dans le Flow, les radios et les mixes. Vous pouvez toujours les chercher et les écouter vous-même.",
     ) {
         // The card's phase replaces in place (M7): the cause, the loading line,
         // the empty note or the window.
@@ -527,7 +498,6 @@ private fun DislikesCard(model: SettingsModel, state: SettingsModel.State) {
                     if (window.len == 0) {
                         EmptyState(
                             title = "Aucun pour l'instant",
-                            body = "Touchez « Je n'aime pas » dans le lecteur ou le menu d'un titre.",
                             glyph = NzGlyph.ThumbsDown,
                         )
                     } else {
@@ -620,8 +590,6 @@ internal fun HelpSection(model: SettingsModel, state: SettingsModel.State) {
     crash?.let { trace ->
         SettingsCard(
             title = "Dernier incident",
-            subtitle = "L'application s'est arrêtée sur une erreur. Rien n'est envoyé : cette " +
-                "trace reste sur cet appareil, et « Partager le rapport » ne la contient pas.",
         ) {
             Text(
                 text = trace,
@@ -664,7 +632,6 @@ internal fun HelpSection(model: SettingsModel, state: SettingsModel.State) {
     }
     SettingsCard(
         title = "Diagnostic",
-        subtitle = "Un rapport à joindre à un signalement : les versions, le serveur, l'appareil, ce que l'app a demandé au réseau et les réglages en force. Ni mot de passe, ni jeton, ni cookie.",
     ) {
         NzButton(
             text = "Partager le rapport",

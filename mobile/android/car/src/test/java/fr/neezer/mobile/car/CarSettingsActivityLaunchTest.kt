@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -56,6 +57,12 @@ class CarSettingsActivityLaunchTest {
             val texts = textsOf(root)
             assertTrue("le titre de l'écran manque : $texts", texts.contains("Mode voiture"))
             assertTrue("la carte « Déclenchement » manque : $texts", texts.contains("Déclenchement"))
+            // Une ligne d'aide sous un réglage est du « texte inutile » (C5,
+            // décision du propriétaire 2026-11-27). La garde nomme celles que
+            // l'écran portait, pour qu'elles ne reviennent pas.
+            for (line in HELP_LINES) {
+                assertFalse("ligne d'aide revenue : $line", texts.any { it.contains(line) })
+            }
         } finally {
             controller.close()
         }
@@ -191,5 +198,23 @@ class CarSettingsActivityLaunchTest {
         val named = listOf(desc, text).firstOrNull { it.isNotBlank() }
         val name = if (named != null) "\"$named\"" else "(sans nom)"
         return "$name ${view.javaClass.simpleName}"
+    }
+
+    private companion object {
+        /** Les phrases d'aide que l'écran portait, retirées le 2026-11-27. */
+        val HELP_LINES = listOf(
+            "Le mode apparaît quand une app GPS passe devant",
+            "Sans GPS ou sans statistiques d'usage",
+            "Fais glisser la carte en Grand pour la placer",
+            "Pour que la barre apparaisse sans quitter le GPS.",
+            "Pour détecter l'app GPS au premier plan.",
+            "Pour savoir si tu roules.",
+            "Pour réagir à la connexion de la voiture.",
+            "Pour la recherche vocale en roulant.",
+            "Pour les habitudes RTL",
+            "Épingle celles que tu veux voir en roulant.",
+            "Plus la barre est opaque, moins on voit la route derrière.",
+            "Suit le clavier du téléphone",
+        )
     }
 }
