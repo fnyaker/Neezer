@@ -6041,13 +6041,31 @@ only its two seams changed:
    `:car` depends on `androidx.activity:activity` (for `registerForActivityResult`)
    and no longer on `androidx.appcompat`; the JVM test is the cheap gate, run by
    `testDebugUnitTest` in the `apk` job on every mobile PR.
+5. **A car-mode control is a 48 dp touch box whose VISIBLE shape is drawn
+   inset inside it** (C48, 2026-11-27). Material's floor is 48 × 48 dp
+   ([m3](https://m3.material.io/foundations/designing/structure),
+   [Android accessibility](https://developer.android.com/guide/topics/ui/accessibility/apps#large-controls)),
+   and the settings screen missed it at 44 dp (back, pin), 40 dp (chips) and
+   52 × 30 dp (switches): the judge's precheck counted **13 targets under 48 dp**
+   on `07-mode-voiture` (run 45810671271). `TOUCH = 48` sizes every box, and an
+   `InsetDrawable` on the background AND the ripple keeps the visible circle at
+   44, the pill at 40 and the toggle's track at 52 × 30 (drawn centred). The
+   chip's `setPadding` is applied AFTER its background: an `InsetDrawable`
+   reports background padding, and View then drops a padding set before it
+   (measured on the JVM: « Waze » fell from 64 to 36 dp wide). Measured:
+   `CarSettingsActivityLaunchTest` lays the whole screen out at 411 × 866 dp,
+   walks every clickable view (**26 → 0** sous 48 dp au JVM, la capture n'en
+   voyait que 13 dans sa fenêtre ; deux lignes épinglées couvrent les boutons
+   épingler/monter) and asserts the drawn pill is still 40 dp and the back
+   circle 44 dp; Robolectric needs `@GraphicsMode(NATIVE)`, LEGACY measures
+   one pixel per character.
 
 
 **Measured.**
 
 | What | How | Number |
 |---|---|---|
-| The ported policies | `:car:testDebugUnitTest` | **71 tests**, 0 failures: visibility 8, foreground 12, motion 7, pins 7, placement 11, cover policy 10, fanout/format 3, catalogue causes/pins/count 5, watch 7, the settings screen's first frame (Robolectric) 1 |
+| The ported policies | `:car:testDebugUnitTest` | **72 tests**, 0 failures: visibility 8, foreground 12, motion 7, pins 7, placement 11, cover policy 10, fanout/format 3, catalogue causes/pins/count 5, watch 7, the settings screen (Robolectric) 2 |
 | The two seams, Rust | `cargo test -p nz-ffi car::` | **8 tests**: catalogue 2 requests cold + the star count, a failed count leaving it unknown, a 401 as `Session`, no `/app` under `/api` (and a path refused as an origin), the kind/id bounds, the tile-only process, the heart |
 | The catalogue | perf_api, one panel open (`GET` count at the server) | **2 requests** (`/api/me/playlists`, `/api/me/favorite-ids`), **0** for 60 s after; the Favoris tile read its count ("4 titres aimés") without `/api/me/favorites` |
 | Covers | same run, panel + card | **1 request per distinct sleeve** (2 for the panel), **0** on the next repaint (`cover hit` in the journal) |

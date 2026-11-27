@@ -11,6 +11,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
@@ -216,7 +217,7 @@ class CarSettingsActivity : ComponentActivity() {
         val back = iconButton(44, CarStyle.S1, CarStyle.LN, 1f, "chevronLeft", 20, CarStyle.TX, "Retour") {
             finish()
         }
-        row.addView(back, LinearLayout.LayoutParams(d(44), d(44)))
+        row.addView(back, LinearLayout.LayoutParams(d(TOUCH), d(TOUCH)))
 
         val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val kicker = CarStyle.monoText(this, "RÉGLAGES", 11f, CarStyle.DIM).apply {
@@ -230,8 +231,10 @@ class CarSettingsActivity : ComponentActivity() {
         titles.addView(title, topWrap(2))
         row.addView(
             titles,
+            // The back box grew from 44 to 48 dp (+4): the titles keep their
+            // x by giving back those 4 dp here.
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = d(12)
+                leftMargin = d(8)
             }
         )
         return row
@@ -319,7 +322,7 @@ class CarSettingsActivity : ComponentActivity() {
             },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                d(40)
+                d(TOUCH)
             )
         )
         val packages = car.positionedPackages()
@@ -355,7 +358,7 @@ class CarSettingsActivity : ComponentActivity() {
                 },
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                    d(40)
+                    d(TOUCH)
                 ).apply { leftMargin = d(12) }
             )
             positionsBox.addView(row, topWrap(8))
@@ -426,7 +429,7 @@ class CarSettingsActivity : ComponentActivity() {
             chip("Autoriser", true) { ask() },
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                d(40)
+                d(TOUCH)
             ).apply { leftMargin = d(12) }
         )
         return row
@@ -687,7 +690,9 @@ class CarSettingsActivity : ComponentActivity() {
             }
             line.addView(
                 up,
-                LinearLayout.LayoutParams(d(40), d(40)).apply { rightMargin = d(4) }
+                // 48 dp of touch box for the 40 dp circle: the 8 dp growth
+                // absorbs the 4 dp gap the row used to leave.
+                LinearLayout.LayoutParams(d(TOUCH), d(TOUCH))
             )
         }
         val pin = iconButton(
@@ -701,7 +706,7 @@ class CarSettingsActivity : ComponentActivity() {
             if (pinned) "Détacher de la voiture" else "Épingler pour la voiture",
         ) { togglePin(row, pinned) }
         (pin.getChildAt(0) as? CarIconView)?.filled = pinned
-        line.addView(pin, LinearLayout.LayoutParams(d(44), d(44)))
+        line.addView(pin, LinearLayout.LayoutParams(d(TOUCH), d(TOUCH)))
         return line
     }
 
@@ -769,10 +774,15 @@ class CarSettingsActivity : ComponentActivity() {
         pinsStatus.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
         pinsStatus.text = text
         pinsStatus.setTextColor(color)
+        // `setOnClickListener(null)` makes a View clickable again (View.java),
+        // so the flags are set AFTER it: a status line that cannot retry must
+        // not be announced as a target. The retry line's box reaches the 48 dp
+        // floor; its text stays at the top, so nothing moves around it.
+        pinsStatus.setOnClickListener(if (retry) View.OnClickListener { refreshCatalogue(true) } else null)
         pinsStatus.isClickable = retry
         pinsStatus.isFocusable = retry
+        pinsStatus.minimumHeight = if (retry) d(TOUCH) else 0
         pinsStatus.foreground = if (retry) ripple(6f) else null
-        pinsStatus.setOnClickListener(if (retry) View.OnClickListener { refreshCatalogue(true) } else null)
         pinsStatus.contentDescription =
             if (retry) "$text — toucher pour réessayer" else null
     }
@@ -979,7 +989,7 @@ class CarSettingsActivity : ComponentActivity() {
         }
         row.addView(
             toggle,
-            LinearLayout.LayoutParams(d(52), d(30)).apply { leftMargin = d(12) }
+            LinearLayout.LayoutParams(d(52), d(TOUCH)).apply { leftMargin = d(12) }
         )
         return row
     }
@@ -988,20 +998,39 @@ class CarSettingsActivity : ComponentActivity() {
         CarStyle.text(this, label, 14f, if (on) CarStyle.ONAC else CarStyle.TX).apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
-            minimumHeight = d(40)
-            setPadding(d(14), 0, d(14), 0)
+            // The pill stays 40 dp tall; the touch box is the 48 dp floor. The
+            // 4 dp inset above and below is what leaves the visible size alone
+            // (Material: https://m3.material.io/foundations/designing/structure).
+            minimumHeight = d(TOUCH)
             typeface = Typeface.create(
                 CarType.body(this@CarSettingsActivity),
                 if (on) Typeface.BOLD else Typeface.NORMAL
             )
-            background = CarStyle.roundRect(
-                this@CarSettingsActivity,
-                if (on) CarStyle.AC else Color.TRANSPARENT,
-                if (on) CarStyle.AC else CarStyle.LN,
-                20f,
-                1f,
+            background = InsetDrawable(
+                CarStyle.roundRect(
+                    this@CarSettingsActivity,
+                    if (on) CarStyle.AC else Color.TRANSPARENT,
+                    if (on) CarStyle.AC else CarStyle.LN,
+                    20f,
+                    1f,
+                ),
+                0,
+                d(4),
+                0,
+                d(4),
             )
-            foreground = ripple(20f, if (on) 0x33000000 else 0x33FFFFFF)
+            foreground = InsetDrawable(
+                ripple(20f, if (on) 0x33000000 else 0x33FFFFFF),
+                0,
+                d(4),
+                0,
+                d(4),
+            )
+            // AFTER the background: an InsetDrawable reports background padding
+            // (its 4 dp insets), and View then drops a padding set before it —
+            // measured: the chips lost their 28 dp of horizontal padding and
+            // « Waze » fell to 36 dp wide.
+            setPadding(d(14), 0, d(14), 0)
             isClickable = true
             isFocusable = true
             setOnClickListener { onClick() }
@@ -1018,15 +1047,23 @@ class CarSettingsActivity : ComponentActivity() {
         description: String,
         onClick: () -> Unit,
     ): FrameLayout {
+        // Under the 48 dp floor, the caller lays this out at 48 and the DRAWN
+        // circle keeps its own size: an inset of (48 - size) / 2 on each side,
+        // on the background AND on the ripple, so the visible control does not
+        // grow by a pixel.
+        val inset = d((TOUCH - sizeDp) / 2f)
+        val belowFloor = sizeDp < TOUCH
         val box = FrameLayout(this).apply {
-            background = CarStyle.roundRect(
+            val circle = CarStyle.roundRect(
                 this@CarSettingsActivity,
                 fill,
                 stroke,
                 sizeDp / 2f,
                 if (stroke != Color.TRANSPARENT) strokeDp else 0f,
             )
-            foreground = ripple(sizeDp / 2f)
+            background = if (belowFloor) InsetDrawable(circle, inset) else circle
+            val press = ripple(sizeDp / 2f)
+            foreground = if (belowFloor) InsetDrawable(press, inset) else press
             contentDescription = description
             isClickable = true
             isFocusable = true
@@ -1101,6 +1138,9 @@ class CarSettingsActivity : ComponentActivity() {
     }
 
     companion object {
+        /** The Material touch-target floor, in dp: every control's box. */
+        private const val TOUCH = 48
+
         /** At most this many rows of the settings list fetch a real sleeve. */
         private const val COVER_ROWS = 12
 
@@ -1243,20 +1283,24 @@ class CarSettingsActivity : ComponentActivity() {
         }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            setMeasuredDimension(d(52), d(30))
+            // 52 × 48: the track stays 30 dp tall, drawn centred, so the touch
+            // box reaches the 48 dp floor without changing what is seen.
+            setMeasuredDimension(d(52), d(TOUCH))
         }
 
         override fun onDraw(canvas: Canvas) {
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
+            val track = d(30).toFloat()
+            val top = (h - track) / 2f
             paint.style = Paint.Style.FILL
             paint.color = evaluator.evaluate(anim, CarStyle.LN, CarStyle.AC) as Int
-            canvas.drawRoundRect(0f, 0f, w, h, h / 2f, h / 2f, paint)
+            canvas.drawRoundRect(0f, top, w, top + track, track / 2f, track / 2f, paint)
             paint.color = evaluator.evaluate(anim, CarStyle.DIM, CarStyle.ONAC) as Int
             val radius = d(12).toFloat()
             val cx = d(3).toFloat() + d(22).toFloat() * anim + radius
-            canvas.drawCircle(cx, h / 2f, radius, paint)
+            canvas.drawCircle(cx, top + track / 2f, radius, paint)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
