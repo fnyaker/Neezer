@@ -168,14 +168,6 @@ fun PlaylistPickerSheet(
                                     )
                                 }
                             }
-                            if (picker.shown.size > LIST_MAX) {
-                                Text(
-                                    text = "Filtre pour trouver les autres playlists.",
-                                    style = Sillon.type.bodySmall,
-                                    color = colors.dim,
-                                    modifier = Modifier.padding(NzSpacing.s),
-                                )
-                            }
                         }
                     }
                 }

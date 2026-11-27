@@ -655,7 +655,7 @@ private fun ImportCard(offer: ImportOffer, actions: SearchActions) {
                     color = colors.tx,
                 )
                 Text(
-                    text = "Retrouver ses titres pour les écouter ici, et la garder si tu veux.",
+                    text = "Importe-la pour l'écouter ici.",
                     style = Sillon.type.bodySmall,
                     color = colors.dim,
                 )
@@ -710,9 +710,7 @@ private fun Landing(state: SearchModel.State, actions: SearchActions) {
             }
         } else {
             Text(
-                text = "Cherche un titre, un artiste, un album ou un podcast — les titres de ta " +
-                    "bibliothèque d'abord, puis le catalogue, et YouTube quand il a ce que le " +
-                    "catalogue n'a pas.",
+                text = "Cherche un titre, un artiste, un album ou un podcast.",
                 style = Sillon.type.body,
                 color = colors.dim,
             )

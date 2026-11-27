@@ -145,8 +145,7 @@ internal fun LanSettingsScreenBody(nav: NzNavigator) {
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
         Text(
-            text = "Vos appareils et vos amis de confiance sur ce Wi-Fi. Les titres déjà téléchargés " +
-                "ailleurs s'écoutent ici sans passer par le serveur.",
+            text = "Vos appareils et vos amis de confiance sur ce Wi-Fi.",
             style = Sillon.type.bodySmall,
             color = Sillon.colors.dim,
         )
@@ -414,7 +413,7 @@ private fun FriendsCard(host: LanModel, state: LanModel.State) {
                 is ScreenState.Ready -> {
                     if (friends.data.sharesTo.isEmpty() && friends.data.trustedBy.isEmpty()) {
                         Text(
-                            text = "Personne pour l'instant : vos propres appareils suffisent à l'échange.",
+                            text = "Personne pour l'instant.",
                             style = Sillon.type.bodySmall,
                             color = Sillon.colors.dim,
                         )

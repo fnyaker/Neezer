@@ -686,11 +686,6 @@ private fun TranscriptionCard(
                             style = Sillon.type.bodySmall,
                             color = colors.dim,
                         )
-                        Text(
-                            text = "Transcrire les épisodes archivés les plus récents",
-                            style = Sillon.type.bodySmall,
-                            color = colors.dim,
-                        )
                         FlowRow(
                             verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
                             horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),

@@ -762,12 +762,6 @@ fun AddTracksSheet(
 
             add.loading -> Text("Recherche…", style = Sillon.type.bodySmall, color = colors.dim)
 
-            add.rows.isEmpty() && add.term.isBlank() -> Text(
-                "Tapez un titre, un artiste ou un album.",
-                style = Sillon.type.bodySmall,
-                color = colors.dim,
-            )
-
             add.rows.isEmpty() -> Text(
                 "Aucun titre ne correspond à « ${add.term} ».",
                 style = Sillon.type.bodySmall,

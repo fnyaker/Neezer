@@ -135,7 +135,7 @@ internal fun AppearanceSection(model: SettingsModel, state: SettingsModel.State)
     val settings = state.settings ?: return
     SettingsCard(
         title = "Ambiance",
-        subtitle = "Le thème est retenu sur cet appareil et s'applique tout de suite : rien n'est rechargé, rien n'est renvoyé au serveur.",
+        subtitle = "Retenu sur cet appareil, appliqué tout de suite.",
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
             THEME_CHOICES.forEach { (id, label, hint) ->
@@ -231,7 +231,7 @@ private fun AccentCard(model: SettingsModel, settings: uniffi.nz_ffi.SettingsDat
 
     SettingsCard(
         title = "Couleur personnalisée",
-        subtitle = "Une couleur à vous pour les boutons, le cœur et les sélections. Elle s'applique à Encre et Papier ; Pochette garde la couleur de la pochette qui joue.",
+        subtitle = "Une couleur à vous pour les boutons, le cœur et les sélections.",
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -316,7 +316,7 @@ private fun AccentCard(model: SettingsModel, settings: uniffi.nz_ffi.SettingsDat
             Text(text = "#${colourHex(pair.surface)}", style = Sillon.type.labelMono, color = colors.dim)
         }
         Text(
-            text = "Pochette suit la pochette qui joue : l'accent reprend sa couleur dominante et change à chaque titre. Une pochette sans couleur franche laisse l'orange de repli.",
+            text = "L'accent reprend la couleur dominante de la pochette qui joue.",
             style = Sillon.type.bodySmall,
             color = colors.dim,
         )
@@ -409,11 +409,6 @@ internal fun VizSection(
                 onSelect = { model.setVizFps(if (it == 0) 30 else 60) },
             )
             NzSwitch(checked = settings.vizBeat, onCheckedChange = model::setVizBeat, label = "Détection du tempo")
-            Text(
-                text = "Le tempo détecté module les barres et la couleur.",
-                style = Sillon.type.bodySmall,
-                color = Sillon.colors.dim,
-            )
             if (settings.vizMode == "scope") {
                 Text("Orientation", style = Sillon.type.label, color = Sillon.colors.tx)
                 NzSegmented(

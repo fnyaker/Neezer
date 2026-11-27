@@ -234,7 +234,7 @@ private fun InviteCard(
                 Text(row.title, style = Sillon.type.label, color = colors.tx)
             }
             Text(
-                "Scannez, ou envoyez le lien. ${row.expiry}.",
+                "${row.expiry}.",
                 style = Sillon.type.bodySmall,
                 color = colors.dim,
             )

@@ -295,11 +295,6 @@ private fun HomeHero(state: HomeModel.State, actions: HomeActions) {
                 HeroFlowButton(state.starting, actions.launchFlow)
                 TuneChip(state, actions)
             }
-            Text(
-                text = "Le Flow suit ton écoute, au niveau choisi.",
-                style = Sillon.type.bodySmall,
-                color = colors.onac,
-            )
         }
     }
 }
@@ -433,7 +428,7 @@ private fun TunePanel(state: HomeModel.State, actions: HomeActions) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
             Text("Découverte", style = Sillon.type.titleSmall, color = colors.tx)
             Text(
-                "Jusqu'où le Flow et « Pour toi » s'écartent de ce que tu écoutes déjà.",
+                "Écart avec ce que tu écoutes déjà.",
                 style = Sillon.type.bodySmall,
                 color = colors.dim,
             )
@@ -467,11 +462,6 @@ private fun ResumePanel(data: HomeData, actions: HomeActions) {
             if (resume == null) {
                 Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
                     Text("Rien en cours de lecture.", style = Sillon.type.titleSmall, color = colors.tx)
-                    Text(
-                        "Choisis une énergie et lance le Flow, ou ouvre un titre depuis Explorer.",
-                        style = Sillon.type.bodySmall,
-                        color = colors.dim,
-                    )
                     NzButton(
                         text = "Explorer",
                         onClick = { actions.openSearch() },
@@ -546,10 +536,7 @@ private fun StylePicker(state: HomeModel.State, actions: HomeActions) {
     val families = remember(state.styles) { styleFamilies(state.styles) }
     if (families.isEmpty()) return
     Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
-            Text("Par style", style = Sillon.type.title, color = colors.tx)
-            Text("filtre Nouveautés et Pour toi", style = Sillon.type.bodySmall, color = colors.dim)
-        }
+        Text("Par style", style = Sillon.type.title, color = colors.tx)
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
@@ -1109,11 +1096,6 @@ private fun FlowPickerBody(state: HomeModel.State, actions: HomeActions) {
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
         Text("Orienter le Flow", style = Sillon.type.title, color = colors.tx)
-        Text(
-            "Les genres sur lesquels il s'appuie, et jusqu'où il peut s'en écarter.",
-            style = Sillon.type.bodySmall,
-            color = colors.dim,
-        )
         Text(
             if (state.chosen.isEmpty()) "Genres · tous les styles"
             else "Genres · ${state.chosen.size} sur ${HomeModel.STYLES_MAX}",

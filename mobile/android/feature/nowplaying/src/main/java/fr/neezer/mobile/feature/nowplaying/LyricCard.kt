@@ -237,7 +237,7 @@ fun LyricCardSheet(
             }
             if (lyricsState.lyrics?.synced.isNullOrEmpty()) {
                 Text(
-                    text = "Paroles non synchronisées : la carte n'affiche pas d'horodatage.",
+                    text = "Paroles non synchronisées.",
                     style = Sillon.type.bodySmall,
                     color = colors.dim,
                 )
