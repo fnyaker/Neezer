@@ -7,8 +7,9 @@
 
 Session-cookie authenticated (so the SPA isn't tied to the Subsonic protocol's
 limits). Discovery comes straight from the Deezer gateway via DeezerProvider;
-playback reuses the import + archive + cache machinery. Album/artist artwork is
-returned as Deezer CDN URLs the browser loads directly.
+playback reuses the import + archive + cache machinery. Artwork this server
+already holds (archive, cover cache) is served by it; a Deezer album's hash is
+answered with the image CDN's address, which costs Deezer no call.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from flask import (
 import peewee
 from peewee import fn
 
+from ..cache import CacheMiss
 from ..db import (
     Album,
     Artist,
@@ -5711,12 +5713,18 @@ def cover(cid):
 
 
 def _album_cover_response(cid, vetted):
-    """``/cover/<album uuid>`` from the database and the disk, with no request
-    to Deezer: the archived ``cover.jpg``, else the art embedded in (or beside)
-    a track of the album that the caller may read, else — a Deezer album with
-    no file yet — a redirect to the CDN address the row's ``cover_md5``
-    spells. None when `cid` is not an album."""
-    from ..deezer import library
+    """``/cover/<album uuid>``: the archived ``cover.jpg``, else the art embedded
+    in (or beside) a track of the album that the caller may read, else the art
+    this server already fetched (its disk cache), else — a Deezer album whose
+    row names a hash — a 302 to the CDN address, else a provider fetch for a row
+    that names NO hash at all. None when `cid` is not an album.
+
+    The order is the rule: art on our disk is served by us, a row with a hash
+    never costs a Deezer call (a provider outage, or Deezer switched off, must
+    not blank a sleeve the device can still load), and only a row with no art
+    address at all asks the provider — which is also what repairs the column,
+    instead of answering 404 for the row's whole life."""
+    from ..deezer import archive, library
 
     try:
         alb = Album[uuid.UUID(str(cid))]
@@ -5734,8 +5742,23 @@ def _album_cover_response(cid, vetted):
             found = _serve_embedded_cover(tr)
             if not isinstance(found, tuple):  # (json, 404) when it has none
                 return found
+    cache = current_app.cache
+    cached = f"{cid}-deezer-cover"
+    try:
+        if cache.has(cached):
+            return send_file(cache.get(cached), mimetype="image/jpeg", conditional=True)
+    except CacheMiss:  # pruned between the two calls: ask again below
+        pass
     if _real_md5(alb.cover_md5):
         return redirect(_image("cover", alb.cover_md5, 1000))
+    provider = _provider()
+    if provider is None:
+        return jsonify({"error": "not found"}), 404
+    path = archive.deezer_cover_path(provider, cache, cid)
+    if path:
+        safe = _safe_cover_path(path, provider, cache)
+        if safe:
+            return send_file(safe, mimetype="image/jpeg", conditional=True)
     return jsonify({"error": "not found"}), 404
 
 
@@ -5798,17 +5821,21 @@ def cover_response(cid, *, vetted=False):
             return jsonify({"error": "not found"}), 404
 
     provider = _provider()
-    if provider is None:
-        return jsonify({"error": "not found"}), 404
     cache = current_app.cache
     try:
         if not _valid_id(cid):
-            # UUID without an archived Track: album/artist/playlist/podcast art.
+            # A UUID that is not an album: artist/playlist/podcast art, which
+            # only the provider can name. Fetched once, kept on our disk (see
+            # `deezer_cover_path`) — the DEVICE never has to reach the CDN.
+            if provider is None:
+                return jsonify({"error": "not found"}), 404
             path = archive.deezer_cover_path(provider, cache, cid)
             if path:
                 safe = _safe_cover_path(path, provider, cache)
                 if safe:
                     return send_file(safe, mimetype="image/jpeg", conditional=True)
+            return jsonify({"error": "not found"}), 404
+        if provider is None:
             return jsonify({"error": "not found"}), 404
         key = f"deezer-cover-{cid}"
         if cache.has(key):

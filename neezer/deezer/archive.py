@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
+from ..cache import CacheMiss
 from ..db import Album, Artist, Playlist, Track, PodcastChannel, PodcastEpisode
 from ..db import db as _database
 from . import ids, library
@@ -830,6 +831,40 @@ def import_playlist_tracks(provider, playlist_id) -> list[Track]:
 # -- cover art fallback for not-yet-archived Deezer entities -------------
 
 
+def cover_md5(album, provider):
+    """The album's art hash, repaired from the provider when the row has none.
+
+    An album imported from an answer that carried no ``ALB_PICTURE`` — a row
+    older than the column, a payload the gateway trimmed — had no way back to
+    its sleeve: every cover request answered 404, on every client, for the life
+    of the row, while the album itself was perfectly fine. One provider call,
+    written once, is what makes those sleeves load again.
+
+    A failed call is NOT a verdict about the album: the row is left exactly as
+    it was and the next request asks again (the response is cached by the
+    caller, so that is once per cover, never a storm).
+    """
+    md5 = str(album.cover_md5 or "").strip()
+    if md5 and set(md5) != {"0"}:
+        return md5
+    if not album.deezer_id:
+        return None
+    get_album = getattr(provider, "get_album", None)
+    if get_album is None:
+        return None
+    try:
+        page = get_album(album.deezer_id) or {}
+    except Exception:  # a provider failure says nothing about this album
+        logger.debug("Album art lookup failed", exc_info=True)
+        return None
+    found = str((page if isinstance(page, dict) else {}).get("ALB_PICTURE") or "").strip()
+    if not found or set(found) == {"0"}:
+        return None
+    album.cover_md5 = found
+    album.save(only=[Album.cover_md5])
+    return found
+
+
 def deezer_cover_path(provider, cache, eid: str):
     """Return a cached cover path fetched from Deezer for a Deezer id, or None.
 
@@ -844,6 +879,18 @@ def deezer_cover_path(provider, cache, eid: str):
     except ValueError:
         return None
 
+    # What this server already fetched is OURS: read it before asking anyone.
+    # The write below had no reader, so every paint of a screenful of artist or
+    # playlist sleeves fetched them from Deezer again — through the shared,
+    # priority-throttled limiter, which is exactly what a cover must never wait
+    # on while a person is looking at it.
+    cached = f"{eid}-deezer-cover"
+    try:
+        if cache.has(cached):
+            return cache.get(cached)
+    except CacheMiss:  # pruned between the two calls: fetch it again
+        pass
+
     data = None
     try:
         alb = Album[key]
@@ -852,7 +899,8 @@ def deezer_cover_path(provider, cache, eid: str):
         local = library.album_cover_file(alb)
         if local:
             return local
-        data = provider.fetch_cover(alb.cover_md5) if alb.cover_md5 else None
+        md5 = cover_md5(alb, provider)
+        data = provider.fetch_cover(md5) if md5 else None
     except Album.DoesNotExist:
         try:
             data = provider.fetch_image("artist", Artist[key].deezer_id)
@@ -862,11 +910,8 @@ def deezer_cover_path(provider, cache, eid: str):
             except Playlist.DoesNotExist:
                 try:
                     tr = Track[key]
-                    data = (
-                        provider.fetch_cover(tr.album.cover_md5)
-                        if tr.album.cover_md5
-                        else None
-                    )
+                    md5 = cover_md5(tr.album, provider) if tr.album else None
+                    data = provider.fetch_cover(md5) if md5 else None
                 except Track.DoesNotExist:
                     try:
                         ch = PodcastChannel[key]

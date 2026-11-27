@@ -996,6 +996,9 @@ class DeezerTestCase(TestBase):
             def set(self, k, v):  # would only be hit on a Deezer fallback
                 raise AssertionError("should serve the local sidecar")
 
+            def has(self, k):
+                return False
+
         got = archive.deezer_cover_path(
             self.provider, FakeCache(), str(track.album_id)
         )
@@ -1102,6 +1105,9 @@ class DeezerTestCase(TestBase):
                 with open(p, "wb") as fh:
                     fh.write(v)
                 return p
+
+            def has(self, k):
+                return False
 
         cache = FakeCache(self.archive_dir)
 

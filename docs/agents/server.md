@@ -625,6 +625,22 @@ user's own requests for thirty seconds behind work they never asked for:
   flight and the covers scrolled to waited minutes on a phone's link. The hi-res copy is now asked
   only once the base art is drawn, and only where the tile is drawn larger than 500 device pixels.
   Art that costs no request (above the fold, or already on the device) never queues.
+- **The artwork that is ours is served by our server, and fetched once**
+  (`webui.cover_response`, `deezer.archive.deezer_cover_path`). Order, and each step is a rule:
+  the archived `cover.jpg` → the image embedded in an archived track → **the bytes already in the
+  disk cache** (`<id>-deezer-cover`) → for a Deezer album whose row names a hash, the **302 to the
+  image CDN** (that answer costs Deezer NO call, which is what keeps a sleeve painting with Deezer
+  switched off or down — `tests/test_detach_e.py` pins it) → and only for a row with no art address
+  at all, a provider fetch, which also writes the hash back.
+  Two defects made « beaucoup de pochettes ne chargent plus » in BOTH clients: the fetched bytes
+  were written to the cache with **no reader**, so every paint of a shelf of artist/playlist sleeves
+  fetched it from Deezer AGAIN — through the shared, priority-throttled limiter a cover must never
+  wait on — and the album path never consulted that cache, so art the server already held was still
+  handed to the device as a third-party address. Measured: `test_an_artist_cover_is_fetched_once_then_served_from_our_disk`
+  — 3 requests, **1 provider call** (3 before); `test_a_cover_we_already_fetched_is_served_from_our_disk`
+  — **200 + the bytes, 0 provider calls** (a 302 before); an album row with no `cover_md5` asks the
+  provider once and writes the hash, so a sleeve that 404'd for the life of the row loads again
+  (`test_an_album_that_lost_its_art_hash_finds_its_cover_again`).
 
 Worker recycling (`GUNICORN_MAX_REQUESTS`) is **off by default**: the hours-long library jobs run on
 threads inside the worker, and recycling killed them mid-run.
