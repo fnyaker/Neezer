@@ -127,9 +127,8 @@
           <span class="txt">
             <span class="nm">{p.name}{#if placeOf(p.id)}<span class="tag">{placeOf(p.id)}</span>{/if}</span>
             <span class="muted st">
-              {#if p.allowed.length}Vous pouvez : {p.features.filter((f) => p.allowed.includes(f.id)).map((f) => f.label.toLowerCase()).join(", ")}
-              {:else if !p.accounts.length && !p.anonymous_use}Aucun compte relié{#if data.admin && p.id === "deezer"}{"\u00a0: "}l'ARL du serveur se règle juste en dessous, dans Sources{/if}
-              {:else}Pas accessible pour vous{/if}
+              {#if !p.allowed.length && !p.accounts.length && !p.anonymous_use}Aucun compte relié
+              {:else if !p.allowed.length}Pas accessible pour vous{/if}
             </span>
           </span>
         </header>

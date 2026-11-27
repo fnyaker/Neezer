@@ -620,7 +620,7 @@
     ? "Mesure indisponible avec le lecteur de l'application."
     : meterReason === "direct"
       ? "Mesure indisponible en lecture directe : le son ne traverse pas l'égaliseur."
-      : "La mesure démarre avec la lecture.";
+      : "Mesure pendant la lecture.";
 
   // The requested mitigation: the player's volume, optimistically, one toast
   // with undo. A quiet confirmation that the chain is quieter now — no engine

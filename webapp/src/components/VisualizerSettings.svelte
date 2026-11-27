@@ -41,7 +41,7 @@
   import { push } from "svelte-spa-router";
   import { MODES, effectiveMode, needsWave } from "../lib/viz/modes.js";
   import { PALETTES } from "../lib/viz/palette.js";
-  import { TIERS, autoTier } from "../lib/viz/quality.js";
+  import { TIERS } from "../lib/viz/quality.js";
   import { LEVEL, subscribeFrames, readout, delivery } from "../lib/audio/engine.js";
   import { LOOKAHEAD_MAX, getContext } from "../lib/audio/graph.js";
   import { reportedLag } from "../lib/audio/latency.js";
@@ -109,7 +109,6 @@
 
   $: mode = effectiveMode($vizMode, $vizBeatDetect, $ecoMode);
   $: degraded = mode !== $vizMode && !$ecoMode;
-  $: autoLabel = autoTier();
   // "Aucune" means none — including here. A preview that keeps a canvas alive
   // to show what the user just switched OFF is exactly the kind of pointless
   // work this setting exists to stop.
@@ -505,9 +504,6 @@
 
 <section class="card">
   <h2><Icon name="monitor" size={18} /> Rendu</h2>
-  <p class="sub muted">
-    « Auto » lit l'appareil : <strong>{autoLabel}</strong>.
-  </p>
 
   <div class="block">
     <div class="block-head"><span class="block-title">Niveau de détail</span></div>
