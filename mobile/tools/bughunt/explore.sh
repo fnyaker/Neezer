@@ -49,7 +49,7 @@ out=""
 only=""
 scenario=""
 max_nodes=700
-max_minutes=30
+max_minutes=35
 start=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -239,6 +239,7 @@ bench_start() {
     local server_out
     server_out="$(NEEZER_PERF_STATE="$bench_state" "$here/../perf-server.sh" start \
         --covers "$(nz_repo_root)/tests/assets/cover.jpg" \
+        --audio-all --audio-all-seconds 180 \
         --tls-cert "$bench_dir/cert.pem" --tls-key "$bench_dir/key.pem")" || return 1
     bench_port="$(sed -n 's/^port=\([0-9]*\) .*/\1/p' <<<"$server_out")"
     [[ -n "$bench_port" ]] || { note "le serveur de banc n'a pas de port: $server_out"; return 1; }

@@ -55,7 +55,7 @@ import sys
 import tempfile
 import time
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -105,6 +105,19 @@ CONFIRM_WORDS = ("Confirmer", "Annuler", "Supprimer", "Oui", "D'accord")
 # a label ("· 3 titres"). They differ run to run for the same control.
 VOLATILE_ID = re.compile(r":id/[^/\s\"]*\d[^/\s\"]*")
 COUNTER = re.compile(r"·\s*\d+")
+
+# §4.1, native `opened-layer`: « une fenêtre de plus dans `dumpsys window` ».
+# The window manager prints one `Window{<hash> u<user> <name>}:` block per
+# window; the name is what a second read compares. The system bars and the
+# keyboard have their own verdicts (`foreign`, `ime`) and would turn any tap
+# into a layer, so they are dropped here.
+WINDOW = re.compile(r"Window\{[0-9a-f]+ u\d+ ([^}]+)\}")
+WINDOW_SKIP = ("StatusBar", "NavigationBar", "NavigationBar0", "inputmethod")
+
+# Evidence is bounded like the web harness's (§4.8: one screenshot per anomaly,
+# ≤ 40). On the SwiftShader emulator a `screencap` costs ~1 s, and the pass has
+# 54 `nothing` lines to prove: the 41st shot would only cost clicks.
+ANOMALY_SHOTS = 40
 
 # A dump slower than the first IS a freeze (§4.1: 3 000 ms). The second bounds
 # what it costs to read the ANR buffer: only a slow or crashed tap pays it.
@@ -177,6 +190,19 @@ def starts_with_verb(name: str) -> bool:
     return any(word.startswith(verb) for verb in VERBS)
 
 
+def parse_windows(text: str) -> tuple[str, ...]:
+    """The windows a `dumpsys window windows` read names, system bars excluded.
+
+    Duplicates are KEPT: a Compose dialog can carry the same name as the
+    activity's own window, and `{name}` would fold the two into one — the count
+    is what §4.1 measures (« une fenêtre de plus »).
+    """
+    names = [match.group(1).strip() for match in WINDOW.finditer(text or "")]
+    skip = tuple(word.lower() for word in WINDOW_SKIP)
+    return tuple(sorted(name for name in names
+                        if name and not any(word in name.lower() for word in skip)))
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -243,6 +269,10 @@ class Adb:
 
     def pid(self) -> str:
         return self.shell("pidof", PKG, timeout=10).strip()
+
+    def windows(self) -> tuple[str, ...]:
+        """§4.1: the windows on screen, read from the window manager (cheap)."""
+        return parse_windows(self.shell("dumpsys", "window", "windows", timeout=20))
 
     def crash_lines(self) -> list[str]:
         """Only the crash records that name OUR package (the rule of monkey.sh)."""
@@ -745,6 +775,15 @@ def classify(before: dict, after: dict, crash: list[str], pid: str,
         return "console-error", after["anr"], None
     if after["name"] != before["name"]:
         return "navigated", f"{before['name']} → {after['name']}", None
+    # §4.1 native: a window the previous read did not name IS a layer, even when
+    # the tree is unchanged. Measured on run 45915988351: « Ouvrir le lecteur
+    # plein écran » read `nothing` on three screens (a false `bloquant` on a verb)
+    # because the full-screen player is a window the accessibility tree of the
+    # activity did not grow into between two dumps.
+    fresh_windows = sorted((Counter(after.get("windows", ()))
+                            - Counter(before.get("windows", ()))).elements())
+    if fresh_windows:
+        return ("opened-layer", f"une fenêtre de plus : {', '.join(fresh_windows[:3])}", None)
     extra = len(after["layer"]) - len(before["layer"])
     appeared = set(after.get("foreign", ())) - set(before.get("foreign", ()))
     if appeared:
@@ -827,6 +866,15 @@ class Walker:
         self.current: Screen | None = None
         self.label_collision = 0
         self.shots = 0
+        self.anomalies = 0
+        self.capped = 0
+        # §9.6: the tree read for this element IS the « avant » of the next one
+        # while the screen has not changed. Measured on run 45915988351: three
+        # dumps per element (`resolve`'s, the post-tap one, the `nothing`
+        # confirmation) at ~2.5 s each on SwiftShader, 14 s per click, and the
+        # pass stopped at `coverage=78.1%` with `stopped=budget`.
+        self.tree: Dump | None = None
+        self.tree_screen: Screen | None = None
         # §4.1: an exception is attributed "depuis le dernier repère" — the crash
         # buffer keeps its record, so a second read without a mark would count
         # the same crash once per tap (measured on the fake tree: 6 exceptions
@@ -837,6 +885,15 @@ class Walker:
 
     def dump(self) -> Dump:
         return dump_screen(self.adb)
+
+    def remember(self, screen: Screen, dump: Dump) -> None:
+        """Keep `dump` as the screen's current tree, or drop the cache."""
+        self.tree = dump if (dump is not None and dump.ok) else None
+        self.tree_screen = screen if self.tree is not None else None
+
+    def forget(self) -> None:
+        self.tree = None
+        self.tree_screen = None
 
     def settle(self, dump: Dump, tries: int = 6) -> Dump:
         """Wait while the screen still says it is loading.
@@ -858,6 +915,7 @@ class Walker:
         component = self.adb.launcher()
         if not component:
             return False
+        self.forget()
         self.adb.shell("am", "force-stop", PKG, timeout=15)
         self.adb.shell("am", "start", "-W", "-n", component, timeout=45)
         for _ in range(20):
@@ -894,6 +952,7 @@ class Walker:
             dump = self.dump()
             if dump.ok and self.same_screen(dump, screen):
                 self.current = screen
+                self.remember(screen, dump)
                 return True
         return False
 
@@ -925,8 +984,19 @@ class Walker:
         cap = int(24 * self.dpi / 160.0)
         return (x1 + x2) // 2, y1 + min(max((y2 - y1) // 2, 1), cap)
 
-    def resolve(self, signature: str) -> tuple[Dump, W] | None:
-        """The element in the current tree, scrolled into view at most 3 times."""
+    def resolve(self, screen: Screen, signature: str) -> tuple[Dump, W] | None:
+        """The element in the current tree, scrolled into view at most 3 times.
+
+        The tree already read for this screen is tried FIRST: a click that left
+        the screen in place (every `state-changed` and `nothing`) makes it the
+        exact « avant » state §9.6 asks for, and reading it again costs ~2.5 s on
+        the SwiftShader emulator for the same bytes.
+        """
+        if self.tree is not None and self.tree_screen is screen:
+            cached = find_element(self.tree, signature)
+            if (cached is not None and cached.n.visible
+                    and 0 <= cached.n.y1 and cached.n.y2 <= self.tree.height):
+                return self.tree, cached
         for attempt in range(4):
             dump = self.dump()
             found = find_element(dump, signature)
@@ -946,13 +1016,17 @@ class Walker:
         if not self.goto(screen):
             screen.restore = "failed"
             return
-        resolved = self.resolve(signature)
+        if self.tree_screen is not screen:
+            self.forget()
+        resolved = self.resolve(screen, signature)
         if resolved is None:
             self.row(screen, signature, "", "unreachable",
                      "ni visible ni atteint par 3 glissements", 0, None, None, "node")
             return
         before_dump, wrap = resolved
         before = before_dump.view()
+        before_windows = self.adb.windows()
+        before["windows"] = before_windows
         regime = destructive_of(wrap.word)
         if regime is not None and regime[0] == "fin":
             self.row(screen, signature, wrap.word, "skipped-session",
@@ -963,6 +1037,7 @@ class Walker:
         self.adb.tap(x, y)
         after_dump = self.dump()
         ms = int((time.monotonic() - started) * 1000)
+        after_windows = self.adb.windows()
         crash = self.adb.crash_lines()
         joined = "\n".join(crash)
         fresh = crash if joined != self.crash_mark else []
@@ -970,6 +1045,7 @@ class Walker:
             self.crash_mark = joined
         pid = self.adb.pid()
         after = after_dump.view()
+        after["windows"] = after_windows
         if after_dump.ms > ANR_CHECK_MS or fresh or not pid:
             lines = self.adb.anr()
             if lines:
@@ -986,22 +1062,38 @@ class Walker:
             elif hit:
                 self.adb.key("BACK")
                 self.dump()
+            final_dump = after_dump
         else:
             outcome, detail, _ = classify(before, after, fresh, pid, forced=None,
                                           baseline_ms=before_dump.ms)
             if outcome == "nothing":
                 time.sleep(NOTHING_WAIT_S)
-                confirmed = self.dump().view()
+                final_dump = self.dump()
+                confirmed = final_dump.view()
+                confirmed["windows"] = self.adb.windows()
                 outcome, detail, _ = classify(before, confirmed, fresh, pid,
                                               baseline_ms=before_dump.ms)
                 ms = int((time.monotonic() - started) * 1000)
                 after = confirmed
                 if outcome == "nothing":
                     detail = f"aucun changement sur 2 dumps en {ms} ms"
+            else:
+                final_dump = after_dump
         self.clicked += 1
+        # The tree that is on screen NOW is the next element's « avant » (§9.6):
+        # keep it while the screen stayed in place, throw it away the moment it
+        # did not (a navigation, a layer, a blank, a crash).
+        if outcome in ("state-changed", "nothing") and after["name"] == before["name"]:
+            self.remember(screen, final_dump)
+        else:
+            self.forget()
         evidence = None
         if outcome in ("exception", "blank", "freeze", "nothing", "console-error"):
-            evidence = self.shot(screen, wrap, outcome)
+            if self.anomalies < ANOMALY_SHOTS:
+                self.anomalies += 1
+                evidence = self.shot(screen, wrap, outcome)
+            else:
+                self.capped += 1
         row = self.row(screen, signature, wrap.word, outcome, detail, ms, evidence,
                        confirm, wrap.label)
         row["reversible"] = bool(regime and regime[1])
@@ -1042,12 +1134,16 @@ class Walker:
         if outcome in ("navigated", "opened-layer") or after.get("ime"):
             for _ in range(3):
                 self.adb.key("BACK")
-                view = self.dump().view()
+                dump = self.dump()
+                view = dump.view()
                 if view["name"] == before["name"]:
+                    self.remember(screen, dump)
                     return
             self.current = None
+            self.forget()
         elif after["name"] != before["name"]:
             self.current = None
+            self.forget()
 
     def discover(self, after: dict, path: list[tuple[int, int]]) -> None:
         name = after["name"]
@@ -1149,11 +1245,17 @@ def explore_screen(walker: Walker, screen: Screen) -> None:
         screen.restore = "failed"
         print(f"bughunt: écran « {screen.name} » non restauré (chemin perdu)", file=sys.stderr)
         return
-    dump = walker.dump()
+    # `goto` just verified this screen with a dump: read it again only if the
+    # cache is empty (`--only` on a lost path, a screen reached by `start_app`).
+    if walker.tree is not None and walker.tree_screen is screen:
+        dump = walker.tree
+    else:
+        dump = walker.dump()
     if not dump.ok:
         screen.restore = "failed"
         return
     dump = walker.settle(dump)
+    walker.remember(screen, dump)
     walker.write_screen_files(screen, dump)
     kept, suppressed = elements(dump)
     screen.elements = len(kept)
@@ -1193,17 +1295,42 @@ def media_title(adb: Adb) -> str:
 
 
 def open_settings(walker: Walker) -> bool:
+    """Réglages, proven by the screen itself — never by a tap that did nothing.
+
+    Measured on run 45915988351: the previous version returned True as soon as
+    the post-tap dump was readable, so the `settings` and `session` scenarios
+    walked the screen they were already on (`controls=0`, « Déconnexion »
+    introuvable) instead of failing on the door they never reached.
+    """
     for _ in range(3):
         dump = walker.dump()
+        if is_settings(dump):
+            return True
         door = next((w for w in dump.app_wraps
                      if w.word == "Réglages" and w.n.visible and w.n.clickable), None)
         if door is not None:
             walker.adb.tap(*walker.tap_point(door))
-            after = walker.dump()
-            if after.ok:
-                return True
+            continue
         walker.adb.key("BACK")
-    return False
+    return is_settings(walker.dump())
+
+
+def is_settings(dump: Dump) -> bool:
+    """The settings page names its own search field (measured, run 45915988351)."""
+    return dump.ok and any(w.word.startswith("Chercher un réglage") for w in dump.app_wraps)
+
+
+# The shell's own controls, never a setting: the four tabs, the mini-bar's door
+# and its play button. A scenario that taps one of them measures navigation.
+SHELL = ("Accueil", "Rechercher", "Biblio", "Podcasts", "Réglages",
+         "Ouvrir le lecteur plein écran", "Lecture")
+
+
+def settings_sections(dump: Dump) -> list[W]:
+    """The named rows of the Réglages page that open a section."""
+    return [w for w in dump.app_wraps
+            if w.n.visible and w.n.clickable and w.word and w.word not in SHELL
+            and not w.word.startswith("Chercher")]
 
 
 def door_of(walker: Walker) -> "W | None":
@@ -1212,6 +1339,16 @@ def door_of(walker: Walker) -> "W | None":
     return next((w for w in dump.app_wraps
                  if (w.n.desc or "").strip() == "Ouvrir le lecteur plein écran"
                  and w.n.visible), None)
+
+
+def is_playing(adb: Adb) -> bool:
+    """`state=3` in the media session: PLAYING, not « a mini-player exists ».
+
+    Measured on run 45915988351: `door_of` found the mini-bar's door on an idle
+    player, the burst reported `started_by=deja-en-lecture`, tapped 40 times and
+    measured `playing=0 title_changed=0` — the door was there, nothing played.
+    """
+    return "state=3" in media_state(adb)
 
 
 def start_playback(walker: Walker) -> tuple["W | None", str]:
@@ -1225,10 +1362,10 @@ def start_playback(walker: Walker) -> tuple["W | None", str]:
     missing instead of a sentence that hides it.
     """
     adb = walker.adb
-    door = door_of(walker)
-    if door is not None:
-        return door, "deja-en-lecture"
     tried: list[str] = []
+    door = door_of(walker)
+    if door is not None and is_playing(adb):
+        return door, "deja-en-lecture"
     for label in ("Lire", "Lancer le Flow"):
         dump = walker.dump()
         target = next((w for w in dump.app_wraps if w.word.startswith(label) and w.n.visible), None)
@@ -1236,7 +1373,11 @@ def start_playback(walker: Walker) -> tuple["W | None", str]:
             continue
         tried.append(label)
         adb.tap(*walker.tap_point(target))
-        for _ in range(20):
+        for _ in range(24):
+            if is_playing(adb):
+                break
+            time.sleep(0.5)
+        if is_playing(adb):
             door = door_of(walker)
             if door is not None:
                 return door, tried[-1]
@@ -1255,7 +1396,11 @@ def start_playback(walker: Walker) -> tuple["W | None", str]:
                 continue
             tried.append(f"ligne:{row.word[:24]}")
             adb.tap(*walker.tap_point(row))
-            for _ in range(20):
+            for _ in range(24):
+                if is_playing(adb):
+                    break
+                time.sleep(0.5)
+            if is_playing(adb):
                 door = door_of(walker)
                 if door is not None:
                     return door, tried[-1]
@@ -1278,19 +1423,27 @@ def scenario_burst(walker: Walker) -> dict:
         return result
     result["started_by"] = tried
     adb.tap(*walker.tap_point(door))
+    # The full-screen player is a window, and on SwiftShader it can paint later
+    # than one dump: wait on its own marker, the way the web harness waits on a
+    # screen's marker, instead of reading one dump as « it did nothing ».
+    next_node = prev_node = None
     dump = walker.dump()
-    if not dump.ok:
-        result["numbers"] = "le lecteur plein écran n'a pas peint"
+    for _ in range(5):
+        next_node = next((w for w in dump.app_wraps if w.word == "Suivant" and w.n.visible), None)
+        if next_node is not None:
+            break
+        time.sleep(0.8)
+        dump = walker.dump()
+    consequence = "plein-écran" if next_node is not None else f"écran « {dump.name} »"
+    if next_node is None:
+        result["numbers"] = f"le lecteur plein écran ne peint pas de « Suivant » ({consequence})"
         return result
     play = next((w for w in dump.app_wraps if w.word == "Lecture" and w.n.visible), None)
     if play is not None:
         adb.tap(*walker.tap_point(play))
         dump = walker.dump()
-    next_node = next((w for w in dump.app_wraps if w.word == "Suivant" and w.n.visible), None)
     prev_node = next((w for w in dump.app_wraps if w.word == "Précédent" and w.n.visible), None)
-    if next_node is None:
-        result["numbers"] = "aucun « Suivant » dans le lecteur plein écran"
-        return result
+    result["player"] = consequence
     next_point = walker.tap_point(next_node)
     prev_point = walker.tap_point(prev_node) if prev_node is not None else next_point
     title_before = media_title(adb)
@@ -1327,84 +1480,89 @@ def scenario_burst(walker: Walker) -> dict:
 
 
 def scenario_settings(walker: Walker) -> dict:
-    """Apply each Réglages control, one by one (§9.8)."""
+    """Apply the controls of Réglages, section by section (§9.8).
+
+    The native tree does NOT mark a Compose switch as `checkable` (measured on
+    run 45915988351: `checkable=0` on ten of the eleven dumps, the home's six
+    energy cards being the only ones), so the previous version counted zero
+    controls on every screen and reported `controls=0` as if the settings did
+    nothing. The scenario now opens each section the Réglages page exposes,
+    taps its named controls one by one, and counts the ones applied IN PLACE —
+    a tap that leaves the section is a door, counted apart. A blank or a crash
+    is the failure, never the absence of a `checkable` attribute.
+    """
     adb = walker.adb
     result = {"name": SCENARIO_LABEL["settings"], "verdict": "FAIL", "numbers": "", "evidence": ""}
     started = time.monotonic()
     if not walker.start_app() or not open_settings(walker):
         result["numbers"] = "« Réglages » introuvable"
         return result
+    root = walker.dump()
+    sections = [word.word for word in settings_sections(root)][:4]
     controls = 0
+    doors = 0
     blanks = 0
     crash: list[str] = []
     visited: set[str] = set()
-    # 4 min: the scenario is a sample of the section list, not the pass. The
-    # job's 45 minutes hold boot + sign-in + three scenarios + a 25-minute pass
-    # + the session and its second sign-in.
-    deadline = time.monotonic() + 4 * 60
-    section: str | None = None
-    scrolls = 0
-    while time.monotonic() < deadline:
-        dump = walker.dump()
-        if not dump.ok:
-            blanks += 1
+    deadline = time.monotonic() + 3 * 60
+    for label in sections:
+        if time.monotonic() > deadline or crash:
             break
-        crash = adb.crash_lines()
-        if crash:
+        if not open_settings(walker):
             break
-        switches = [w for w in dump.app_wraps
-                    if w.checkable and w.n.visible and w.signature not in visited]
-        if switches:
-            wrap = switches[0]
+        if not open_settings_section(walker, label):
+            continue
+        for _ in range(6):
+            if time.monotonic() > deadline:
+                break
+            dump = walker.dump()
+            if not dump.ok:
+                blanks += 1
+                break
+            crash = adb.crash_lines()
+            if crash:
+                break
+            targets = [w for w in dump.app_wraps
+                       if w.n.visible and (w.n.clickable or w.checkable) and w.word
+                       and w.signature not in visited and w.word not in SHELL
+                       and not w.word.startswith("Retour")
+                       and not (destructive_of(w.word) and destructive_of(w.word)[0] != "reversible")]
+            if not targets:
+                break
+            wrap = targets[0]
             visited.add(wrap.signature)
             adb.tap(*walker.tap_point(wrap))
-            controls += 1
             after = walker.dump()
             if not after.ok or after.textual == 0:
                 blanks += 1
-            elif after.name != dump.name:
-                # Applying a setting left the section: come back to it.
-                if not open_settings(walker):
-                    break
-                if section and not open_settings_section(walker, section):
-                    break
-            continue
-        # A section door, never an irreversible action: « Déconnexion » and
-        # « Changer de serveur » belong to the session scenario (§4.5).
-        rows = [w for w in dump.app_wraps
-                if w.n.clickable and w.word and w.n.visible and w.role == "button"
-                and w.signature not in visited
-                and not (destructive_of(w.word) and destructive_of(w.word)[0] != "reversible")]
-        if not rows:
-            if scrolls >= 8:
                 break
-            scrolls += 1
-            adb.swipe_up(dump.width, dump.height)
-            continue
-        wrap = rows[0]
-        visited.add(wrap.signature)
-        section = wrap.word
-        adb.tap(*walker.tap_point(wrap))
-        if not walker.dump().ok:
-            blanks += 1
-            if not open_settings(walker):
-                break
+            if after.name != dump.name:
+                # The control left the section (a door, or a setting that opens
+                # its own screen): count it apart and come back for the next.
+                doors += 1
+                if not open_settings(walker) or not open_settings_section(walker, label):
+                    break
+                continue
+            controls += 1
     seconds = int(time.monotonic() - started)
-    ok = bool(controls > 0 and not crash)
+    ok = bool(controls > 0 and not crash and not blanks)
     result["verdict"] = "PASS" if ok else "FAIL"
-    result["numbers"] = f"controls={controls} blanks={blanks} crash={len(crash)} seconds={seconds}"
+    result["numbers"] = (f"controls={controls} doors={doors} blanks={blanks} "
+                         f"crash={len(crash)} seconds={seconds}")
     result["line"] = (f"settings_apply={'ok' if ok else 'fail'} controls={controls} "
                       f"blanks={blanks} crash={len(crash)}")
     return result
 
 
 def open_settings_section(walker: Walker, label: str) -> bool:
+    """Open one named row of Réglages, proven by the screen that replaced it."""
     dump = walker.dump()
     row = next((w for w in dump.app_wraps if w.word == label and w.n.visible), None)
     if row is None:
         return False
     walker.adb.tap(*walker.tap_point(row))
-    return walker.dump().ok
+    after = walker.dump()
+    return after.ok and not is_settings(after)
 
 
 def scenario_session(walker: Walker) -> dict:
@@ -1418,18 +1576,21 @@ def scenario_session(walker: Walker) -> dict:
     dump = walker.dump()
     sources = next((w for w in dump.app_wraps if w.word == "Sources" and w.n.visible), None)
     if sources is None:
-        result["numbers"] = "« Sources » introuvable dans Réglages"
+        result["numbers"] = f"« Sources » introuvable dans Réglages ({dump.name})"
         return result
     adb.tap(*walker.tap_point(sources))
     logout = None
-    for _ in range(8):
+    where = ""
+    for attempt in range(10):
         dump = walker.dump()
+        where = dump.name
         logout = next((w for w in dump.app_wraps if w.word == "Déconnexion" and w.n.visible), None)
         if logout is not None:
             break
-        adb.swipe_up(dump.width, dump.height)
+        if attempt in (3, 6):
+            adb.swipe_up(dump.width, dump.height)
     if logout is None:
-        result["numbers"] = "« Déconnexion » introuvable"
+        result["numbers"] = f"« Déconnexion » introuvable sur « {where} »"
         return result
     adb.tap(*walker.tap_point(logout))
     confirm = None
@@ -1522,6 +1683,7 @@ def summary(run: dict) -> dict:
         "freezes": sum(1 for row in rows if row["outcome"] == "freeze"),
         "unreachable": sum(1 for row in rows if row["outcome"] == "unreachable"),
         "seconds": run.get("seconds", 0),
+        "capped": run.get("capped", 0),
         "stopped": run.get("stopped"),
     }
 
@@ -1539,6 +1701,8 @@ def summary_line(run: dict) -> str:
             f"named_nothing={totals['named_nothing']} "
             f"blank={totals['blank']} exceptions={totals['exceptions']} "
             f"freezes={totals['freezes']} seconds={totals['seconds']}")
+    if totals.get("capped"):
+        line += f" screenshots_capped={totals['capped']}"
     if totals["stopped"]:
         line += f" stopped={totals['stopped']}"
     return line
@@ -1738,6 +1902,38 @@ def self_test() -> int:
     if got != "nothing":
         print(f"self_test: classify=FAIL expected=nothing got={got}")
         return 1
+    # §4.1 native: a window the previous read did not name is a layer, even with
+    # an unchanged tree (the full-screen player, measured on run 45915988351).
+    got, _, _ = classify(dict(base, windows=()), dict(base, windows=("player",)), [], "1")
+    if got != "opened-layer":
+        print(f"self_test: classify=FAIL expected=opened-layer(window) got={got}")
+        return 1
+    got, _, _ = classify(dict(base, windows=("player",)), dict(base, windows=("player",)), [], "1")
+    if got != "nothing":
+        print(f"self_test: classify=FAIL expected=nothing(same window) got={got}")
+        return 1
+    # The window manager's own text, as `dumpsys window windows` prints it.
+    raw = ("  Window #0 Window{1a2b3c u0 StatusBar}:\n"
+           "  Window #1 Window{9f8e7d u0 fr.neezer.mobile/fr.neezer.mobile.MainActivity}:\n"
+           "  Window #2 Window{aa11bb u0 InputMethod}:\n")
+    if parse_windows(raw) != ("fr.neezer.mobile/fr.neezer.mobile.MainActivity",):
+        print(f"self_test: windows=FAIL {parse_windows(raw)}")
+        return 1
+    # §9.6: the tree already read is the next element's « avant » on an
+    # unchanged screen — and NEVER when the screen it belongs to is another one.
+    walker = Walker(Adb("self-test"), Path(tempfile.gettempdir()), 10, 1)
+    cached = Dump(NEO_DUMP, 120)
+    first = Screen(1, "Accueil Neezer", "aaaa", [])
+    walker.remember(first, cached)
+    signature = elements(cached)[0][0].signature
+    got = walker.resolve(first, signature)
+    if got is None or got[0] is not cached:
+        print("self_test: tree=FAIL the cached tree was not reused")
+        return 1
+    walker.remember(Screen(2, "Ailleurs", "bbbb", []), cached)
+    if walker.resolve(first, signature) is not None:
+        print("self_test: tree=FAIL another screen's tree was reused")
+        return 1
     # §4.5: the destructive regimes, decided once.
     if destructive_of("Déconnexion") != ("passe", False):
         print("self_test: classify=FAIL destructive Déconnexion")
@@ -1808,7 +2004,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--scenario", choices=("burst", "settings", "session"),
                         help="ne joue qu'un scénario (§9.8)")
     parser.add_argument("--max-nodes", type=int, default=700)
-    parser.add_argument("--max-minutes", type=int, default=30)
+    parser.add_argument("--max-minutes", type=int, default=35)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--check-routes", action="store_true")
     args = parser.parse_args(argv)
@@ -1890,6 +2086,7 @@ def main(argv: list[str]) -> int:
     run["elements"] = sum(screen.elements for screen in walker.screens)
     run["duplicates"] = walker.suppressed
     run["stopped"] = walker.stopped
+    run["capped"] = walker.capped
     run["label_collision"] = walker.label_collision
     run["hors_passe"] = read_routes()[1]
     save_run(run, out)

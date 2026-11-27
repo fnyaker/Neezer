@@ -735,13 +735,39 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
   `bloquant` (§4.6). Le prix mesuré est de ~2 s par silence confirmé — sur l'arbre factice, la passe
   est passée de 7 s à 22 s, et les deux harnais (web et natif) impriment le même
   `nothing=<n> named_nothing=<k>`.
+- **l'arbre déjà lu est l'« avant » de l'élément suivant, tant que l'écran n'a pas bougé** : la
+  passe relisait trois fois le même écran par élément (`resolve`, l'après-tap, la confirmation du
+  `nothing`) à ~2,5 s le dump sur SwiftShader — mesuré au run 45915988351 : **14 s par clic**,
+  1 801 s pour 118 clics, `stopped=budget` à **78,1 %**. `Walker.remember` garde l'arbre du dernier
+  dump et `resolve` le relit avant tout `uiautomator dump`; il est **jeté** dès qu'une navigation,
+  une couche, un `blank` ou un plantage veut dire que ce n'est plus l'écran (le seul cas où le
+  relire est faux).
+- **une fenêtre de plus est une `opened-layer`, même quand l'arbre ne bouge pas** (§4.1) :
+  `dumpsys window windows` est lu avant et après le tap (barres système et clavier exclus, ils ont
+  leurs propres verdicts). Mesuré au run 45915988351 : « Ouvrir le lecteur plein écran » lisait
+  `nothing` sur trois écrans — trois `bloquant` **faux** sur un verbe — parce que le lecteur plein
+  écran est une fenêtre que l'arbre de l'activité n'a pas crue.
+- **le banc de la chasse rend TOUT le fonds jouable** : `--audio-all --audio-all-seconds 180`
+  (même WAV silencieux pour chaque piste, 3 min). Sans lui, aucune piste n'a de bytes : mesuré au
+  run 45915988351, le lecteur restait sur « Chargement… », la rafale rendait
+  `playing=0 title_changed=0` sur un titre qui n'a jamais existé, et les quatre scénarios du
+  propriétaire sortaient FAIL pour une raison de banc. `is_playing` lit `state=3` dans
+  `dumpsys media_session` : un mini-lecteur visible n'est pas une lecture.
+- **un interrupteur Compose n'est pas `checkable`** : mesuré au run 45915988351, `checkable=0` sur
+  dix des onze dumps (seules les six cartes d'énergie de l'accueil le portent). Le scénario des
+  réglages ouvre donc chaque section de la page Réglages et tape ses contrôles **nommés**, en
+  comptant ceux appliqués sur place (`controls`) et ceux qui ouvrent un écran (`doors`) ; `blank`
+  ou plantage reste l'échec, jamais l'absence d'un attribut.
 
 La **passe** part de l'accueil, explore en largeur les écrans par ordre de découverte, et se restaure
 par `BACK` (une fois après une navigation, jusqu'à 3 fois sinon) puis, en dernier recours, par
 `am force-stop` + `am start` + le **chemin de taps** enregistré à la découverte. Bornes : 700 nœuds,
-30 min, 15 s par nœud, un tap par nœud. Un élément hors écran est ramené par 3 glissements ; s'il
-n'arrive pas, il est `unreachable` et compte **trouvé mais non cliqué** (`coverage=416/418 (99.5%)`
-reste honnête, §4.4). La règle du frère échantillonne 3 lignes sur ≥ 6 sœurs identiques (`duplicates=n`).
+**35 min** (§9.6 ; l'implémentation en tenait 30, et le run 45915988351 s'est arrêté à 78,1 % pour
+cette seule raison), 15 s par nœud, un tap par nœud. Un élément hors écran est ramené par 3
+glissements ; s'il n'arrive pas, il est `unreachable` et compte **trouvé mais non cliqué**
+(`coverage=416/418 (99.5%)` reste honnête, §4.4). La règle du frère échantillonne 3 lignes sur ≥ 6
+sœurs identiques (`duplicates=n`), et les captures d'anomalie sont plafonnées à **40** (§4.8,
+`screenshots_capped=<n>` au-delà : une `screencap` coûte ~1 s et la passe a 54 `nothing` à prouver).
 
 Le **serveur de banc** de la chasse est le sien, pas celui de `release-signin.sh` : ce dernier
 arrête le sien en sortant (son `cleanup`, T1 le documente dans `release-journey.sh`), et une passe qui
