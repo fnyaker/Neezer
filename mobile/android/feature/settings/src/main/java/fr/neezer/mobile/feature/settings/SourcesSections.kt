@@ -602,11 +602,6 @@ private fun GroupsBlock(model: SettingsModel, access: uniffi.nz_ffi.AccessData) 
     Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
         Spacer(Modifier.height(NzSpacing.m))
         Text("Groupes", style = Sillon.type.label, color = colors.tx)
-        Text(
-            text = "Un groupe est un ensemble de personnes à qui un accès se donne en une fois.",
-            style = Sillon.type.bodySmall,
-            color = colors.dim,
-        )
         access.groups.forEach { group ->
             Row(
                 modifier = Modifier.fillMaxWidth().height(NzMinTouchTarget),

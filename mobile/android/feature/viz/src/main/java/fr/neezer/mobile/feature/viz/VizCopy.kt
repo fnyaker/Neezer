@@ -26,12 +26,10 @@ internal object VizCopy {
         Mode(
             id = "bars",
             label = "Barres",
-            hint = "Le spectre en capsules de lumière, avec une vraie résolution dans les graves.",
         ),
         Mode(
             id = "scope",
             label = "Oscilloscope",
-            hint = "Le signal lui-même, une trace par canal, déclenchée comme sur un vrai oscilloscope.",
         ),
     )
 
@@ -130,7 +128,7 @@ internal object VizCopy {
     data class Choice(val id: String, val label: String, val hint: String, val index: Int)
 
     /** One scene: what it is called and what it costs (`modes.js`). */
-    data class Mode(val id: String, val label: String, val hint: String)
+    data class Mode(val id: String, val label: String)
 
     /** One palette source. */
     data class Palette(val id: String, val label: String)

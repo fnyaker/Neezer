@@ -479,7 +479,7 @@ private fun Tracks(
                 if (state.editable) Toolbar(state, actions)
                 if (state.editing) {
                     Text(
-                        text = "Glissez la poignée, ou utilisez les flèches, pour changer l'ordre.",
+                        text = "Glissez pour réordonner.",
                         style = Sillon.type.labelSmall,
                         color = colors.dim,
                     )

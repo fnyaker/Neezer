@@ -280,11 +280,6 @@ private fun QualityCard(model: DownloadsModel, state: DownloadsModel.State) {
     NzCard(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
             Text("Qualité de téléchargement par défaut", style = Sillon.type.titleSmall, color = Sillon.colors.tx)
-            Text(
-                "Utilisée pour les nouveaux téléchargements.",
-                style = Sillon.type.bodySmall,
-                color = Sillon.colors.dim,
-            )
             DownloadsModel.QUALITIES.forEach { (rung, hint) ->
                 ChoiceRow(
                     label = DownloadsModel.qualityLabel(rung),
@@ -338,23 +333,14 @@ private fun StorageCard(model: DownloadsModel, state: DownloadsModel.State) {
                 style = Sillon.type.bodySmall,
                 color = colors.dim,
             )
-            // The size on its line, the count on the next: a row of three
-            // texts squeezed the count to one character per line at 200 %
-            // (measured), and a figure nobody can read is worse than a line.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = DownloadsModel.bytesLabel((storage?.downloadsBytes ?: 0uL).toLong()),
-                    style = Sillon.type.titleSmall,
-                    color = colors.tx,
-                )
-                Spacer(Modifier.width(NzSpacing.s))
-                Text(
-                    "utilisés sur cet appareil",
-                    style = Sillon.type.bodySmall,
-                    color = colors.dim,
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            // The size on its line, the count on the next: a row squeezed the
+            // count to one character per line at 200 % (measured), and a figure
+            // nobody can read is worse than a line.
+            Text(
+                text = DownloadsModel.bytesLabel((storage?.downloadsBytes ?: 0uL).toLong()),
+                style = Sillon.type.titleSmall,
+                color = colors.tx,
+            )
             Text(
                 text = "${storage?.tracks ?: 0u} titre(s)",
                 style = Sillon.type.mono,

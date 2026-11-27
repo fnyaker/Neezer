@@ -338,7 +338,7 @@ private fun ArtistsPane(state: OnboardingModel.State, actions: OnboardingActions
                     modifier = Modifier.semantics { heading() },
                 )
                 Text(
-                    text = "Choisissez-en au moins un. Trois à cinq nous donnent un bon départ.",
+                    text = "Choisissez-en au moins un.",
                     style = Sillon.type.body.copy(color = colors.dim),
                 )
                 SearchField(
@@ -748,7 +748,7 @@ private fun AccountPane(state: OnboardingModel.State, actions: OnboardingActions
             }
             item {
                 Text(
-                    "Vous pourrez relier ces comptes plus tard dans Réglages, puis Sources.",
+                    "Modifiable plus tard dans Réglages → Sources.",
                     style = Sillon.type.bodySmall.copy(color = colors.dim),
                 )
             }
@@ -959,8 +959,7 @@ private fun PlaylistCard(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
                     Text("Playlist publique", style = Sillon.type.titleSmall.copy(color = colors.tx))
                     Text(
-                        "Importez une playlist publique par son lien. Deezer, Spotify, Apple Music " +
-                            "ou YouTube.",
+                        "Importez une playlist publique par son lien.",
                         style = Sillon.type.bodySmall.copy(color = colors.dim),
                     )
                 }

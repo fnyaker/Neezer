@@ -640,7 +640,7 @@ private fun InviteSheet(model: AdminModel, state: AdminModel.State, source: Admi
                 value = note,
                 onValue = { if (it.length <= 64) note = it },
                 numeric = false,
-                hint = "${note.length}/64 — ce nom ne crée pas de compte et n'est pas montré à la personne invitée.",
+                hint = "${note.length}/64",
             )
         }
         AdminSubtitle("Durée de validité")
@@ -837,7 +837,7 @@ private fun EnrichCard(model: AdminModel, state: AdminModel.State) {
     val section = state.enrich
     AdminCard(
         title = "Faits complétés par MusicBrainz",
-        subtitle = "Date de première sortie, compositeur, parolier et producteur, sans jamais ralentir la lecture.",
+        subtitle = "Date de première sortie, compositeur, parolier et producteur.",
     ) {
         section.data?.let { enrich -> EnrichBody(model, enrich) }
         section.failure?.let { AdminCardFailure(it, { model.retryCard("enrich") }) }
@@ -897,7 +897,7 @@ private fun CreditsCard(model: AdminModel, state: AdminModel.State) {
     val section = state.credits
     AdminCard(
         title = "Crédits des titres",
-        subtitle = "Compositeur, auteur, producteur de chaque titre, gardés en base pour le lecteur plein écran, sans jamais ralentir la lecture.",
+        subtitle = "Compositeur, auteur et producteur, pour le lecteur plein écran.",
     ) {
         section.data?.let { credits -> CreditsBody(model, credits) }
         section.failure?.let { AdminCardFailure(it, { model.retryCard("credits") }) }
@@ -1402,7 +1402,6 @@ private fun TranscribeBody(model: AdminModel, settings: AdminTranscribe, probing
         ?.let { AdminHint("Exécution : $it.") }
     AdminSwitchRow(
         title = "Transcrire les podcasts",
-        hint = "Le moteur reste désactivé tant que cette option est fermée.",
         checked = settings.enabled,
         onChange = { on -> model.saveTranscribe("enabled", if (on) "true" else "false") },
     )
