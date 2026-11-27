@@ -299,6 +299,83 @@ def _parse_spectral(out, err):
     }
 
 
+def _loudness_cmd(path):
+    """One ebur128 decode and nothing else.
+
+    The cheap way to get back a loudness that a spectral run lost: no stats, no
+    tempo, no embedding, so it costs a fraction of a full analysis and leaves
+    every other stored measure alone.
+    """
+    return [
+        "ffmpeg", "-nostats", "-v", "info",
+        "-t", str(MAX_SECONDS), "-i", path,
+        "-map", "0:a:0",
+        "-af", "ebur128=peak=none",
+        "-f", "null", "-",
+    ]
+
+
+def parse_loudness(err):
+    """``(lufs, lra)`` from an ebur128 log — the Summary block, or the last
+    running line when the process died before printing it. ``(None, None)``
+    when the meter read nothing (silence prints ``-inf``, which no regex here
+    matches: a silent file has no loudness to level, and no gain either)."""
+    lufs = _LUFS.search(err or "")
+    lra = _LRA.search(err or "")
+    if lufs is not None and lra is not None:
+        return float(lufs.group(1)), float(lra.group(1))
+    running = None
+    for running in _EBUR_RUNNING.finditer(err or ""):
+        pass  # the LAST one: the integrated value over the whole stream
+    if running is not None:
+        return float(running.group(1)), float(running.group(2))
+    return (float(lufs.group(1)) if lufs is not None else None), None
+
+
+def measure_loudness(path):
+    """``(lufs, lra)`` of a file, one ebur128 decode. Never a spectral pass.
+
+    Raises ``RuntimeError`` when ffmpeg failed and read nothing, with its own
+    last words, so a repair can say why instead of counting a failure.
+    """
+    proc = subprocess.run(  # nosec B603 - fixed argv, the media path is one element, no shell
+        _loudness_cmd(path), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=FFMPEG_TIMEOUT, check=False,
+    )
+    err = proc.stderr.decode("utf-8", "replace")
+    lufs, lra = parse_loudness(err)
+    if lufs is None and proc.returncode != 0:
+        raise RuntimeError(
+            f"loudness pass: ffmpeg exited {proc.returncode}: "
+            f"{ffmpeg_tail(err) or 'no output'}"
+        )
+    return lufs, lra
+
+
+def _fill_loudness(feats, path):
+    """Give a spectral run the loudness only the meter was missing.
+
+    A build that trips ffmpeg's filtergraph abort, or one without ebur128 at
+    all, leaves ``lufs`` at None while every other descriptor is real. Storing
+    that as final is how a track ends with no ReplayGain FOREVER: its analysis
+    is current, so neither the backfill nor the regain pass ever looks again
+    (`Track.gain` stays null and both clients log "gain none"). One ebur128
+    decode here keeps a lost meter from becoming a missing gain.
+    """
+    if feats.get("lufs") is not None:
+        return feats
+    try:
+        lufs, lra = measure_loudness(path)
+    except Exception as exc:  # the loudness is optional; the verdict is not
+        logger.info("analysis: loudness alone failed for %s: %s", path, exc)
+        return feats
+    if lufs is not None:
+        feats["lufs"] = lufs
+        if lra is not None:
+            feats["lra"] = lra
+    return feats
+
+
 def _spectral(path):
     """Whole-file spectral descriptors and loudness, in one decode.
 
@@ -327,7 +404,7 @@ def _spectral(path):
                 "ffmpeg produced no spectral frames "
                 f"({ffmpeg_tail(err) or 'file too short, or not decodable audio'})"
             )
-        return feats
+        return _fill_loudness(feats, path)
 
     # It did not exit cleanly. Did it measure the track anyway?
     if feats is not None and feats["frames"] >= MIN_SALVAGE_FRAMES:
@@ -336,7 +413,7 @@ def _spectral(path):
             "(%s) — keeping the measurement",
             proc.returncode, path, feats["frames"], ffmpeg_tail(err, lines=1),
         )
-        return feats
+        return _fill_loudness(feats, path)
 
     # Killed by a signal with nothing usable: give it one more go without the
     # loudness meter, which is the part that can be dropped and the part the
@@ -359,7 +436,7 @@ def _spectral(path):
         if feats is not None and (
             retry.returncode == 0 or feats["frames"] >= MIN_SALVAGE_FRAMES
         ):
-            return feats
+            return _fill_loudness(feats, path)
 
     raise RuntimeError(
         f"ffmpeg exited {proc.returncode}: {ffmpeg_tail(err) or 'no output'}"
@@ -1878,6 +1955,45 @@ def regain_from_analyses(page_size=500):
             ).execute()
 
 
+def _lost_loudness(track, row) -> bool:
+    """A current verdict whose loudness never landed.
+
+    Two ways in: the meter was dropped on an ffmpeg abort, or the row predates
+    the gain being measured from the file. Either way ``Track.gain`` is null
+    and the row's ``lufs`` is null, and the row is CURRENT, so nothing would
+    ever measure it again."""
+    if track.gain is not None:
+        return False
+    try:
+        data = json.loads(row.data or "{}") or {}
+    except ValueError:
+        return False
+    return data.get("lufs") is None
+
+
+def repair_loudness(track, row):
+    """Measure the loudness alone and write it where a spectral run lost it.
+
+    Returns None when the gain is now there, or the reason it is not. It writes
+    the ``lufs`` back into the stored measure too, so the next pass sees a track
+    that is finished and does not decode it again; a silent file has no
+    loudness to find and says so."""
+    lufs, lra = measure_loudness(track.path)
+    if gain_from_lufs(lufs) is None:
+        return "no loudness (silent, or nothing measurable)"
+    try:
+        data = json.loads(row.data or "{}") or {}
+    except ValueError:
+        data = {}
+    data["lufs"] = round(lufs, 2)
+    if lra is not None:
+        data["lra"] = round(lra, 2)
+    row.data = json.dumps(data, separators=(",", ":"))
+    row.save(only=[TrackAnalysis.data])
+    apply_measured_gain(track, lufs)
+    return None
+
+
 _FAMILY_ARCH = {fid: arch for fid, _label, arch, _fn in FAMILIES}
 
 
@@ -2588,10 +2704,15 @@ def _record_failure(stats, track, reason):
 
 def backfill(provider=None, force=False, limit=None, progress=None, on_stats=None,
              workers=None, throttle=None):
-    """Measure every archived track that has no current verdict.
+    """Measure every archived track that has no current verdict, and repair the
+    loudness of the ones whose verdict is current but whose gain is still null.
 
     The safety net for what the archive event cannot see: tracks archived before
-    this existed, and anything measured by an older version of the analysis.
+    this existed, and anything measured by an older version of the analysis. A
+    current measure that lost its loudness (an ffmpeg abort dropped the ebur128
+    meter, and the retry without it stored ``lufs: null``) is not skipped: its
+    loudness is measured alone, one cheap decode, because nothing else would
+    ever give that track a gain again.
 
     `workers` runs that many tracks at once; None sizes it from the machine.
     Each one is one to three ffmpeg passes plus (optionally) the extractor, so it
@@ -2605,7 +2726,7 @@ def backfill(provider=None, force=False, limit=None, progress=None, on_stats=Non
     if not ffmpeg_available():
         say("ffmpeg not found; nothing to do.")
         return {
-            "scanned": 0, "done": 0, "skipped": 0, "failed": 0,
+            "scanned": 0, "done": 0, "skipped": 0, "failed": 0, "repaired": 0,
             "error": "ffmpeg is not installed (analysis decodes audio with it)",
             "failures": [], "failure_reasons": {},
         }
@@ -2618,8 +2739,9 @@ def backfill(provider=None, force=False, limit=None, progress=None, on_stats=Non
     except Exception:
         logger.warning("analysis: regain pass failed", exc_info=True)
 
-    stats = {"scanned": 0, "done": 0, "skipped": 0, "failed": 0, "error": None,
-             "workers": workers, "failures": [], "failure_reasons": {}}
+    stats = {"scanned": 0, "done": 0, "skipped": 0, "failed": 0, "repaired": 0,
+             "error": None, "workers": workers, "failures": [],
+             "failure_reasons": {}}
     lock = threading.Lock()
 
     def work(track):
@@ -2634,9 +2756,36 @@ def backfill(provider=None, force=False, limit=None, progress=None, on_stats=Non
             return
         existing = TrackAnalysis.get_or_none(TrackAnalysis.track == track)
         if existing and not force and existing.version >= ANALYSIS_VERSION:
+            if not _lost_loudness(track, existing):
+                with lock:
+                    stats["skipped"] += 1
+                    report(stats)
+                return
+            # A current measure that lost its loudness: repair the loudness
+            # ALONE, one ebur128 decode, instead of re-analysing the track. This
+            # is the only way such a row ever gets a gain — its version is
+            # current, so nothing else looks at it again.
+            if throttle is not None and not throttle.wait():
+                with lock:
+                    stats["stopped"] = True
+                return
+            t_unit = time.monotonic()
+            try:
+                reason = repair_loudness(track, existing)
+            except Exception as exc:
+                reason = str(exc) or type(exc).__name__
             with lock:
-                stats["skipped"] += 1
+                if reason is None:
+                    stats["done"] += 1
+                    stats["repaired"] += 1
+                    if stats["repaired"] % 25 == 0:
+                        say(f"  {stats['repaired']} loudness repaired...")
+                else:
+                    stats["failed"] += 1
+                    _record_failure(stats, track, reason)
                 report(stats)
+            if throttle is not None:
+                throttle.spent(time.monotonic() - t_unit)
             return
         if throttle is not None and not throttle.wait():
             with lock:

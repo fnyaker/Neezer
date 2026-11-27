@@ -218,6 +218,11 @@ one line (`logInfo("load")`, diagnostics on): `gain -10.0 dB (normalisation medi
 client can invent it (that is the DATA answer, and the only fix is a measurement); a number with a flat
 library means the LEVEL (`normalisation off`, or a level the person did not expect). `test/gain/run.mjs`
 pins both lines on the shipped graph, with the numbers the graph must hold (0.676 for −10 dB at medium).
+A `gain none` that is *not* the level is now repaired on the server: a current verdict whose loudness was
+lost (ffmpeg aborting inside ebur128, retried without the meter) is measured again by the nightly window
+(`analysis.repair_loudness`, one decode per track — [server.md](server.md), *Gain and lyrics no longer
+come from Deezer*), and `tests/test_gain_repair.py` pins it (master: gain stays null; fixed: −4.1 dB → `gain
+-4.1 dB` at the client).
 
 
 Leaving the graph needs a NEW element: the idle one is replaced at once, the playing one hands its
