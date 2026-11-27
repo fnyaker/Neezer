@@ -1186,6 +1186,15 @@ def main():
         "set it taps never completes, every title being unarchived)",
     )
     ap.add_argument(
+        "--audio-all-seconds",
+        type=int,
+        default=1,
+        metavar="N",
+        help="how many seconds the --audio-all WAV lasts (default 1): a client that "
+        "PLAYS it, not only downloads it, needs enough to hear the clock advance "
+        "(mobile/tools/bughunt's « Suivant » burst checks position over 1.5 s)",
+    )
+    ap.add_argument(
         "--archived",
         action="store_true",
         help="mark the whole library archived, played, measured and given vectors, "
@@ -1344,7 +1353,8 @@ def main():
 
         with app.app_context():
             shared = _silent_wav(
-                os.path.join(app.config["DEEZER"]["archive_dir"], "bench-audio", "all.wav")
+                os.path.join(app.config["DEEZER"]["archive_dir"], "bench-audio", "all.wav"),
+                seconds=max(1, args.audio_all_seconds),
             )
             # ONE file for every row: the measure is "the download's set completes
             # and its bytes survive the install", not a per-title stream.

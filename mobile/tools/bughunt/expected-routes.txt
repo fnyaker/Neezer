@@ -1,0 +1,34 @@
+# Les destinations de `object Routes` (mobile/android/app/src/main/java/fr/neezer/mobile/app/NavGraph.kt),
+# une par ligne. `explore.py --check-routes` compare ce fichier à la source : une
+# destination ajoutée sans ligne ici, ou une ligne sans destination, fait échouer la
+# garde avec la sortie 2 et le nom fautif (plan-bughunt §9.9).
+#
+# Seconde colonne, quand elle existe : `hors-passe` + la raison. Ces écrans sont
+# comptés « trouvés mais non cliqués » par le rapport, jamais sautés en silence
+# (plan-bughunt §9.10).
+Setup            hors-passe: pré-session, l'appareil de banc est déjà connecté
+Login            hors-passe: pré-session, la connexion est celle de release-signin.sh
+Invite           hors-passe: demande un code d'invitation d'un autre compte
+Onboarding       hors-passe: demande un compte neuf, sans lecture ni favori
+Home
+Search
+Artist
+Album
+Credits
+Playlist
+SharedPlaylist   hors-passe: demande un lien partagé d'un autre compte
+Import
+Library
+History
+Podcasts
+Show
+Releases
+ReleaseShelf
+Recap
+Genres
+Viz
+Settings
+Lan              hors-passe: demande un second appareil sur le même réseau
+PeerSets         hors-passe: demande un second appareil sur le même réseau
+Party            hors-passe: demande un hôte de soirée, donc un second appareil
+RemoteClaim      hors-passe: demande un second appareil qui affiche le jeton

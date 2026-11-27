@@ -10,7 +10,7 @@ nothing. It is a map of interactions, not a pass/fail gate: never on `pull_reque
 | Entry point | `webapp/test/bughunt/run.mjs` | `mobile/tools/bughunt/explore.sh` |
 | Runs on | any machine with Chromium (`/dev/kvm` not needed) | GitHub Actions only (the `native` job of `bughunt.yaml`) |
 | Report | `webapp/test/bughunt/out/bughunt-web.{json,md}` + `screens/` | `mobile/tools/bughunt/out/bughunt-native.{json,md}` + `screens/` |
-| Workflow | `.github/workflows/bughunt.yaml`, `web` job | same file, `native` job (skips until B2 lands) |
+| Workflow | `.github/workflows/bughunt.yaml`, `web` job | same file, `native` job (it runs once `explore.sh` exists; its own rules are in [mobile.md](mobile.md)) |
 
 Neither output is committed (`/webapp/test/bughunt/out/` and `/mobile/tools/bughunt/out/` are
 gitignored): every run regenerates it, and the first run of each lot is attached to its task.

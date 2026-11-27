@@ -685,6 +685,148 @@ sign-in **38 s** with `covers_served=2`, **3 000 events in 3 min 44 s**, the who
 When it finds a crash, the fix gets its own task and T1 grows a step for that screen (the crawler
 finds the net's holes; it does not become the gate).
 
+### La chasse aux bugs native (lot B2, plan `plan-bughunt` §9)
+
+Monkey trouve les chemins qu'un script n'a pas écrits ; il ne DIT pas ce qui s'est passé quand un
+contrôle ne fait rien. La chasse, elle, clique **chaque** nœud interactif de chaque écran atteignable
+et classe la transition dans un vocabulaire commun aux deux apps (`plan-bughunt` §4) :
+`exception`, `blank`, `freeze`, `console-error`, `navigated`, `opened-layer`, `state-changed`,
+`nothing`, `blocked-destructive`, `unreachable`, `skipped-session`. Elle tourne sur l'**APK release
+signé et connecté** — l'artefact que la personne installe — et écrit `bughunt-native.json` (le
+registre), `bughunt-native.md` (le rapport humain, gabarit §4.8), `run.txt` (la ligne de résumé),
+`crash.txt`, `logcat.txt`, `device.txt` et une capture par écran plus une par anomalie, dans le
+nommage de T9 (`screens/NN-<écran>.png`, `.xml`).
+
+```sh
+python3 mobile/tools/bughunt/explore.py --self-test       # sans émulateur : parse, dédup, classify
+python3 mobile/tools/bughunt/explore.py --check-routes    # 26/26, sortie 2 sur une dérive
+mobile/tools/bughunt/explore.sh --serial emulator-5580     # boot, connexion, 3 scénarios, passe
+mobile/tools/bughunt/explore.sh --serial emulator-5580 --scenario burst
+mobile/tools/bughunt/explore.sh --serial emulator-5580 --only "Réglages"
+gh workflow run bughunt.yaml --ref <branche>               # le job `native`, KVM du runner
+```
+
+Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
+
+- **le parseur est celui de T9, pas une copie.** `explore.py` charge `mobile/tools/judge/precheck.py`
+  par chemin ; `precheck.Node` ne garde pas `resource-id`/`checkable`/`long-clickable`, donc le même
+  dump est relu une seconde fois pour sa LISTE d'attributs avec les regex `TAG`/`ATTR` de precheck,
+  zippée par ordre de document. Deux parseurs seraient deux vérités sur le même fichier ;
+- **le nom accessible se lit aussi sur un enfant, et l'identité le porte.** Un onglet Compose est un
+  `View` cliquable au `text`/`content-desc` VIDE, dont le libellé est un `TextView` enfant : avec le
+  nom lu sur le seul nœud, les quatre onglets partageaient une signature, trois étaient comptés
+  `duplicate` et la passe n'a jamais quitté l'accueil — `screens=1 elements=9 duplicates=20` au
+  premier run réel (26/11, run 45895651634). Le nom est donc le texte propre, le `content-desc`
+  propre, puis le texte du plus proche descendant, puis son `content-desc` : les onglets s'appellent
+  « Rechercher », « Biblio », « Réglages », le rapport est lisible, et `Réglages` redevient une porte
+  pour les scénarios. La règle du frère porte aussi le drapeau `checkable` dans la forme comparée,
+  sinon le bouton principal de l'accueil (« Lancer le Flow ») disparaissait comme doublon des six
+  cartes d'énergie qu'il ne remplace pas ;
+- **un conteneur défilable qui contient des contrôles n'est pas un élément** : ce sont ses enfants.
+  Sans cette règle, le nœud racine de chaque écran devenait un `nothing` (mesuré sur le premier
+  arbre factice : la racine de l'accueil et celle des Réglages, deux bugs `mineur` par écran qui
+  n'existent pas). La clause de §9.4 reste pour la ligne de liste qui n'est pas cliquable elle-même ;
+- **une action destructive est cliquée jusqu'à sa confirmation, jamais au-delà** : `explore.py` porte
+  l'unique liste (`DESTRUCTIVE`) — `Déconnexion` s'arrête devant `Confirmer`, `Changer de serveur`
+  est `skipped-session` dans la passe, `Mettre à jour` s'arrête à sa feuille. Une confirmation qui
+  n'apparaît pas est un bug `bloquant` (`confirm=no-confirm`), pas un accident du harnais ;
+- **un `nothing` se prouve sur deux dumps, à ~3 s** : un seul dump lit toute peinture plus lente que
+  lui comme « rien ne se passe », or un `nothing` sur un nom qui commence par un verbe est un bug
+  `bloquant` (§4.6). Le prix mesuré est de ~2 s par silence confirmé — sur l'arbre factice, la passe
+  est passée de 7 s à 22 s, et les deux harnais (web et natif) impriment le même
+  `nothing=<n> named_nothing=<k>`.
+- **l'arbre déjà lu est l'« avant » de l'élément suivant, tant que l'écran n'a pas bougé** :
+  la passe relisait trois fois le même écran par élément (`resolve`, l'après-tap, la confirmation
+  du `nothing`) à ~2,5 s le dump. `Walker.remember` garde l'arbre du dernier dump et `resolve` le
+  relit avant tout `uiautomator dump` ; il est **jeté** dès qu'une navigation, une couche, un
+  `blank` ou un plantage veut dire que ce n'est plus l'écran. Mesure des deux runs : 118 clics en
+  1 801 s (45915988351, 15 écrans) puis **150 clics en 2 109 s** (45924564740, 17 écrans), soit
+  toujours ~14 s par clic — le dump de cet émulateur passe de 2 s à ~5 s au fil de la passe, et le
+  gain s'est vu dans les **écrans et éléments couverts** (15 → 17, 151 → 171, couverture 78,1 % →
+  87,7 %), pas dans la seconde par clic. Ne pas promettre l'inverse d'un cache de dump.
+- **une fenêtre de plus est une `opened-layer`, même quand l'arbre ne bouge pas** (§4.1) :
+  `dumpsys window windows` est lu avant et après le tap (barres système et clavier exclus, ils ont
+  leurs propres verdicts), et une ligne `nothing` porte le nombre de fenêtres de la confirmation
+  (`fenêtres 6`) : une porte qui ne fait rien n'ouvre aucune fenêtre. Au run 45924564740 la porte
+  « Ouvrir le lecteur plein écran » lit `navigated` sur huit écrans (le lecteur s'ouvre, sous le nom
+  « Chargement… ») ; elle lit encore `nothing` sur « Chargement… » et « Podcasts Neezer », sans
+  fenêtre de plus — deux `bloquant` à trancher, pas un défaut du harnais.
+- **le banc de la chasse rend TOUT le fonds jouable** : `--audio-all --audio-all-seconds 180`
+  (même WAV silencieux pour chaque piste, 3 min). Sans lui, aucune piste n'a de bytes : au run
+  45915988351 le lecteur restait sur « Chargement… » et la rafale rendait
+  `playing=0 title_changed=0` sur un titre qui n'a jamais existé.
+- **une lecture se lit `state=PLAYING`, jamais `state=3`** : Android imprime
+  `state=PLAYING(3)`. Au run 45924564740 le lecteur jouait vraiment (`Background started FGS:
+  NzMediaService` à +9 s, `BUFFERING` puis `PLAYING`) et la rafale lisait quand même `playing=0`,
+  parce que le test cherchait le littéral `state=3`. `playback_state` lit ce qu'Android imprime ;
+  `is_playing` exige `PLAYING` (un mini-lecteur visible, ou un `BUFFERING`, n'est pas une lecture).
+- **un plantage d'avant n'est pas un plantage du scénario** : les trois scénarios prennent une
+  marque du tampon de crash (`crash_mark`) et ne comptent que les lignes apparues après. Au run
+  45924564740, la rafale a fait planter l'app (Bibliothèque → Historique, `IllegalStateException`),
+  puis le scénario des réglages a lu ce même tampon et s'est arrêté à `crash=2 controls=0` — un
+  verdict qui accusait les réglages du plantage d'un autre écran.
+- **la déconnexion est derrière « Compte », pas « Sources »** : `SettingsCopy.kt` porte la ligne
+  « Compte », `AccountSection` porte la carte « Compte » et son bouton `Déconnexion`. Aux runs
+  45924564740 et 45929355454 le scénario tapait « Sources » et ne trouvait donc jamais le bouton
+  qu'il cherchait (`« Déconnexion » introuvable sur « YouTube Music : reliez… »`). La ligne est
+  sous le pli de la page Réglages : `open_settings_section` glisse jusqu'à elle.
+- **un `Chargement…` et l'avis 503 ne sont pas des écrans** : la passe les découvrait comme des
+  écrans (trois au run 45929355454, 0 élément chacun) et payait pour chacun le cycle complet de
+  restauration (`am force-stop` + le chemin de taps) pour rouvrir rien. `Walker.TRANSIENT` les
+  laisse dans leur transition.
+- **la rafale attend `PLAYING` avant de mesurer l'horloge** : 40 taps en 100 ms relancent 40 fois
+  le flux ; sur ce banc le lecteur est encore `BUFFERING` au dernier (mesuré au run 45929355454 :
+  `playing=0 title_changed=1 changed_again=1`). Le symptôme du propriétaire est un titre qui ne
+  démarre jamais, pas un titre qui démarre 2 s plus tard : la rafale attend `PLAYING` (15 s au
+  plus) puis mesure la position sur 1,5 s, et nomme `playing_end` à part.
+- **un interrupteur Compose n'est pas `checkable`** : mesuré au run 45915988351, `checkable=0` sur
+  dix des onze dumps (seules les six cartes d'énergie de l'accueil le portent). Le scénario des
+  réglages ouvre donc chaque section de la page Réglages et tape ses contrôles **nommés**, en
+  comptant ceux appliqués sur place (`controls`) et ceux qui ouvrent un écran (`doors`) ; `blank`
+  ou plantage reste l'échec, jamais l'absence d'un attribut.
+
+La **passe** part de l'accueil, explore en largeur les écrans par ordre de découverte, et se restaure
+par `BACK` (une fois après une navigation, jusqu'à 3 fois sinon) puis, en dernier recours, par
+`am force-stop` + `am start` + le **chemin de taps** enregistré à la découverte. Bornes : 700 nœuds,
+**37 min** (§9.6 en donne 35 ; mesuré : 171 éléments en 35 min, donc 37 pour finir), 15 s par nœud,
+un tap par nœud. Un élément hors écran est ramené par 3
+glissements ; s'il n'arrive pas, il est `unreachable` et compte **trouvé mais non cliqué**
+(`coverage=416/418 (99.5%)` reste honnête, §4.4). La règle du frère échantillonne 3 lignes sur ≥ 6
+sœurs identiques (`duplicates=n`), et les captures d'anomalie sont plafonnées à **40** (§4.8,
+`screenshots_capped=<n>` au-delà : une `screencap` coûte ~1 s et la passe a 54 `nothing` à prouver).
+
+Le **serveur de banc** de la chasse est le sien, pas celui de `release-signin.sh` : ce dernier
+arrête le sien en sortant (son `cleanup`, T1 le documente dans `release-journey.sh`), et une passe qui
+s'en contente n'explore que des coquilles hors ligne — mesuré au run 45898606608 : « Réessayer » sur
+Bibliothèque, « Les podcasts n'ont pas pu être chargés », et une rafale qui ne démarre aucune lecture.
+`explore.sh` démarre donc `perf-server.sh` (8 000 titres, `--covers`, TLS jetable) pour la durée de
+la chasse, garde `release-signin.sh` comme premier verdict (`release_tls_trusted=1`,
+`release_signin=1`), puis reconnecte l'app à SON serveur par l'écran de setup de T1 (`pm clear` puis
+adresse, certificat accepté à l'écran, `bench`/`Bench1`) ; le `trap` arrête le serveur et l'émulateur.
+
+Les trois scénarios du propriétaire sont en tête du rapport, avec leurs nombres :
+`skip_burst=ok taps=40 gap_ms=100 playing=1 title_changed=1 crash=0` (20 `Suivant` à 100 ms puis 20
+alternés, titre lu dans `dumpsys media_session` et horloge de position vérifiée sur deux dumps à
+1,5 s), `settings_apply=ok controls=<n> blanks=0 crash=0` (chaque `switch`/`checkbox`, jamais une
+action irréversible), puis `session_roundtrip=ok login_painted=1 resignin=1 crash=0` — `explore.sh`
+reconnecte à la fin, donc la passe suivante n'a pas besoin d'un second sign-in.
+
+`--check-routes` compare `object Routes` de `NavGraph.kt` à `mobile/tools/bughunt/expected-routes.txt`
+(26 destinations) : une destination ajoutée sans ligne, ou une ligne sans destination, sort en 2 et
+la nomme. C'est la garde anti-dérive de l'inventaire d'écrans — une nouvelle route sans porte se voit
+là avant qu'un rapport ne la manque en silence. Les destinations hors passe (second appareil, compte
+tiers, pré-session) y sont écrites avec leur raison et le rapport les liste (`hors-passe`).
+
+`run.txt` porte `head_run=<sha>` (le commit de l'arbre du harnais) et
+`apk=<nom> bytes=<n> signer=<sha> sha256=<n>` : `bughunt.yaml` n'exporte pas le run `mobile.yaml`
+dont il télécharge l'APK, donc le sha256 est l'ancre qu'un lecteur compare à la release publiée.
+`crash.txt` est vide quand rien n'a planté, et la première ligne du rapport nomme l'AVD et la taille
+de l'écran.
+
+Sur ce worker (pas de `/dev/kvm`) : `--self-test` **0,1 s** (`routes=26/26 parse=ok dedupe=ok
+classify=ok`), `--check-routes` **0,1 s**, `shellcheck` 0.10 en 0,2 s. La passe réelle se mesure sur
+le premier run `bughunt.yaml` — le nombre d'écrans et d'éléments est publié dans le rapport joint.
+
 ### An upgrade is a first-class path (lot T8)
 
 The release page is the delivery channel, and the only install a person makes is

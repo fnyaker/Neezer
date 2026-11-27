@@ -246,6 +246,9 @@ python tools/perf_api.py --serve --covers cover.jpg             # the same, with
                                                      # a searchable artist and cached neighbours; --admin-users N --admin-invites M
                                                      # seed the accounts screen; --podcasts seeds a show with chapters and
                                                      # transcripts (external runner); --dist serves a build outside dist
+python tools/perf_api.py --serve --audio-all --audio-all-seconds 180   # every track archived on ONE silent WAV: a
+                                                     # client that PLAYS (mobile/tools/bughunt's « Suivant » burst) needs
+                                                     # bytes and 3 min for the clock to move; --audio-all alone writes 1 s
 neezer-cli deezer embed [--force] [--limit N]       # extract genre embeddings (needs onnxruntime)
 neezer-cli deezer embed --self-test                 # check the mel front-end without a reference
 

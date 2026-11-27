@@ -101,7 +101,12 @@ jobs:
   native:
     name: Native hunt (emulator, KVM)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Mesuré au run 45924564740 : 41 min 29 s pour une passe de 35 min (boot 28 s,
+    # connexion 43 s, scénarios 77 s, session 72 s). La passe tient 171 éléments en
+    # 35 min sur ce SwiftShader ; §9.6 lui donne 37, donc l'arrêt extérieur passe à
+    # 50 pour que la passe finisse (`stopped=budget` disparaît) sans jamais couper
+    # le rapport, que `if: always()` téléverse de toute façon.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
