@@ -153,7 +153,12 @@ PRECHECK = None  # set by main() and by self_test()
 # --------------------------------------------------------------------------
 
 def short_sha(text: str) -> str:
-    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
+    # An IDENTITY key (§9.4), never a signature: `usedforsecurity=False` says so
+    # in the hash's own terms, and the rule is silenced with that reason (the
+    # shape `neezer/db.py` already uses).
+    return hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- a control's identity, not a signature; see above
+        text.encode("utf-8", "replace"), usedforsecurity=False
+    ).hexdigest()[:16]
 
 
 def slug(text: str, limit: int = 40) -> str:
@@ -438,7 +443,9 @@ class Dump:
         screens with the same header read as one and the label collision never
         fired."""
         words = [w.word for w in self.app_wraps if w.word][:20]
-        return hashlib.sha1("\u0001".join(words).encode("utf-8", "replace")).hexdigest()[:8]
+        return hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- a screen's identity, not a signature
+            "\u0001".join(words).encode("utf-8", "replace"), usedforsecurity=False
+        ).hexdigest()[:8]
 
     def view(self) -> dict:
         return {
