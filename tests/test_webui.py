@@ -2159,6 +2159,122 @@ class WebUITestCase(unittest.TestCase):
             self.assertEqual(rv.get_data(), b"ARTISTJPEG")
         self.assertEqual(calls, [("artist", "500")])
 
+    def _wipe_the_cache(self):
+        """An empty cache, same archive: what a prune or a restart leaves."""
+        from neezer.cache import Cache
+
+        fresh = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, fresh, True)
+        with self.app.app_context():
+            self.app.cache = Cache(fresh, 10 * 1024 * 1024)
+
+    def test_a_fetched_cover_survives_a_cache_wipe_with_zero_provider_calls(self):
+        """The sleeve lives in the ARCHIVE, not in the cache: a prune or a
+        restart must cost one stat, never a provider call. Measured: 1 request
+        for the first paint, 0 after the wipe (it was 1 again on master, where
+        the bytes lived only in ``cache_dir``)."""
+        from neezer.deezer import ids
+
+        self._login()
+        self._make_deezer_track(sng_id="1", archived=False)  # artist 500
+        calls = []
+
+        def fake_fetch_image(kind, deezer_id, size="xl"):
+            calls.append((kind, deezer_id))
+            return b"ARTISTJPEG"
+
+        self.app.deezer.fetch_image = fake_fetch_image
+        url = "/api/cover/" + str(ids.artist_uuid("500"))
+        rv = self.client.get(url)
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(calls, [("artist", "500")])
+
+        stored = os.path.join(
+            self.archive, "Covers", "artist", f"{ids.artist_uuid('500')}.jpg"
+        )
+        with open(stored, "rb") as fh:
+            self.assertEqual(fh.read(), b"ARTISTJPEG")
+
+        self._wipe_the_cache()
+        self.app.deezer.fetch_image = mock.Mock(
+            side_effect=AssertionError("Deezer was called")
+        )
+        rv = self.client.get(url)
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_data(), b"ARTISTJPEG")
+
+    def test_a_track_cover_is_stored_as_its_album_and_survives_a_cache_wipe(self):
+        """A track id (several Subsonic clients ask with those) resolves to its
+        album's sleeve, and the file is the same one the album writes — one copy
+        per sleeve, kept with the sounds."""
+        from neezer.deezer import ids
+
+        self._login()
+        t = self._make_deezer_track(sng_id="1", archived=False)
+        calls = []
+
+        def fake_fetch_cover(md5, size=1000):
+            calls.append(md5)
+            return b"ALBUMJPEG"
+
+        self.app.deezer.fetch_cover = fake_fetch_cover
+        rv = self.client.get("/api/cover/1")
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_data(), b"ALBUMJPEG")
+        self.assertEqual(calls, ["md5c"])  # the track's ALB_PICTURE
+
+        stored = os.path.join(
+            self.archive, "Covers", "album", f"{ids.album_uuid('600')}.jpg"
+        )
+        with open(stored, "rb") as fh:
+            self.assertEqual(fh.read(), b"ALBUMJPEG")
+
+        self._wipe_the_cache()
+        self.app.deezer.fetch_cover = mock.Mock(
+            side_effect=AssertionError("Deezer was called")
+        )
+        rv = self.client.get("/api/cover/1")
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_data(), b"ALBUMJPEG")
+        # ... and the album's own endpoint reads the same file.
+        rv = self.client.get("/api/cover/" + str(t.album_id))
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_data(), b"ALBUMJPEG")
+
+    def test_a_stored_cover_is_served_with_deezer_switched_off(self):
+        """Deezer optional to the app running: art this server holds is served
+        at full speed with no provider at all — a disabled proxy or an outage
+        is never a reason to blank a sleeve that is on our disk."""
+        from neezer.deezer import coverstore, ids
+
+        self._login()
+        self._make_deezer_track(sng_id="1", archived=False)
+        artist = ids.artist_uuid("500")
+        self.assertTrue(coverstore.save_cover(self.archive, "artist", artist, b"ARTISTJPEG"))
+
+        with mock.patch.object(_webui, "_provider", lambda: None):
+            rv = self.client.get("/api/cover/" + str(artist))
+            self.assertEqual(rv.status_code, 200)
+            self.assertEqual(rv.get_data(), b"ARTISTJPEG")
+
+    def test_the_cover_store_status_is_admin_only(self):
+        """The background pass says what it did and why anything failed (rule
+        2): the admin route answers it, and nobody else can even ask."""
+        self._login_guest()
+        self.assertEqual(self.client.get("/api/archive/covers").status_code, 403)
+        self.assertEqual(
+            self.client.post("/api/archive/covers", json={}).status_code, 403
+        )
+
+        self.client.post("/api/login", json={"username": "alice", "password": "Alic3"})
+        rv = self.client.get("/api/archive/covers")
+        self.assertEqual(rv.status_code, 200)
+        data = rv.get_json()
+        self.assertIn("store", data)
+        self.assertIn("counts", data)
+        self.assertIn("failure_reasons", data)
+        self.assertEqual(data["store"], {"files": 0, "bytes": 0})
+
     def test_stream_local_track_by_uuid(self):
         self._login()
         t = self._make_local_track()

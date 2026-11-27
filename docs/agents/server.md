@@ -625,22 +625,41 @@ user's own requests for thirty seconds behind work they never asked for:
   flight and the covers scrolled to waited minutes on a phone's link. The hi-res copy is now asked
   only once the base art is drawn, and only where the tile is drawn larger than 500 device pixels.
   Art that costs no request (above the fold, or already on the device) never queues.
-- **The artwork that is ours is served by our server, and fetched once**
-  (`webui.cover_response`, `deezer.archive.deezer_cover_path`). Order, and each step is a rule:
-  the archived `cover.jpg` → the image embedded in an archived track → **the bytes already in the
-  disk cache** (`<id>-deezer-cover`) → for a Deezer album whose row names a hash, the **302 to the
-  image CDN** (that answer costs Deezer NO call, which is what keeps a sleeve painting with Deezer
-  switched off or down — `tests/test_detach_e.py` pins it) → and only for a row with no art address
-  at all, a provider fetch, which also writes the hash back.
+- **The artwork that is ours is served by our server, kept with the sounds, and fetched once**
+  (`webui.cover_response`, `deezer.archive.deezer_cover_path`, `deezer/coverstore.py`). Order, and
+  each step is a rule: the archived `cover.jpg` → **the archive store**
+  (`<archive_dir>/Covers/<album|artist|playlist|show|track>/<uuid5>.jpg`) → the image embedded in an
+  archived track → the legacy cache entry (`<id>-deezer-cover`, promoted into the store on the way
+  out) → for a Deezer album whose row names a hash, the **302 to the image CDN** (that answer costs
+  Deezer NO call, which is what keeps a sleeve painting with Deezer switched off or down —
+  `tests/test_detach_e.py` pins it) → and only for a row with no art address at all, a provider
+  fetch, which is **stored** before it is returned (cache fallback if the store is unwritable) and
+  writes the hash back. The store has the same root as the audio, so a cache prune or a container
+  restart costs one `stat`, not a provider call: `test_a_fetched_cover_survives_a_cache_wipe_with_zero_provider_calls`
+  — 1 provider call for the first paint, **0 after the wipe**. A track id resolves to its album,
+  and an episode to its own show key: one file per sleeve, keyed by this server's deterministic
+  uuid5, never by a client id or path.
+  The store needs **no schema change** (the ids already exist). An upgraded server fills it from the
+  background (`coverstore.autostart`, ~45 s after boot, `libjob.LibraryJob` checkpoint so a restart
+  resumes): it copies the `*-deezer-cover` cache entries, then writes the `cover.jpg` of archived
+  albums from the picture embedded in their FLAC — which also removes the per-request extraction.
+  Progress and per-cause failures: `GET /api/archive/covers` (admin), `POST` to force a pass. Only
+  `deezer/cleanup.py` ever frees space, and it only touches audio: nothing deletes a stored cover,
+  and never an upload.
   Two defects made « beaucoup de pochettes ne chargent plus » in BOTH clients: the fetched bytes
   were written to the cache with **no reader**, so every paint of a shelf of artist/playlist sleeves
   fetched it from Deezer AGAIN — through the shared, priority-throttled limiter a cover must never
   wait on — and the album path never consulted that cache, so art the server already held was still
   handed to the device as a third-party address. Measured: `test_an_artist_cover_is_fetched_once_then_served_from_our_disk`
-  — 3 requests, **1 provider call** (3 before); `test_a_cover_we_already_fetched_is_served_from_our_disk`
-  — **200 + the bytes, 0 provider calls** (a 302 before); an album row with no `cover_md5` asks the
-  provider once and writes the hash, so a sleeve that 404'd for the life of the row loads again
+  — 3 requests, **1 provider call** (3 before); an album row with no `cover_md5` asks the provider
+  once and writes the hash, so a sleeve that 404'd for the life of the row loads again
   (`test_an_album_that_lost_its_art_hash_finds_its_cover_again`).
+  What the established servers do: Navidrome resolves local art first
+  (`CoverArtPriority = "cover.*, folder.*, front.*, embedded, external"`) and precaches it; Lidarr
+  keeps `MediaCover/Albums/<id>/cover.jpg` per entity and re-checks the remote before downloading
+  (reusing `MediaCoverService.cs`); Jellyfin keeps images in the server's data directory. This
+  server follows the owner's rule — the same store as the audio — with the same idea: the entity's
+  own id names the file, the disk is served before the network.
 
 Worker recycling (`GUNICORN_MAX_REQUESTS`) is **off by default**: the hours-long library jobs run on
 threads inside the worker, and recycling killed them mid-run.

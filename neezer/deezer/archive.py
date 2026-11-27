@@ -25,7 +25,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from ..cache import CacheMiss
-from ..db import Album, Artist, Playlist, Track, PodcastChannel, PodcastEpisode
+from ..db import Album, Track, PodcastChannel, PodcastEpisode
 from ..db import db as _database
 from . import ids, library
 from .metadata import meta_from_gw, tag_file
@@ -865,79 +865,63 @@ def cover_md5(album, provider):
     return found
 
 
-def deezer_cover_path(provider, cache, eid: str):
-    """Return a cached cover path fetched from Deezer for a Deezer id, or None.
+def deezer_cover_path(provider, cache, eid: str, archive_dir: str | None = None):
+    """The cover path for a Deezer entity id: the archive store, else fetch once.
 
     Resolves the id to an Album/Track (cover via md5 CDN), or an Artist/Playlist
-    (image via Deezer's public image endpoint). Ids are type-namespaced uuid5,
-    so only one lookup matches.
+    /Show (image via Deezer's public image endpoint). Ids are type-namespaced
+    uuid5, so only one lookup matches; a numeric track id resolves to its album.
+
+    What this server already holds is read from the ARCHIVE, not from the cache:
+    a prune or a restart must not cost the sleeve its bytes. The order is a rule:
+    the archived ``cover.jpg`` (album, show) → the store (``Covers/<kind>/``) →
+    the legacy cache entry, promoted into the store on the way out → and only
+    then the provider, whose answer is stored before it is returned.
+    ``provider`` may be None (Deezer switched off): art already on disk is still
+    served, at full speed — an outage or a disabled proxy is never a reason to
+    blank a sleeve the server holds. ``archive_dir`` lets the caller name the
+    store when there is no provider object to ask.
     """
-    import uuid
+    from . import coverstore
 
-    try:
-        key = uuid.UUID(str(eid))
-    except ValueError:
+    found = coverstore.target(eid)
+    if found is None:
         return None
+    kind, key, row = found
+    archive_dir = archive_dir or getattr(provider, "archive_dir", None)
 
-    # What this server already fetched is OURS: read it before asking anyone.
-    # The write below had no reader, so every paint of a screenful of artist or
-    # playlist sleeves fetched them from Deezer again — through the shared,
-    # priority-throttled limiter, which is exactly what a cover must never wait
-    # on while a person is looking at it.
+    if kind == "album":
+        # Prefer the archived cover.jpg sidecar (served straight from disk, no
+        # Deezer call) and only fall back to the store, then to Deezer.
+        local = library.album_cover_file(row)
+        if local:
+            return local
+    elif kind == "show":
+        # Archived art first: a show Deezer has dropped keeps its face, exactly
+        # like an album keeps its cover.jpg.
+        channel = getattr(row, "channel", row)
+        local = library.show_cover_file(archive_dir, channel)
+        if local:
+            return local
+
+    stored = coverstore.local_cover(archive_dir, kind, key)
+    if stored:
+        return stored
+
+    # Entries written before the store existed. Promoting on the way out means
+    # an upgraded server fills the store as its shelves are painted, without
+    # waiting for the background pass — and without a provider call.
     cached = f"{eid}-deezer-cover"
     try:
         if cache.has(cached):
-            return cache.get(cached)
+            promoted = coverstore.save_cover(archive_dir, kind, key, cache.get_value(cached))
+            return promoted or cache.get(cached)
     except CacheMiss:  # pruned between the two calls: fetch it again
         pass
 
-    data = None
-    try:
-        alb = Album[key]
-        # Prefer the archived cover.jpg sidecar (served straight from disk, no
-        # Deezer call) and only fall back to fetching from Deezer if absent.
-        local = library.album_cover_file(alb)
-        if local:
-            return local
-        md5 = cover_md5(alb, provider)
-        data = provider.fetch_cover(md5) if md5 else None
-    except Album.DoesNotExist:
-        try:
-            data = provider.fetch_image("artist", Artist[key].deezer_id)
-        except Artist.DoesNotExist:
-            try:
-                data = provider.fetch_image("playlist", Playlist[key].deezer_id)
-            except Playlist.DoesNotExist:
-                try:
-                    tr = Track[key]
-                    md5 = cover_md5(tr.album, provider) if tr.album else None
-                    data = provider.fetch_cover(md5) if md5 else None
-                except Track.DoesNotExist:
-                    try:
-                        ch = PodcastChannel[key]
-                        # Archived art first: a show Deezer has dropped keeps its
-                        # face, exactly like an album keeps its cover.jpg.
-                        local = library.show_cover_file(provider.archive_dir, ch)
-                        if local:
-                            return local
-                        data = (
-                            provider.fetch_cover(ch.cover_art_md5)
-                            if ch.cover_art_md5
-                            else None
-                        )
-                    except PodcastChannel.DoesNotExist:
-                        try:
-                            ep = PodcastEpisode[key]
-                            local = library.show_cover_file(
-                                provider.archive_dir, ep.channel
-                            )
-                            if local:
-                                return local
-                            md5 = ep.image_md5 or ep.channel.cover_art_md5
-                            data = provider.fetch_cover(md5) if md5 else None
-                        except PodcastEpisode.DoesNotExist:
-                            return None
-
+    if provider is None:  # nothing stored, nothing cached, nobody to ask
+        return None
+    data = coverstore.fetch_for(provider, kind, row, eid)
     if not data:
         return None
-    return cache.set(f"{eid}-deezer-cover", data)
+    return coverstore.save_cover(archive_dir, kind, key, data) or cache.set(cached, data)
