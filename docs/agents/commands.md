@@ -119,6 +119,10 @@ cd webapp && node test/repeat/run.mjs               # repeat one / all on a 4 s 
 cd webapp && node test/prefetch/run.mjs             # the next track's preload on a 16 and a 64 KB/s link (CDP): the whole-file preload never
                                                      # costs the playing track (≤ 1.10×), the HEAD case taps when the head has landed and measures
                                                      # tap → sound, the hole at the hand-over and the stream requests; HEAD=1 runs the head case alone
+cd webapp && node test/prefetch/run.mjs --depth 2   # ...at depth 2 (`cache.prefetchCount`, default 1) and with a third tap 8 s after the hot one:
+                                                     # what a deeper preload buys on the track after next, and what it costs in link; `--head 0`
+                                                     # aborts every /head request, the control that says what the head itself buys
+                                                     # (`--depth 1` and `--depth 2`, KBPS=16 then KBPS=0, are lot 6's measured table)
 cd webapp && node test/skip/run.mjs                 # a crossfaded skip in a HIDDEN page whose timers are throttled (the phone behind a car
                                                      # radio): the next track must be heard at once, graph and direct paths
 cd webapp && node test/offline/run.mjs              # downloads kept by the Android app: an old Blob moved in byte for byte, played off

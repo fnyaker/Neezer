@@ -3,6 +3,8 @@
 // take anything from the track being played?
 //
 //   npm run build && node test/prefetch/run.mjs          (KBPS=16 by default)
+//   node test/prefetch/run.mjs --depth 2                 (the preload's depth, 1..10)
+//   node test/prefetch/run.mjs --head 0                  (the lot-6 control: no head)
 //
 // The real SPA against the real server (tools/perf_api.py --serve, six archived
 // 40 s tracks), behind a CDP link of 16 KB/s and of 64 KB/s (latency 150 ms).
@@ -46,6 +48,30 @@
 // (c) when the blob is complete at the tap, the tap must cost no stream
 // request. An incomplete blob at 16 KB/s is acceptable and reported, not a
 // failure.
+//
+// Lot 6 added `--depth` (the setting), a third tap 8 s after the hot one (the
+// only tap a deeper preload could ever change) and `--head 0` (every /head
+// aborted: the control that says what the six seconds buy). Measured on
+// 2026-11-27, median of 3, `PREFETCH=on`:
+//
+//   link      depth  cold 1 s   hot 14 s        preloaded  3rd tap +8 s
+//   LAN       1      0.3 s      0.3 s  0 req    360 KB     0.3 s
+//   LAN       2      0.3 s      0.3 s  0 req    673 KB     0.3 s
+//   16 KB/s   1     21.0 s     26.9 s  1 req     23 KB    23.1 s
+//   16 KB/s   2     20.7 s     26.7 s  1 req     22 KB    19.4 s
+//   64 KB/s   1      3.9 s      0.3 s  0 req    360 KB     0.2 s (head)
+//   64 KB/s   2      3.9 s      0.3 s  0 req    509 KB     0.3 s (blob)
+//
+//   link     head at tap              tap -> sound   hand-over hole   source
+//   LAN      yes after 2.8 s          0.3 s           0 ms             whole blob
+//   LAN      no (control at 3.1 s)    0.3 s           -                stream
+//   16 KB/s  yes after 33.3 s         0.2 s          20 ms             head -> ?start=
+//   16 KB/s  no (control at 33.6 s)   4.5 s           -                stream
+//
+// Depth 2 never won a tap — at LAN the re-armed window's head already answers
+// the third tap, at 64 KB/s that head is faster than a blob — and cost 313 KB
+// more on LAN. Lot 6 keeps depth 1 and the 6 s head (47 KB).
+
 import { mkdtempSync, writeFileSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -120,6 +146,26 @@ const RATES = process.env.KBPS
 const RUNS = +process.env.RUNS || 3;
 const COLD_AFTER_MS = 1000; // the spec's cold tap
 const HOT_AFTER_MS = +process.env.HOT_AFTER_MS || 14000; // ...and its hot one
+// --- how deep the preload looks, and whether the head exists at all ----------
+//
+// `--depth 1|2` is the SETTING under test (`cache.prefetchCount`): the preload
+// holds the head + whole file of the next track, then the whole file of the one
+// after it, nearest first, one read at a time. `--head 0` answers every
+// `/api/stream/<id>/head` with an abort, which is the honest control for "what
+// does the head buy": the full preload still runs, so the only difference is the
+// six seconds that a tap can start from. `--second 1` adds a THIRD tap, 8 s
+// after the hot one lands, which is what depth 2 could ever change (the track
+// after next); it is on by default when `--depth` is given, because that is the
+// measurement that decides the depth.
+const cli = (name, fallback) => {
+  const at = process.argv.indexOf("--" + name);
+  if (at < 0) return fallback;
+  const value = process.argv[at + 1];
+  return value === undefined || value.startsWith("--") ? "1" : value;
+};
+const DEPTH = Math.min(10, Math.max(1, Number(cli("depth", 1)) || 1));
+const WITH_HEAD = cli("head", "1") !== "0";
+const SECOND_TAP = cli("second", process.argv.includes("--depth") ? "1" : "0") !== "0";
 const SLOW_RATES = ["16 KB/s", "64 KB/s"];
 const TAP_MS = 1500; // a request this soon after a tap belongs to the tap
 
@@ -139,7 +185,17 @@ const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gestur
  * track (hot), timing each to its first audible sample. Returns both timings,
  * the stream requests the tap caused, and the bytes the preload had read.
  */
-async function run({ kbps, prefetch, headCase = false, base: srv = base, trackBytes = TRACK_BYTES }) {
+async function run({
+  kbps,
+  prefetch,
+  depth = DEPTH,
+  head = WITH_HEAD,
+  headCase = false,
+  hotAfterMs = HOT_AFTER_MS,
+  secondTap = SECOND_TAP,
+  base: srv = base,
+  trackBytes = TRACK_BYTES,
+}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   await ctx.route(deezerHost, (r) => r.abort());
   await ctx.addInitScript(installSessionPrefix);
@@ -252,16 +308,20 @@ async function run({ kbps, prefetch, headCase = false, base: srv = base, trackBy
   await ctx.addInitScript(() => {
     const j = sessionStorage.getItem("__inject");
     if (!j) return;
-    const { session, prefetch, logs } = JSON.parse(j);
+    const { session, prefetch, depth, logs } = JSON.parse(j);
     if (logs) localStorage.setItem("debug.logs", "1");
     localStorage.setItem(window.__nsPkey("player.session"), JSON.stringify(session));
     localStorage.removeItem(window.__nsPkey("player.pos"));
     // Raw settings keys: `persisted()` is not per-account for these.
     localStorage.setItem("cache.prefetch", JSON.stringify(prefetch));
-    localStorage.setItem("cache.prefetchCount", "1");
+    localStorage.setItem("cache.prefetchCount", String(depth));
     localStorage.setItem("offline.quality", JSON.stringify("FLAC"));
     sessionStorage.removeItem("__inject");
   });
+  // The control for "what does the head buy": every head request aborted, so
+  // the full preload still runs exactly as it would but no tap can start from
+  // six finished seconds. Decided on the PATH, never the whole URL.
+  if (!head) await ctx.route((u) => /^\/api\/stream\/[^/]+\/head$/.test(u.pathname), (r) => r.abort());
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.log("pageerror:", e.message));
   await login(page, srv);
@@ -278,7 +338,7 @@ async function run({ kbps, prefetch, headCase = false, base: srv = base, trackBy
   };
   await page.evaluate(
     (j) => sessionStorage.setItem("__inject", j),
-    JSON.stringify({ session, prefetch, logs: !!process.env.DEBUG })
+    JSON.stringify({ session, prefetch, depth, logs: !!process.env.DEBUG })
   );
   await page.goto(`${srv}/app/`);
   await page.reload();
@@ -389,13 +449,15 @@ async function run({ kbps, prefetch, headCase = false, base: srv = base, trackBy
     headWaitMs = Date.now() - t;
     await page.waitForTimeout(+process.env.HEAD_TAP_AFTER_MS || 300);
   } else {
-    await page.waitForTimeout(HOT_AFTER_MS);
+    await page.waitForTimeout(hotAfterMs);
   }
   const reloads = (await page.evaluate(() => window.__reloads)) - reloadsBefore;
   const prefetchedBefore = streams.filter((s) => s.bg).reduce((n, s) => n + s.bytes, 0);
   const sizes = await page.evaluate(() => window.__cacheSizes()).catch(() => []);
   const complete = sizes.some((s) => !s.head && s.size >= trackBytes - 8);
   const headAtTap = sizes.some((s) => s.head && s.size > 8192);
+  const headBytes = Math.max(0, ...sizes.filter((s) => s.head).map((s) => s.size));
+  const blobs = sizes.filter((s) => !s.head && s.size >= trackBytes - 8).length;
   const hotTapAt = streams.length;
   const hotBefore = await srcs();
   marks.tap = Date.now();
@@ -428,6 +490,31 @@ async function run({ kbps, prefetch, headCase = false, base: srv = base, trackBy
   const hole = probe.hole;
   const longWait = probe.waits.filter((d) => d > 100).length;
   const onStream = probe.srcs.some((s) => /\/api\/stream\//.test(s.src) && /start=/.test(s.src));
+
+  // THE THIRD TAP: what a deeper preload could ever buy. The hot tap landed on
+  // TRACKS[2]; eight seconds later the person taps again, onto TRACKS[3]. Both
+  // depths have had the same re-armed window since the hot tap (PREFETCH_DELAY
+  // is 3 s), so the only difference left is what depth 2 laid down BEFORE the
+  // hot tap: the whole file of the track after next, fetched behind the next
+  // one's. `secondBlob` / `secondHead` say whether a tap on it could start from
+  // the device at all.
+  let second = -1;
+  let secondReqs = 0;
+  let secondTapMs = 0;
+  let secondBlob = false;
+  let secondHead = false;
+  if (secondTap) {
+    const sizesSecond = await page.evaluate(() => window.__cacheSizes()).catch(() => []);
+    secondBlob = sizesSecond.filter((s) => !s.head && s.size >= trackBytes - 8).length > blobs;
+    secondHead = sizesSecond.some((s) => s.head && s.size > 8192);
+    const secondAt = streams.length;
+    const secondBefore = await srcs();
+    const t2 = Date.now();
+    await page.locator("button.next").first().click();
+    second = await sound(TRACKS[3], secondBefore);
+    secondTapMs = Date.now() - t2;
+    secondReqs = streams.slice(secondAt).filter((s) => s.start <= t2 + TAP_MS).length;
+  }
 
   const trace = process.env.DEBUG
     ? await page.evaluate(() => window.__trace).catch(() => [])
@@ -475,11 +562,18 @@ async function run({ kbps, prefetch, headCase = false, base: srv = base, trackBy
     reloads,
     complete,
     headAtTap,
+    headBytes,
+    blobs,
     headUsed,
     headWaitMs,
     hole,
     longWait,
     onStream,
+    second,
+    secondReqs,
+    secondTapMs,
+    secondBlob,
+    secondHead,
   };
 }
 
@@ -503,17 +597,25 @@ for (const rate of HEAD_ONLY ? [] : RATES) {
       const r = await run({ kbps: rate.kbps, prefetch });
       runs.push(r);
       console.log(
-        `  ${rate.name} ${prefetch ? "prefetch ON " : "prefetch OFF"} #${i + 1}: ` +
+        `  ${rate.name} ${prefetch ? "prefetch ON " : "prefetch OFF"} depth ${DEPTH} #${i + 1}: ` +
           `cold ${secs(r.cold)} (${r.coldReqs} req, ${r.coldTapMs} ms), ` +
           `hot ${secs(r.hot)} (${r.hotReqs} req, ${(r.hotTapBytes / 1024).toFixed(0)} KB after the tap), ` +
           `preloaded ${(r.prefetched / 1024).toFixed(0)} KB, ${r.reloads} reload(s), ` +
-          `blob ${r.complete ? "complete" : "incomplete"}, ` +
-          `head ${r.headAtTap ? "yes" : "no"}, hole ${r.hole} ms`
+          `blob ${r.complete ? "complete" : "incomplete"} (${r.blobs} on the device), ` +
+          `head ${r.headAtTap ? `yes, ${(r.headBytes / 1024).toFixed(0)} KB` : "no"}, hole ${r.hole} ms` +
+          (SECOND_TAP
+            ? `, second tap ${secs(r.second)} (${r.secondReqs} req, ${r.secondTapMs} ms, ` +
+              `${r.secondBlob ? "blob on the device" : r.secondHead ? "head on the device" : "nothing on the device"})`
+            : "")
       );
     }
     table.push({
       rate,
       prefetch,
+      second: median(runs.map((r) => r.second)),
+      secondReqs: median(runs.map((r) => r.secondReqs)),
+      secondBlob: runs.filter((r) => r.secondBlob).length >= Math.ceil(RUNS / 2),
+      secondHead: runs.filter((r) => r.secondHead).length >= Math.ceil(RUNS / 2),
       cold: median(runs.map((r) => r.cold)),
       hot: median(runs.map((r) => r.hot)),
       coldReqs: median(runs.map((r) => r.coldReqs)),
@@ -532,7 +634,10 @@ for (const rate of HEAD_ONLY ? [] : RATES) {
 }
 
 if (!HEAD_ONLY) {
-console.log("\nrate       prefetch   cold (next at 1 s)      hot (next at 14 s)      preloaded  reloads  blob");
+console.log(
+  "\nrate       prefetch   cold (next at 1 s)      hot (next at 14 s)      preloaded  reloads  blob" +
+    (SECOND_TAP ? "        second tap (+8 s)   on the device" : "")
+);
 for (const row of table) {
   console.log(
     `${row.rate.name.padEnd(10)} ${(row.prefetch ? "ON" : "OFF").padEnd(9)} ` +
@@ -540,7 +645,11 @@ for (const row of table) {
       `${secs(row.hot).padStart(7)}  ${String(row.hotReqs).padStart(2)} req  ` +
       `${(row.hotTapBytes / 1024).toFixed(0).padStart(4)} KB   ` +
       `${(row.prefetched / 1024).toFixed(0).padStart(4)} KB  ` +
-      `${String(row.reloads).padStart(3)}     ${row.complete ? "complete" : "incomplete"}`
+      `${String(row.reloads).padStart(3)}     ${row.complete ? "complete" : "incomplete"}` +
+      (SECOND_TAP
+        ? `   ${secs(row.second).padStart(7)}  ${String(row.secondReqs).padStart(2)} req  ` +
+          `${row.secondBlob ? "blob" : row.secondHead ? "head" : "-"}`
+        : "")
   );
 }
 
@@ -603,12 +712,29 @@ if (lanOff) {
 // first six seconds, Opus 64, as one finished file. A tap then starts on those
 // bytes — 48 KB on real music — and the player opens the full stream on the idle
 // element at the point the head ends (`?start=`) and swaps before it runs out.
-// Only the prefetch ON case exists here: without it there is no head at all.
+//
+// Every rate is measured TWICE, at the SAME tap moment: once with the head, once
+// with every `/head` request aborted (the full preload still runs, so the only
+// difference is the six finished seconds a tap could start from). The control
+// taps at the moment the head had landed in the first run, which is what makes
+// the two columns comparable: what the head buys, not what waiting buys.
 const head = [];
 const HEAD_RATES = HEAD_ONLY ? RATES : RATES.filter((r) => r.kbps === 0 || r.kbps === 16);
 // Its own server, on the FLAC archive: the hand-over opens the full stream at
 // `?start=<head>`, and the server cuts a FLAC (a WAV answers 409).
 const headServer = HEAD_RATES.length ? await startServer(["--audio", audioPath]) : null;
+const summarise = (runs, extra) => ({
+  hot: median(runs.map((r) => r.hot)),
+  hotReqs: median(runs.map((r) => r.hotReqs)),
+  headAtTap: runs.filter((r) => r.headAtTap).length >= Math.ceil(RUNS / 2),
+  headWait: median(runs.map((r) => r.headWaitMs)),
+  headBytes: median(runs.map((r) => r.headBytes)),
+  headUsed: runs.filter((r) => r.headUsed).length >= Math.ceil(RUNS / 2),
+  hole: median(runs.map((r) => r.hole)),
+  longWait: median(runs.map((r) => r.longWait)),
+  onStream: runs.filter((r) => r.onStream).length >= Math.ceil(RUNS / 2),
+  ...extra,
+});
 try {
 for (const rate of HEAD_RATES) {
   const runs = [];
@@ -617,6 +743,8 @@ for (const rate of HEAD_RATES) {
       kbps: rate.kbps,
       prefetch: true,
       headCase: true,
+      head: true,
+      secondTap: false,
       base: headServer.base,
       trackBytes: FLAC_BYTES,
     });
@@ -624,39 +752,66 @@ for (const rate of HEAD_RATES) {
     console.log(
       `  ${rate.name} HEAD #${i + 1}: ` +
         `hot ${secs(r.hot)} (${r.hotReqs} req at the tap), ` +
-        `head ${r.headAtTap ? `on the device after ${(r.headWaitMs / 1000).toFixed(1)} s` : "NOT there"}` +
+        `head ${r.headAtTap ? `on the device after ${(r.headWaitMs / 1000).toFixed(1)} s, ${(r.headBytes / 1024).toFixed(0)} KB` : "NOT there"}` +
         `${r.headUsed ? ", used" : ""}, ` +
         `hole ${r.hole} ms, ${r.longWait} wait(s) > 100 ms, ` +
         `full stream ${r.onStream ? "adopted (?start=)" : "NOT adopted"}`
     );
   }
-  head.push({
-    rate,
-    hot: median(runs.map((r) => r.hot)),
-    hotReqs: median(runs.map((r) => r.hotReqs)),
-    headAtTap: runs.filter((r) => r.headAtTap).length >= Math.ceil(RUNS / 2),
-    headWait: median(runs.map((r) => r.headWaitMs)),
-    headUsed: runs.filter((r) => r.headUsed).length >= Math.ceil(RUNS / 2),
-    hole: median(runs.map((r) => r.hole)),
-    longWait: median(runs.map((r) => r.longWait)),
-    onStream: runs.filter((r) => r.onStream).length >= Math.ceil(RUNS / 2),
-  });
+  const withHead = summarise(runs, { rate, hasHead: true });
+  head.push(withHead);
+
+  // The control: same link, same preload, same tap moment — no head anywhere.
+  const tapAt = withHead.headWait + (+process.env.HEAD_TAP_AFTER_MS || 300);
+  const control = [];
+  for (let i = 0; i < RUNS; i++) {
+    const r = await run({
+      kbps: rate.kbps,
+      prefetch: true,
+      head: false,
+      headCase: false,
+      hotAfterMs: tapAt,
+      secondTap: false,
+      base: headServer.base,
+      trackBytes: FLAC_BYTES,
+    });
+    control.push(r);
+    console.log(
+      `  ${rate.name} NO HEAD #${i + 1} (tap at ${(tapAt / 1000).toFixed(1)} s): ` +
+        `hot ${secs(r.hot)} (${r.hotReqs} req at the tap), ` +
+        `head ${r.headAtTap ? "PRESENT (the control failed)" : "absent"}, ` +
+        `hole ${r.hole} ms, ${r.longWait} wait(s) > 100 ms`
+    );
+  }
+  head.push(
+    summarise(control, {
+      rate,
+      hasHead: false,
+      headAtTap: false,
+      headWait: tapAt,
+      headUsed: false,
+    })
+  );
 }
 } finally {
   if (headServer) await headServer.stop();
 }
 
 if (head.length) {
-  console.log("\nrate       head at tap          tap -> sound   hole   > 100 ms waits   source");
+  console.log("\nrate       head                tap -> sound   head bytes   hole   > 100 ms waits   source");
   for (const row of head) {
     console.log(
-      `${row.rate.name.padEnd(10)} ${(row.headAtTap ? `yes, ${(row.headWait / 1000).toFixed(1)} s` : "no").padEnd(19)} ` +
-        `${secs(row.hot).padStart(7)}  ${String(row.hotReqs).padStart(2)} req   ` +
+      `${row.rate.name.padEnd(10)} ` +
+        `${(row.hasHead ? `yes, ${(row.headWait / 1000).toFixed(1)} s` : `no (control at ${(row.headWait / 1000).toFixed(1)} s)`).padEnd(19)} ` +
+        `${secs(row.hot).padStart(7)}  ${String(row.hotReqs).padStart(2)} req  ` +
+        `${(row.headBytes ? (row.headBytes / 1024).toFixed(0) + " KB" : "-").padStart(6)}   ` +
         `${String(row.hole).padStart(4)} ms   ${String(row.longWait).padStart(3)}             ` +
-        `${row.headUsed ? (row.onStream ? "head -> ?start=" : "head, NOT handed over") : "whole blob"}`
+        `${row.headUsed ? (row.onStream ? "head -> ?start=" : "head, NOT handed over") : row.hasHead ? "whole blob" : "stream"}`
     );
   }
   for (const row of head) {
+    // The control is the number the head is compared against, not a promise.
+    if (!row.hasHead) continue;
     // The spec's own goal: the head makes a tap sound in 4 s or less at 16 KB/s.
     if (row.rate.kbps === 16) {
       check(

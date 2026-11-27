@@ -2442,6 +2442,16 @@ and `fmt --check` clean; `nz-audio`'s own suite plus its new `tests/readahead.rs
   `a_manual_next_plays_the_preloaded_voice_without_a_silent_gap` — `/api/stream/<suivant>` opened
   **once** for the preload and **not again** after the skip, no 5 ms all-zero window across the
   switch, and **0.000000** worst sample difference from the second file's own frames.
+- **One preloaded voice, and it costs 544 KiB.** `a_preloaded_voice_reads_its_cap_over_thirty_seconds_and_then_stops`
+  (`nz-core`, lot 6) reads the number where the engine spends it — the preloaded voice's own spool
+  file, i.e. the body it pulled off the network — over 30 s of the row playing: **556 950 B**, the
+  512 KiB a prefetch may spool (`engine.rs`, `cap.min(512 * 1024)`) plus 32 KiB of read overrun, out
+  of a 729 093 B 45 s track, and **not one byte more** five seconds later. So a preload never
+  downloads the track, but its cap is already **34 s of a whole 16 KB/s link** (8,5 s at 64 KB/s),
+  which is why it stays on the `Prefetch` lane that always yields to `User` (rule 1). A depth 2
+  would pay that twice (~1,1 MB) and the engine holds one slot (`preload_next`/`install_next`);
+  the web, measured at `--depth 1|2` on the same links, won no tap with two either
+  (`docs/agents/playback.md`). **Recommendation: keep one preloaded voice.**
 
 **Still owed to a later lot**: MB3a/MB3c consume `Player::take_sink()` for the device output;
 MB10 feeds `NowPlaying.liked` (the queue's own rows carry no like flag, so it is `false` until a
