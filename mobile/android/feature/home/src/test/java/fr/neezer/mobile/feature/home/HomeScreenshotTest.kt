@@ -115,20 +115,23 @@ class HomeGoldenTest {
 
     /**
      * S2 : la marge de page (20 dp) et le rythme des sections (32 dp), lus dans
-     * l'arbre de sémantique — la marge sur le héros, l'écart entre le héros et la
-     * première section qui le suit.
+     * l'arbre de sémantique — la marge sur le PREMIER bloc, l'écart entre deux
+     * blocs. JH2 a mis la barre du SPA au-dessus du héros : le premier bloc est
+     * la barre (`TopBar.svelte` above `HomeHero`), le héros la suit à 32 dp.
      */
     @Test
     fun thePageMarginsAndSectionRhythm() {
         render()
         rule.composeRule.waitForIdle()
+        val bar = rule.composeRule.onNodeWithTag(HOME_TOPBAR_SEARCH_TAG).getUnclippedBoundsInRoot()
         val hero = rule.composeRule.onNodeWithTag(HOME_HERO_TAG).getUnclippedBoundsInRoot()
         val resume = rule.composeRule.onNodeWithTag(HOME_RESUME_TAG).getUnclippedBoundsInRoot()
         println(
-            "MEASURE s2 accueil: hero.top=${hero.top.value}dp " +
+            "MEASURE s2 accueil: topbar.top=${bar.top.value}dp hero.top=${hero.top.value}dp " +
                 "hero.bottom=${hero.bottom.value}dp resume.top=${resume.top.value}dp",
         )
-        assertEquals("la marge haute de la page est celle du SPA (20 dp)", 20f, hero.top.value, 1f)
+        assertEquals("la marge haute de la page est celle du SPA (20 dp)", 20f, bar.top.value, 1f)
+        assertEquals("la barre et le héros sont à 32 dp", 32f, hero.top.value - bar.bottom.value, 1f)
         assertEquals("deux sections sont à 32 dp", 32f, resume.top.value - hero.bottom.value, 1f)
     }
 

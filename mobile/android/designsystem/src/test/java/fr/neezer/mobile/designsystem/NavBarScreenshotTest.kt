@@ -160,7 +160,7 @@ class NavBarGoldenTest {
  */
 private val TAB_ITEMS_FOR_TEST = listOf(
     NzTabItem(NzGlyph.Home, "Accueil"),
-    NzTabItem(NzGlyph.Compass, "Rechercher"),
+    NzTabItem(NzGlyph.Compass, "Explorer"),
     NzTabItem(NzGlyph.Library, "Biblio"),
     NzTabItem(NzGlyph.Mic, "Podcasts"),
     NzTabItem(NzGlyph.Settings, "Réglages"),

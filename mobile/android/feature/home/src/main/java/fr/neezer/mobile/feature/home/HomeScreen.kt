@@ -160,6 +160,12 @@ fun HomeScreen(
             ),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.xxl),
     ) {
+        // The SPA's `TopBar.svelte` above `HomeHero`: the search door and the
+        // one button that starts the Flow, in EVERY state — the bar belongs to
+        // the frame, not to the answer (`routes/Home.svelte` keeps it while the
+        // sections below change phase). It opens Explorer; it never types here.
+        HomeTopBar(actions)
+
         // The hero is drawn in EVERY state, like `Home.svelte` (HomeHero sits
         // above the sections, never inside them): the day's one decision is the
         // page, and a section that failed is a block below it, not a screen that
@@ -240,6 +246,68 @@ internal const val HOME_PHASE_READY = "pret"
 /** `Home.svelte#empty`/`#allFailed`, read from what the answer carries. */
 private fun HomeData.isHomeEmpty(): Boolean =
     releases?.tracks.isNullOrEmpty() && artists.isEmpty() && reco.isEmpty() && moods.isEmpty()
+
+// -- the bar above the page ---------------------------------------------------
+
+/**
+ * `webapp/src/components/TopBar.svelte` at the top of the home, with the two
+ * controls a phone keeps: the search door and « Lancer le Flow ».
+ *
+ * The field is a BUTTON, not an input (`TopBar.svelte`'s own comment): the real
+ * box lives on Explorer, where the results are, so a tap opens that screen
+ * instead of duplicating typing in a page that has nowhere to show it. The
+ * circle is the bar's Flow button, the one place it is reachable before the
+ * hero scrolls away.
+ *
+ * Both targets are at least [NzMinTouchTarget], carry their French sentence and
+ * a stable tag for the screenshots and the smoke.
+ */
+@Composable
+private fun HomeTopBar(actions: HomeActions) {
+    val colors = Sillon.colors
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val shape = RoundedCornerShape(NzRadius.pill)
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = 48.dp)
+                .clip(shape)
+                .background(colors.s1)
+                .border(1.dp, colors.ln, shape)
+                .clickable(role = Role.Button) { actions.openSearch() }
+                .padding(horizontal = NzSpacing.m)
+                .semantics { contentDescription = "Rechercher" }
+                .testTag(HOME_TOPBAR_SEARCH_TAG),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NzSpacing.s),
+        ) {
+            Icon(glyph = NzGlyph.Search, size = 16.dp, tint = colors.dim)
+            Text(
+                text = "Titres, artistes, albums, podcasts…",
+                style = Sillon.type.body,
+                color = colors.dim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(colors.tx)
+                .clickable(role = Role.Button) { actions.launchFlow() }
+                .semantics { contentDescription = "Lancer le Flow" }
+                .testTag(HOME_TOPBAR_FLOW_TAG),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(glyph = NzGlyph.Play, size = 18.dp, tint = colors.bg)
+        }
+    }
+}
 
 // -- the hero -----------------------------------------------------------------
 
@@ -533,8 +601,11 @@ private fun ResumePanel(data: HomeData, actions: HomeActions) {
 @Composable
 private fun StylePicker(state: HomeModel.State, actions: HomeActions) {
     val colors = Sillon.colors
-    val families = remember(state.styles) { styleFamilies(state.styles) }
-    if (families.isEmpty()) return
+    // The SPA's `visibleFamilies` (`StylePicker.svelte`): the answer's families,
+    // or the eleven fallback names when the tree holds no measured genre. The
+    // block is ALWAYS drawn — an empty `/flow/styles` (the bench, a young
+    // library) is what the fallback exists for, never a reason to hide it.
+    val names = remember(state.styles) { styleChoices(state.styles) }
     Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.s)) {
         Text("Par style", style = Sillon.type.title, color = colors.tx)
         Row(
@@ -547,13 +618,13 @@ private fun StylePicker(state: HomeModel.State, actions: HomeActions) {
                 glyph = if (state.chosen.isEmpty()) NzGlyph.Check else null,
                 onClick = { actions.clearStyles() },
             )
-            for (family in families) {
-                val on = state.chosen.contains(family.name)
+            for (name in names) {
+                val on = state.chosen.contains(name)
                 NzChip(
-                    text = family.name,
+                    text = name,
                     selected = on,
                     glyph = if (on) NzGlyph.Check else null,
-                    onClick = { actions.pickStyle(family.name) },
+                    onClick = { actions.pickStyle(name) },
                 )
             }
         }
@@ -1090,7 +1161,9 @@ private fun EnergyStepper(flow: FlowStateData, actions: HomeActions, modifier: M
 @Composable
 private fun FlowPickerBody(state: HomeModel.State, actions: HomeActions) {
     val colors = Sillon.colors
-    val families = remember(state.styles) { styleFamilies(state.styles) }
+    // Same rule as the home's chips (`FlowPicker.svelte` builds its own list from
+    // the same `styleFamilies`, with the same fallback).
+    val names = remember(state.styles) { styleChoices(state.styles) }
     Column(
         Modifier.fillMaxWidth().padding(NzSpacing.l),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
@@ -1103,15 +1176,15 @@ private fun FlowPickerBody(state: HomeModel.State, actions: HomeActions) {
             color = colors.dim,
         )
         Column(verticalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
-            families.chunked(2).forEach { line ->
+            names.chunked(2).forEach { line ->
                 Row(horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs)) {
-                    for (family in line) {
-                        val on = state.chosen.contains(family.name)
+                    for (name in line) {
+                        val on = state.chosen.contains(name)
                         NzChip(
-                            text = family.name,
+                            text = name,
                             selected = on,
                             glyph = if (on) NzGlyph.Check else null,
-                            onClick = { actions.pickStyle(family.name) },
+                            onClick = { actions.pickStyle(name) },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -1228,6 +1301,10 @@ const val HOME_MARKER = "Accueil Neezer"
  */
 internal const val HOME_HERO_TAG = "home-hero"
 internal const val HOME_RESUME_TAG = "home-resume"
+
+/** The bar above the page: its search door and its Flow button (JH2). */
+internal const val HOME_TOPBAR_SEARCH_TAG = "home-topbar-search"
+internal const val HOME_TOPBAR_FLOW_TAG = "home-topbar-flow"
 
 /** The first skeleton, for the phase test: it exists only in the "vide" phase. */
 internal const val HOME_SKELETON_TAG = "home-skeleton"

@@ -12,7 +12,7 @@ import org.junit.runners.JUnit4
 
 /**
  * The shell's own frames: what a tap on the tab bar costs to paint, five
- * iterations of a full walk over the four doors (Accueil → Rechercher →
+ * iterations of a full walk over the four doors (Accueil → Explorer →
  * Bibliothèque → Podcasts → back to Accueil).
  *
  * **Why this bench exists next to [ScrollBenchmark].** The first run of the

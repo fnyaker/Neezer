@@ -158,7 +158,7 @@ class ShellTabsTest {
         settle()
         assertEquals("60 % de la largeur ne pose pas la page 1", 1, pager!!.currentPage)
         assertEquals("l'onglet n'a pas été ouvert exactement une fois", listOf(Tab.Rechercher), opened)
-        rule.onNodeWithContentDescription("Rechercher").assertIsSelected()
+        rule.onNodeWithContentDescription("Explorer").assertIsSelected()
     }
 
     @Test
@@ -274,7 +274,7 @@ class ShellTabsTest {
         settle()
         assertEquals("le lancer doit poser la page 1", 1, pager!!.currentPage)
         assertEquals("l'onglet doit être ouvert exactement une fois", listOf(Tab.Rechercher), opened)
-        rule.onNodeWithContentDescription("Rechercher").assertIsSelected()
+        rule.onNodeWithContentDescription("Explorer").assertIsSelected()
     }
 
     /**
@@ -446,7 +446,7 @@ class ShellTabsTest {
         val row80 = hasText("ligne 80") and hasAnyAncestor(hasTestTag("page0"))
         rule.onNode(row80).assertIsDisplayed()
 
-        rule.onNodeWithContentDescription("Rechercher").performClick()
+        rule.onNodeWithContentDescription("Explorer").performClick()
         settle()
         assertEquals(1, pager!!.currentPage)
         rule.onNodeWithContentDescription("Accueil").performClick()

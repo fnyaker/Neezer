@@ -51,6 +51,19 @@ class HomeStylesTest {
         assertEquals("Style 40", styleFamilies(rows).first().name)
     }
 
+    /**
+     * JH2: an answer with no measured genre (the bench server's
+     * `{"styles": []}`) names the eleven `sillon.js#STYLE_FALLBACK` styles, as
+     * `StylePicker.svelte` does — never an empty list, which used to hide the
+     * whole block.
+     */
+    @Test
+    fun anEmptyTreeNamesTheSpasFallbackStyles() {
+        assertEquals(STYLE_FALLBACK, styleChoices(emptyList()))
+        assertEquals(11, STYLE_FALLBACK.size)
+        assertEquals("Techno", STYLE_FALLBACK.first())
+    }
+
     @Test
     fun aFamilysSubGenresAreTwoLevelsDeepAndNeverEmptyBranches() {
         val rows = listOf(

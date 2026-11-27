@@ -378,7 +378,7 @@ class Dump:
 
         Measured on the first real run (26/11, run 45895651634): a Compose tab
         is a clickable `View` with an empty `text`/`content-desc`, and its label
-        is a child `TextView` (« Rechercher »). With the name read only from the
+        is a child `TextView` (« Explorer »). With the name read only from the
         node itself, the four tabs shared ONE signature, three were dropped as
         duplicates, and the pass never left the home screen
         (`screens=1 elements=9 duplicates=20`). The name is the node's own text,
@@ -1359,7 +1359,7 @@ def is_settings(dump: Dump) -> bool:
 
 # The shell's own controls, never a setting: the four tabs, the mini-bar's door
 # and its play button. A scenario that taps one of them measures navigation.
-SHELL = ("Accueil", "Rechercher", "Biblio", "Podcasts", "Réglages",
+SHELL = ("Accueil", "Explorer", "Biblio", "Podcasts", "Réglages",
          "Ouvrir le lecteur plein écran", "Lecture")
 
 

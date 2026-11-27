@@ -193,7 +193,7 @@ never committed; Rust 1.99.1):
   defect was a door, « Réglages → Mode voiture », whose Activity died before its first frame on the
   release build (MB24) while every CI job stayed green because nothing OPENED it.
   `mobile/tools/release-journey.sh` follows the sign-in with the eight doors a person uses —
-  Accueil, Rechercher, Bibliothèque, Podcasts, Accueil, Réglages, Lecture & son, Mode voiture — each
+  Accueil, Explorer, Bibliothèque, Podcasts, Accueil, Réglages, Lecture & son, Mode voiture — each
   proved by the literal ONLY that screen draws (`Recherche Neezer`; `Qualité demandée au serveur`,
   which is `PlaybackSection`'s card and not the menu row that was just tapped; `Déclenchement`,
   which only `CarSettingsActivity` draws), by `pidof fr.neezer.mobile` after every step, and by an
@@ -500,15 +500,15 @@ the platform decoder.
 
 ### Navigation, screens and the UI
 
-- Single `MainActivity`, Navigation Compose with type-safe routes, a phone shell (**no top bar**;
-  a bottom bar of five items — Accueil / Rechercher / Biblio / Podcasts / Réglages — over which the
-  mini-player sits, the full-screen player as a sheet) and a tablet/landscape shell (rail + reading
-  columns, as `DesktopNowPlaying`). The four tab roots live in ONE `HorizontalPager`, mounted ONCE
-  for the app in `TabLayer` (`app/Shell.kt`) **under** the `NavHost` whose four tab routes draw
-  nothing: a tab is reachable by tap AND by a horizontal drag, and a tab that comes back is never
-  rebuilt (SB2 — its model, its scroll and its data survive, see the SB2 lot). A detail screen gets
-  a single 48 dp `DetailBackRow` instead of a banner. Back goes to the SCREEN, not the route
-  (webapp.md's rule).
+- Single `MainActivity`, Navigation Compose with type-safe routes, a phone shell (**no app-wide top
+  bar** — the home draws the SPA's `TopBar` itself, lot JH2; a bottom bar of five items — Accueil /
+  Explorer / Biblio / Podcasts / Réglages — over which the mini-player sits, the full-screen player
+  as a sheet) and a tablet/landscape shell (rail + reading columns, as `DesktopNowPlaying`). The four
+  tab roots live in ONE `HorizontalPager`, mounted ONCE for the app in `TabLayer` (`app/Shell.kt`)
+  **under** the `NavHost` whose four tab routes draw nothing: a tab is reachable by tap AND by a
+  horizontal drag, and a tab that comes back is never rebuilt (SB2 — its model, its scroll and its
+  data survive, see the SB2 lot). A detail screen gets a single 48 dp `DetailBackRow` instead of a
+  banner. Back goes to the SCREEN, not the route (webapp.md's rule).
 - MB0 wrote `app/.../NavGraph.kt` ONCE with every route of the inventory, each calling an entry
   composable that already exists as a stub in its feature module (`feature/<area>/.../<Area>Entry.kt`).
   **A feature lot fills its module and never edits `NavGraph.kt`**; the SHELL is the exception, and it
@@ -721,7 +721,7 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
   `duplicate` et la passe n'a jamais quitté l'accueil — `screens=1 elements=9 duplicates=20` au
   premier run réel (26/11, run 45895651634). Le nom est donc le texte propre, le `content-desc`
   propre, puis le texte du plus proche descendant, puis son `content-desc` : les onglets s'appellent
-  « Rechercher », « Biblio », « Réglages », le rapport est lisible, et `Réglages` redevient une porte
+  « Explorer », « Biblio », « Réglages », le rapport est lisible, et `Réglages` redevient une porte
   pour les scénarios. La règle du frère porte aussi le drapeau `checkable` dans la forme comparée,
   sinon le bouton principal de l'accueil (« Lancer le Flow ») disparaissait comme doublon des six
   cartes d'énergie qu'il ne remplace pas ;
@@ -8605,3 +8605,61 @@ et ses clés stables : <https://developer.android.com/develop/ui/compose/lists#i
 **Hors portée.** `Transition.kt` (le seam, X4), les `animateItem` des lignes (X5), les gestes
 (`SwipeRow` de G1, le réordonnancement), les feuilles (`NzSheet`), les autres écrans en `LazyColumn`
 (la bibliothèque, les fiches, l'historique : X4).
+
+### JH2 — L'accueil retrouve la barre du SPA, « Par style » et le mot « Explorer » (delivered 2026-11-27)
+
+**Le besoin.** Le juge visuel a posé l'accueil du téléphone à côté de
+`mobile/tools/judge/reference/01-accueil.png` et a vu trois écarts : pas de barre en haut, pas de
+« Par style », et l'onglet nommé « Rechercher » là où le SPA dit « Explorer ». Le besoin de la
+personne est celui de l'app web : le même cadre, le même vocabulaire, et ses chips de style même sur
+une bibliothèque que l'analyse n'a pas encore mesurée.
+
+**Ce qui a changé.**
+
+1. `HomeScreen.kt#HomeTopBar` — la barre de `TopBar.svelte`, premier bloc de l'accueil, **dans les
+   trois états** (squelettes, réponse, échec) comme le SPA la garde au-dessus des sections : une
+   pastille pleine largeur (48 dp, `s1`/`ln`, glyphe `Search` 16 dp, « Titres, artistes, albums,
+   podcasts… ») qui **ouvre Explorer** — le champ réel vit sur cet écran, la barre ne tape pas ici
+   (`TopBar.svelte` le dit) — et un cercle de 48 dp (`tx` sur `bg`) qui lance le Flow. Pas de champ
+   `HomeActions` ajouté : `openSearch` et `launchFlow` existaient. Tags `HOME_TOPBAR_SEARCH_TAG` /
+   `HOME_TOPBAR_FLOW_TAG`.
+2. **« Par style » : la cause mesurée n'était ni la requête ni la route.** Le banc de l'émulateur
+   (`release-signin.sh`) sème **200 titres sans analyse** (`--archived` absent) ; `GET
+   /api/flow/styles` répond donc `{"styles": []}` — vérifié sur le banc lui-même, ligne d'accès
+   `GET /api/flow/styles ... 200` et corps `{"styles":[]}`. Le SPA ne cache pas la section pour
+   autant : `StylePicker.svelte` retombe sur `sillon.js#STYLE_FALLBACK` (les onze noms que la
+   référence montre, « Techno / Hard dance / Hardcore / … »). Le port avait perdu cette règle et
+   sortait tôt sur la liste vide. `HomeStyles.kt#styleChoices` la rétablit (mêmes onze noms, mot pour
+   mot), pour les chips de l'accueil **et** la liste de genres du panneau du Flow. Rien n'est forcé :
+   une réponse vide est précisément ce à quoi le repli sert.
+3. `Shell.kt` — l'onglet `Rechercher` s'affiche « Explorer » (le mot de `MobileNav.svelte:48`) ; la
+   constante de l'enum garde son nom pour ne pas déplacer la route ni les tests. Suivent
+   `ShellTabsTest`, `NavBarGoldenTest` (7 goldens re-enregistrés), `BenchTarget.TAB_SEARCH`,
+   `ci-emulator.sh`, `release-journey.sh`, `bughunt/explore.py` (`SHELL`). Les captures
+   `02-rechercher.png` et le marqueur `Recherche Neezer` ne changent pas : c'est le nom de l'ÉCRAN.
+
+**Mesuré.**
+
+| Quoi | Avant | Après |
+|---|---|---|
+| `GET /api/flow/styles` sur le banc de l'émulateur | `{"styles": []}` | `{"styles": []}` (inchangé : la réponse n'était pas le défaut) |
+| Section « Par style » sur ce même banc | absente (`if (families.isEmpty()) return`) | dessinée, chips de repli « Tout / Techno / Hard dance / … » |
+| Requêtes d'un accueil froid / chaud | **7 / 0** (`home::lot_tests`, une des 7 est `/api/flow/styles`) | **7 / 0** — la barre n'ajoute aucune requête (elle ouvre l'écran, elle ne charge rien) |
+| Géométrie (Robolectric 360 dp) | héros `top = 20 dp` | barre `top = 20 dp`, héros `top = 100 dp` (48 dp de barre + 32 dp de rythme), `Reprendre` toujours 32 dp sous le héros |
+
+**Tests.** `HomeTopBarTest` (3, Robolectric) : la barre est là en chargement **et** en réponse, la
+pastille ouvre Explorer **une** fois et le cercle lance le Flow **une** fois, et l'accueil du banc
+(`styles = emptyList()`) dessine « Par style » avec les chips de repli ; `HomeStylesTest` gagne la
+règle du repli (11 noms). **Contre l'ancien code** : sans l'appel à `HomeTopBar`, les deux tests de
+barre échouent (nœud introuvable) ; avec l'ancien `return` sur liste vide, le test du banc échoue sur
+« Par style ». 13 goldens re-enregistrés (6 accueil + 7 barre d'onglets), relus.
+
+**Sources** (comportements que la personne n'a pas spécifiés) : `webapp/src/components/TopBar.svelte`
+(le champ-bouton, la barre collante, le bouton du Flow), `webapp/src/components/StylePicker.svelte`
+(`visibleFamilies` et son repli), `webapp/src/lib/sillon.js:141` (`STYLE_FALLBACK`, onze noms),
+`webapp/src/components/MobileNav.svelte:48` (« Explorer »). Cibles de 48 dp :
+<https://support.google.com/accessibility/android/answer/7101858>.
+
+**Hors portée.** `CarSettingsActivity.kt` et `PlayerSheet.kt` (lot JH1), le nombre d'items de la
+barre (Podcasts reste), l'i18n. Le S2 mesurait le héros comme premier bloc ; son assertion lit
+désormais la barre, le rythme de 32 dp entre les deux restant la règle.

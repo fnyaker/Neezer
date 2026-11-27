@@ -8,7 +8,7 @@
 # It signs in first (`release-signin.sh`: the platform trust store, then HTTPS,
 # then the home with real covers) and then walks the screens a person uses:
 #
-#   Accueil → Rechercher → Bibliothèque → Podcasts → Accueil
+#   Accueil → Explorer → Bibliothèque → Podcasts → Accueil
 #   → Réglages → Lecture & son → Mode voiture
 #
 # Eight doors. Each one is a tap plus the literal ONLY that screen draws, so a
@@ -190,8 +190,15 @@ prepare_device
 # reads (the home's cards: `Lire ${title}, ${artist}`; the mini bar:
 # `Ouvrir le lecteur plein écran`). The tap lands on the node's CENTRE: these
 # are full cards and bar buttons, not a row found at the bottom of a pane.
+#
+# `scroll` (third argument) lets the walk bring a control up from BELOW THE
+# FOLD. Needed since JH2: the home now carries the SPA's top bar and its
+# « Par style » chips above « Nouveautés », so the first playable card of the
+# bench sits under the mini-player and is not in the accessibility tree at all
+# (`ui_swipe_up`, at most six times, paced by the dumps — never a sleep). The
+# walk is bounded either way; without the flag it never moves the screen.
 tap_desc_prefix() {
-    local prefix="$1" budget="${2:-15}" started=$SECONDS line bounds x1 y1 x2 y2
+    local prefix="$1" budget="${2:-15}" move="${3:-}" started=$SECONDS line bounds x1 y1 x2 y2 swipes=0
     while (( SECONDS - started < budget )); do
         # `|| true`: no match is the normal first state, and a failed
         # substitution must not end the walk under `set -e` (the helper is
@@ -204,6 +211,10 @@ tap_desc_prefix() {
                 adb_dev shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2)) >/dev/null
                 return 0
             fi
+        fi
+        if [[ "$move" == "scroll" ]] && (( swipes < 6 )); then
+            ui_swipe_up
+            swipes=$((swipes + 1))
         fi
         # No `sleep`: `ui_text` is a `uiautomator dump`, which waits for idle
         # and takes the better part of a second — the loop is paced by the
@@ -225,7 +236,7 @@ player_evidence() {
 
     # From the home, the FIRST card that offers to play: a rule read from the
     # tree, never a coordinate.
-    if ! tap_desc_prefix "Lire " 20; then
+    if ! tap_desc_prefix "Lire " 20 scroll; then
         printf 'player=unavailable cause=no "Lire " card on the home\n'
         printf 'player=unavailable screen=%s\n' "$(screen_texts)"
         return 0
@@ -408,7 +419,7 @@ if [[ -n "$evidence" ]]; then
     fi
 fi
 
-open_door "Rechercher" "Rechercher" "Recherche Neezer"
+open_door "Explorer" "Explorer" "Recherche Neezer"
 shot 02-rechercher
 open_door "Bibliothèque" "Biblio" "Bibliothèque Neezer"
 shot 03-bibliotheque

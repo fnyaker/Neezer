@@ -355,7 +355,7 @@ fi
 # MB6 filled the search: its MB0 placeholder sentence is gone, and the screen's
 # own marker takes over (the same rule as the home below: a literal, in EVERY
 # state, independent of the query and of the clock).
-check_door "Rechercher" "Recherche Neezer"
+check_door "Explorer" "Recherche Neezer"
 # Bibliothèque draws a STABLE marker too (`LibraryScreen.kt`'s `LIBRARY_MARKER`,
 # « Bibliothèque Neezer », a contentDescription on its root): the MB0 stub's text
 # is gone now the lot paints the real screen, and the bottom bar's own item would

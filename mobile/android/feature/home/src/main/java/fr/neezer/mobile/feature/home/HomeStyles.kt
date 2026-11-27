@@ -26,6 +26,39 @@ fun styleFamilies(rows: List<FlowStyleData>): List<FlowStyleData> {
 }
 
 /**
+ * `sillon.js#STYLE_FALLBACK`, word for word: the eleven styles the SPA draws when
+ * the tree holds NO measured genre.
+ *
+ * That is the state of a young library and of the release bench (`/flow/styles`
+ * answers `{"styles": []}` because no title has been analysed yet), and the SPA
+ * still shows its chips there: `StylePicker.svelte`'s `visibleFamilies =
+ * families.length ? families : STYLE_FALLBACK.map(…)`. The port must do the same
+ * — an empty answer is not a reason to drop the block, it is the reason for the
+ * fallback — otherwise the home loses a section the reference shows (lot JH2,
+ * measured on the bench server: one `GET /api/flow/styles` → `{"styles": []}`).
+ *
+ * They are names only: no sub-genres, no counts, and picking one is a plain
+ * style choice the server resolves through the genre tree.
+ */
+val STYLE_FALLBACK: List<String> = listOf(
+    "Techno",
+    "Hard dance",
+    "Hardcore",
+    "Pop",
+    "Hip-hop",
+    "Rock",
+    "Dance/EDM",
+    "Drum & bass",
+    "Synthwave",
+    "Trance",
+    "Indie",
+)
+
+/** What the chips name: the families the answer holds, or [STYLE_FALLBACK]. */
+fun styleChoices(rows: List<FlowStyleData>): List<String> =
+    styleFamilies(rows).map { it.name }.ifEmpty { STYLE_FALLBACK }
+
+/**
  * The sub-genres a family opens, depth first and two levels deep, exactly as the
  * SPA's `flat(name)` walks the tree — a family's finer choice is what a second
  * tap shows.
