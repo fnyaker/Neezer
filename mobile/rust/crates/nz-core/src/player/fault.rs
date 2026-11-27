@@ -236,8 +236,9 @@ mod tests {
         assert!(!Faults::retryable(None));
         assert_eq!(
             Faults::cause_text(Some(&not_found())),
-            "introuvable (404)",
-            "a cause the person can read, never a code"
+            "titre introuvable sur le serveur",
+            "a cause the person can read, never a code — and never the server's \
+             own English body (nz-audio's `SourceError` Display)"
         );
     }
 }

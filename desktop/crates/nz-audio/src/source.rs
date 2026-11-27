@@ -139,7 +139,9 @@ pub enum SourceError {
     /// `503` + `Retry-After: 30` for a prefetch whose track is not archived yet:
     /// means "try later", not "failed".
     NotReady { retry_after: u32 },
-    /// `X-NS-Error` or any other classified refusal.
+    /// `X-NS-Error` or any other classified refusal. `message` is the server's
+    /// own body — English JSON for the log and `Debug`, never for the person:
+    /// the [`Display`](std::fmt::Display) sentence is chosen by `status` alone.
     Provider { status: u16, message: String },
     /// Anything else, already worded for the person.
     Message(String),
@@ -152,7 +154,18 @@ impl std::fmt::Display for SourceError {
             SourceError::NotReady { retry_after } => {
                 write!(f, "pas encore archivé (réessayer dans {retry_after} s)")
             }
-            SourceError::Provider { status, message } => write!(f, "{message} ({status})"),
+            // The body is the server's English JSON ("Deezer proxy disabled"):
+            // the person reads a French sentence chosen by the status, and
+            // never the status itself (the player's header shows this line,
+            // `docs/agents/mobile.md`, *Le juge*).
+            SourceError::Provider { status, .. } => f.write_str(match *status {
+                401 | 403 => "accès refusé par le serveur",
+                404 | 410 => "titre introuvable sur le serveur",
+                503 => "service indisponible sur le serveur",
+                500..=599 => "erreur du serveur",
+                400..=499 => "titre refusé par le serveur",
+                _ => "réponse inattendue du serveur",
+            }),
             SourceError::Message(message) => f.write_str(message),
         }
     }
@@ -1150,5 +1163,44 @@ mod tests {
         };
         assert_eq!(idle.retry_delay(), Duration::from_millis(1_000));
         assert_eq!(writing.retry_delay(), Duration::from_millis(1_500));
+    }
+
+    /// **The server's body is never shown to a person** (C5 of the judge: no
+    /// English sentence on a French screen). `Provider` keeps `message` for the
+    /// log and `Debug`, and the sentence the player's header prints is chosen by
+    /// the status alone — one row of `Display`'s match per case.
+    ///
+    /// Measured before the fix: `08-lecteur.xml` of the release journey showed
+    /// `Deezer proxy disabled (503)` as the player's status line; after it, the
+    /// same tree shows `service indisponible sur le serveur`.
+    #[test]
+    fn a_provider_refusal_is_a_french_sentence_and_never_the_servers_text() {
+        let sentence = |status: u16| {
+            SourceError::Provider {
+                status,
+                message: "Deezer proxy disabled".into(),
+            }
+            .to_string()
+        };
+        assert_eq!(sentence(401), "accès refusé par le serveur");
+        assert_eq!(sentence(403), "accès refusé par le serveur");
+        assert_eq!(sentence(404), "titre introuvable sur le serveur");
+        assert_eq!(sentence(410), "titre introuvable sur le serveur");
+        assert_eq!(sentence(503), "service indisponible sur le serveur");
+        assert_eq!(sentence(500), "erreur du serveur");
+        assert_eq!(sentence(599), "erreur du serveur");
+        assert_eq!(sentence(400), "titre refusé par le serveur");
+        assert_eq!(sentence(429), "titre refusé par le serveur");
+        assert_eq!(sentence(0), "réponse inattendue du serveur");
+        assert_eq!(sentence(302), "réponse inattendue du serveur");
+        let shown = sentence(503);
+        assert!(
+            !shown.contains("Deezer proxy disabled"),
+            "the server's own text reached the header: {shown}"
+        );
+        assert!(
+            !shown.contains("503"),
+            "the bare status reached the header: {shown}"
+        );
     }
 }

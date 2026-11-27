@@ -886,6 +886,14 @@ fait échouer le `Judge gate` d'une PR qui ne touche même pas le lecteur. Le co
 atterrir sur la PREMIÈRE PR jugée, et les PR `ui` suivantes se rebasent après son merge (mesuré sur
 #447 et #458, 2026-11-27).
 
+**Le corps du serveur ne s'affiche jamais.** La ligne d'état du lecteur porte la cause d'un échec :
+`nz-audio`'s `SourceError::Provider` garde le corps anglais du serveur pour le journal et `Debug`,
+et son `Display` nomme la cause en français à partir du seul statut
+(`desktop/crates/nz-audio/src/source.rs`, règle aussi écrite dans `docs/agents/desktop.md`,
+*Network errors*). Mesuré : `08-lecteur.xml` affichait `Deezer proxy disabled (503)` (run
+45953439457, tête a176c2ed) ; la liste `banned` de `precheck.py` porte désormais `proxy disabled`,
+donc son retour est un `FAIL`.
+
 ### Measures (every lot that touches what they measure writes them in its PR)
 
 | Measure | How | Measured (emulator-5660, API 35 x86_64, KVM, swiftshader, `-no-audio`, 2026-11-24; the MQ2 follow-up rows below were re-run on **emulator-5640**, same image; no real phone was attached — `adb devices` empty — so no real-phone column exists yet) |
