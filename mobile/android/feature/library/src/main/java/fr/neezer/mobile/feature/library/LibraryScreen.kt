@@ -145,10 +145,17 @@ fun LibraryScreen(
     var sectionMenu by remember { mutableStateOf<SectionView?>(null) }
     var addMenu by remember { mutableStateOf(false) }
     var newPlaylistSheet by remember { mutableStateOf(false) }
+    var sortSheet by remember { mutableStateOf(false) }
     val openSectionMenu: (SectionView) -> Unit = { sectionMenu = it }
 
     // A leaf is a new pane: land at its top, as the SPA's panel does.
     LaunchedEffect(state.leaf) { listState.scrollToItem(0) }
+
+    // Un nouvel ordre est un nouveau haut de liste : on ne laisse pas la personne
+    // au milieu d'une liste qui vient de changer sous ses yeux (Apple/Spotify).
+    LaunchedEffect(state.favoriteSort, state.favoriteDescending) {
+        if (state.leaf == LibraryLeaf.Favorites) listState.scrollToItem(0)
+    }
 
     val favoritesRows = state.favoriteRows
     val favoritesWindow = if (favoritesRows != null) windowFor(favoritesRows) else null
@@ -199,7 +206,9 @@ fun LibraryScreen(
                     )
                 }
                 item(key = "leaves") { LeafBar(state, actions.selectLeaf) }
-                item(key = "tools") { LeafTools(state, actions) }
+                item(key = "tools") {
+                    LeafTools(state, actions, openSort = { sortSheet = true })
+                }
                 when (state.leaf) {
                     LibraryLeaf.History -> item(key = "history") { actions.historyBody() }
                     else -> leaf(state, actions, columns, playingKey, listWindow, openSectionMenu, pane, specs)
@@ -238,6 +247,15 @@ fun LibraryScreen(
                 NewPlaylistSheet(
                     onDismiss = { newPlaylistSheet = false },
                     onCreate = { name -> newPlaylistSheet = false; actions.newPlaylist(name) },
+                )
+            }
+            if (sortSheet) {
+                SortSheet(
+                    sort = state.favoriteSort,
+                    descending = state.favoriteDescending,
+                    onPick = { sort -> actions.sortFavorites(sort); sortSheet = false },
+                    onReverse = actions.reverseFavorites,
+                    onDismiss = { sortSheet = false },
                 )
             }
         }
@@ -387,7 +405,11 @@ private fun LeafBar(state: LibraryModel.State, onPick: (LibraryLeaf) -> Unit) {
 
 /** The toolbar of the leaf on screen: its tools, and its stale note. */
 @Composable
-private fun LeafTools(state: LibraryModel.State, actions: LibraryActions) {
+private fun LeafTools(
+    state: LibraryModel.State,
+    actions: LibraryActions,
+    openSort: () -> Unit,
+) {
     val colors = Sillon.colors
     Column(
         modifier = Modifier
@@ -417,24 +439,11 @@ private fun LeafTools(state: LibraryModel.State, actions: LibraryActions) {
                     placeholder = "Rechercher dans cette liste…",
                     label = "Filtrer dans cette liste",
                 )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
-                ) {
-                    FavoriteSort.entries.forEach { sort ->
-                        NzChip(
-                            text = sort.label,
-                            selected = state.favoriteSort == sort,
-                            onClick = { actions.sortFavorites(sort) },
-                        )
-                    }
-                    NzChip(
-                        text = if (state.favoriteDescending) "Décroissant" else "Croissant",
-                        glyph = NzGlyph.Sort,
-                        selected = state.favoriteDescending,
-                        onClick = actions.reverseFavorites,
-                    )
-                }
+                SortDoor(
+                    sort = state.favoriteSort,
+                    descending = state.favoriteDescending,
+                    onClick = openSort,
+                )
             }
             LibraryLeaf.Artists -> {
                 NzSearchField(
@@ -1303,7 +1312,7 @@ private fun NewPlaylistSheet(
 
 /** A sheet's shell: `NzSheet` over the page, with its title and content. */
 @Composable
-private fun LibraryOverlay(
+internal fun LibraryOverlay(
     title: String,
     onDismiss: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,

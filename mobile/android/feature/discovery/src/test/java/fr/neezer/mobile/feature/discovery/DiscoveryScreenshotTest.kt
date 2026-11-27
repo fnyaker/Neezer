@@ -31,6 +31,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import uniffi.nz_ffi.ExplorerStylesData
 
 /**
  * Découverte, rendered and VERIFIED: the releases page with one group open at
@@ -182,5 +183,69 @@ class DiscoveryGoldenTest {
         rule.composeRule.waitForIdle()
         rule.composeRule.onNodeWithTag(EXPLORER_LOADING_TAG).assertDoesNotExist()
         rule.composeRule.onNodeWithText("Techno").assertExists()
+    }
+
+    /**
+     * No help line (owner, 2026-11-27, C5): an empty shelf says its STATE and
+     * nothing else. It said « Aucun style analysé pour l'instant : « Toutes les
+     * stations » en propose un. » — a hint under a title, the line the juge
+     * blocked #447 on (`02-rechercher`, run 46062575978) — while the
+     * « Toutes les stations » action is right above it.
+     */
+    @Test
+    fun theStylesEmptyShelfStatesItselfWithNoHelpLine() {
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Off) {
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    ExplorerPreview(
+                        state = ExplorerModel.State(
+                            screen = ScreenState.Ready(
+                                ExplorerStylesData(
+                                    tiles = emptyList(),
+                                    source = "unanalysed",
+                                    tracks = 0u,
+                                    empty = true,
+                                ),
+                            ),
+                        ),
+                        onOpen = {},
+                        onStation = {},
+                        onAllStations = {},
+                        onRetry = {},
+                    )
+                }
+            }
+        }
+        rule.composeRule.onNodeWithText("Aucun style analysé pour l'instant.").assertExists()
+        rule.composeRule.onNodeWithText("en propose un", substring = true).assertDoesNotExist()
+    }
+
+    /** The same, when the person's own history is empty. */
+    @Test
+    fun theEmptyHistoryShelfStatesItselfWithNoHelpLine() {
+        rule.setContent {
+            NzTheme(kind = NzThemeKind.Encre, motion = NzMotionLevel.Off) {
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    ExplorerPreview(
+                        state = ExplorerModel.State(
+                            screen = ScreenState.Ready(
+                                ExplorerStylesData(
+                                    tiles = emptyList(),
+                                    source = "none",
+                                    tracks = 0u,
+                                    empty = true,
+                                ),
+                            ),
+                        ),
+                        onOpen = {},
+                        onStation = {},
+                        onAllStations = {},
+                        onRetry = {},
+                    )
+                }
+            }
+        }
+        rule.composeRule.onNodeWithText("Votre historique d'écoute est encore vide.").assertExists()
+        rule.composeRule.onNodeWithText("apparaîtront ici", substring = true).assertDoesNotExist()
     }
 }

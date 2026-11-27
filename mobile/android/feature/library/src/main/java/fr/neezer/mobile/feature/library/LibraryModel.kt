@@ -137,6 +137,9 @@ data class FolderOptionView(val id: String, val title: String, val count: Int)
  * - **Nothing is asked twice**: every leaf remembers its job, so the two `Ready`
  *   emissions of a warm open (`screenFlow`'s copy, then its answer) never ask the
  *   route again (MB5's and MB7's trap).
+ * - **L'ordre des favoris est un choix, pas un filtre** : il est retenu sur
+ *   l'appareil ([LibraryPrefs], deux clés de `SharedPreferences`), et le premier
+ *   écran s'affiche déjà dans l'ordre du dernier choix.
  */
 class LibraryModel(
     private val service: LibraryService,
@@ -144,6 +147,7 @@ class LibraryModel(
     private val scope: CoroutineScope,
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val toast: (String) -> Unit = { NzToasts.show(it) },
+    private val prefs: LibraryPrefs = NoLibraryPrefs,
 ) {
     data class State(
         val leaf: LibraryLeaf = LibraryLeaf.Favorites,
@@ -334,7 +338,12 @@ class LibraryModel(
             }
     }
 
-    private val _state = MutableStateFlow(State())
+    private val _state = MutableStateFlow(
+        State(
+            favoriteSort = prefs.favoriteSort,
+            favoriteDescending = prefs.favoriteDescending,
+        ),
+    )
     val state: StateFlow<State> = _state.asStateFlow()
 
     private var favoritesJob: Job? = null
@@ -405,16 +414,19 @@ class LibraryModel(
         applyFavoriteTools()
     }
 
-    /** The table's sort (`fSort`). */
+    /** The table's sort (`fSort`), retenu sur l'appareil. */
     fun sortFavorites(sort: FavoriteSort) {
         _state.update { it.copy(favoriteSort = sort) }
         applyFavoriteTools()
+        prefs.saveFavoriteSort(sort, _state.value.favoriteDescending)
     }
 
-    /** « Inverser l'ordre » (`fDir`). */
+    /** « Inverser l'ordre » (`fDir`), retenu sur l'appareil. */
     fun reverseFavorites() {
-        _state.update { it.copy(favoriteDescending = !it.favoriteDescending) }
+        val next = !_state.value.favoriteDescending
+        _state.update { it.copy(favoriteDescending = next) }
         applyFavoriteTools()
+        prefs.saveFavoriteSort(_state.value.favoriteSort, next)
     }
 
     /** Applies the query and the order to the handle the screen windows. */

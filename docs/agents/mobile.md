@@ -1033,6 +1033,15 @@ fait échouer le `Judge gate` d'une PR qui ne touche même pas le lecteur. Le co
 atterrir sur la PREMIÈRE PR jugée, et les PR `ui` suivantes se rebasent après son merge (mesuré sur
 #447 et #458, 2026-11-27).
 
+**Balayer les 11 écrans AVANT de demander un jugement, parce que `precheck` ne voit pas le C5.**
+`banned` compte les chaînes anglaises et les noms d'outil ; une phrase française d'aide sous un titre
+ne compte nulle part (`banned=0` et `precheck: ok=68 fail=0` sur la tête que le juge a bloquée). Le
+juge, lui, la voit, et #447 s'est fait bloquer deux passages de suite sur des écrans que la PR ne
+touchait pas : 05/07 (corrigés par #474) puis `02-rechercher` (« Aucun style analysé pour
+l'instant : « Toutes les stations » en propose un. », `ExplorerStylesSection.kt`). Un passage coûte
+8–12 min de Sonnet : lire les `text=` des 11 `*.xml` de l'artefact et retirer toute phrase qui
+explique au lieu de nommer un libellé, une donnée ou un état, dans la même PR.
+
 **Le corps du serveur ne s'affiche jamais.** La ligne d'état du lecteur porte la cause d'un échec :
 `nz-audio`'s `SourceError::Provider` garde le corps anglais du serveur pour le journal et `Debug`,
 et son `Display` nomme la cause en français à partir du seul statut
@@ -3441,6 +3450,14 @@ API 35 x86_64 `-no-window -no-audio`, my own port 5640, the device bench inside 
 - **A `ListHandle` is immutable by contract.** The SPA splices its dislikes array locally; the phone
   re-reads the list after the mutation (**1** extra `User` request per removal) rather than holding a
   second, mutable copy — MB10 owns the mutation that patches every open list.
+- **L'ordre des favoris est un choix, pas un filtre : un contrôle + une feuille, retenu sur
+  l'appareil.** Sept chips dans une bande qui défile mettaient « Durée » et « Date d'ajout » hors
+  écran à 360 dp (`LibraryScreen.kt:362`), et une chip Material sert à filtrer (multi-choix), pas à
+  choisir durablement un ordre parmi sept — Apple Music et Spotify mettent un « Sort » dans un coin,
+  la direction dans le même panneau. `SortDoor` nomme l'ordre courant, `SortSheet` offre les six
+  lignes et l'interrupteur « Décroissant » ; le tri reste local au noyau (**un** `filter` + **un**
+  `sort`, **zéro requête** sur 8 000 titres), la liste revient en haut, et `SharedPreferences`
+  « library » (deux clés, `apply()`) rend le même ordre au redémarrage.
 
 **Deliberate deviations from the plan paragraph.** The leaves are LAZY: the SPA's `onMount` asks
 `/me/favorites`, `/me/playlists`, `/me/local` and `/upload/usage` whatever leaf is open (four

@@ -8,14 +8,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import fr.neezer.mobile.bridge.ScreenState
 import fr.neezer.mobile.designsystem.NzMotionLevel
 import fr.neezer.mobile.designsystem.NzTheme
 import fr.neezer.mobile.designsystem.NzThemeKind
 import fr.neezer.mobile.designsystem.Sillon
+import fr.neezer.mobile.testkit.AtfSuppressions
 import fr.neezer.mobile.testkit.ScreenGoldenRule
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -40,8 +43,15 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [34], qualifiers = "w360dp-h900dp-xhdpi")
 class LibraryGoldenTest {
 
+    /**
+     * The one suppression: [NzSheet]'s tap-anywhere veil is a full-window
+     * clickable with no speakable text (ATF's `SpeakableTextPresentCheck`) — a
+     * real finding in the design system's file, shared by every sheet, whose fix
+     * is not this lot's. The sort sheet is the only screen here that opens one;
+     * the matcher is the exact shape of that node, never a global mute.
+     */
     @get:Rule
-    val rule = ScreenGoldenRule()
+    val rule = ScreenGoldenRule(accessibilitySuppressions = AtfSuppressions.sheetVeil)
 
     @Test
     fun longTitlesAt360() = shot(360, 1.0f)
@@ -61,6 +71,32 @@ class LibraryGoldenTest {
     private fun shot(width: Int, scale: Float) {
         render(longTitlesState(), scale)
         rule.capture("library-bibliotheque-liste-${width}dp-f$scale.png")
+    }
+
+    /**
+     * La feuille de tri ouverte, sur la porte touchée : c'est ce qu'une personne
+     * voit après son tap, donc ce qu'un golden doit figer — six lignes, la coche
+     * sur l'ordre courant, l'interrupteur « Décroissant », dans les deux thèmes.
+     */
+    @Test
+    fun theSortSheetAt360() = sortSheetShot(NzThemeKind.Encre, "encre")
+
+    @Test
+    fun theSortSheetOnPapierAt360() = sortSheetShot(NzThemeKind.Papier, "papier")
+
+    private fun sortSheetShot(kind: NzThemeKind, name: String) {
+        rule.setContent(1f) {
+            NzTheme(kind = kind, motion = NzMotionLevel.Full) {
+                Box(Modifier.fillMaxSize().background(Sillon.colors.bg)) {
+                    LibraryScreen(state = favoritesState(), actions = LibraryActions())
+                }
+            }
+        }
+        rule.composeRule
+            .onNodeWithContentDescription("Trier les favoris — Ordre d'origine, croissant")
+            .performClick()
+        rule.composeRule.waitForIdle()
+        rule.capture("library-bibliotheque-tri-360dp-f1.0-$name.png")
     }
 
     private fun render(
