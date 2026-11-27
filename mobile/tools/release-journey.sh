@@ -283,6 +283,20 @@ player_evidence() {
         printf 'player=unavailable cause=no header bounds in 08-lecteur.xml\n'
         return 0
     fi
+    # The queue's veil keeps the POINTER for the length of its fade (NzSheet: a
+    # full-screen clickable Box inside an AnimatedVisibility, a SIBLING of the
+    # sheet): a DOWN landing on it never reaches the player's gesture, so the
+    # sheet does not move at all. `await_text "Réduire le lecteur"` is true the
+    # whole time — the player is UNDER the queue — so the previous head started
+    # the drag on the veil: measured on run 45928645086, where 11 came out
+    # byte-identical to 09 in both directions. Wait for the queue's own title to
+    # leave the tree (the end of the exit animation), then drag.
+    queue_gone=0
+    for _ in $(seq 1 100); do
+        if ! ui_text | grep -qF "File d'attente"; then queue_gone=1; break; fi
+        sleep 0.1
+    done
+    (( queue_gone == 1 )) || printf 'player=the queue sheet is still in the tree\n'
     read -r x1 y1 x2 y2 <<<"$bounds"
     read -r width height < <(ui_screen)
     x=$((width / 2))

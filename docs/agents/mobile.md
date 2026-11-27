@@ -7734,7 +7734,14 @@ colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fon
   le bas (60 % de la hauteur, 3 000 ms, capture à 1,6 s = 43 % de la feuille, au-dessus du seuil de
   28 %), puis prend l'arbre APRÈS la relâche — `uiautomator` attend l'inactivité, donc un dump
   pendant le geste rend le dernier état stable, ce qui avait produit un 11 identique à 09. Un garde
-  `cmp` échoue si les deux arbres sont identiques. Références du comportement attendu :
+  `cmp` échoue si les deux arbres sont identiques.
+  **Le voile d'une feuille garde le pointeur pendant son fondu** : `NzSheet` monte un `Box`
+  plein écran cliquable dans un `AnimatedVisibility`, FRÈRE de la feuille du lecteur ; un DOWN qui
+  tombe dessus n'atteint jamais le geste du lecteur, et la feuille ne bouge pas d'un pixel. C'est
+  pourquoi `await_text "Réduire le lecteur"` (vrai pendant tout ce temps, le lecteur est SOUS la
+  file) ne suffisait pas : le parcours attend maintenant que « File d'attente » quitte l'arbre
+  avant de glisser (mesuré sur le run 45928645086 : 11 identique à 09 à l'octet dans les deux
+  sens). Références du comportement attendu :
   [anchoredDraggable](https://developer.android.com/develop/ui/compose/touch-input/pointer-input/drag-swipe-fling#anchoredDraggable),
   [feuilles Material 3](https://developer.android.com/develop/ui/compose/components/bottom-sheets) et
   Apple, *Designing Fluid Interfaces* (WWDC 2018, les deux ressorts 28 % / 125 dp/s).
