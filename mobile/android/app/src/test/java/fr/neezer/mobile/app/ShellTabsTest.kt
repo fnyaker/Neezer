@@ -453,7 +453,7 @@ class ShellTabsTest {
         val row80 = hasText("ligne 80") and hasAnyAncestor(hasTestTag("page0"))
         rule.onNode(row80).assertIsDisplayed()
 
-        rule.onNodeWithContentDescription("Rechercher").performClick()
+        rule.onNodeWithContentDescription("Explorer").performClick()
         settle()
         assertEquals(1, pager!!.currentPage)
         rule.onNodeWithContentDescription("Accueil").performClick()
