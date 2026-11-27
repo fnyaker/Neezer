@@ -137,12 +137,12 @@ class CarSettingsActivity : ComponentActivity() {
             )
         )
         setContentView(scroll)
-        // Android 15 draws every window edge to edge whatever the app asks for:
-        // the scroll view takes the status bar's (and a notch's) height as top
-        // padding, so the title and the back arrow never sit under them — the
-        // judge's `07-mode-voiture` capture showed the header overlapping the
-        // status bar (run 46041172474). Older devices already fit the window,
-        // so only 15 and up takes the inset.
+        // #474 already landed the window-inset fix on master: Android 15 draws
+        // every window edge to edge whatever the app asks for, so the scroll
+        // view takes the status bar's (and a notch's) height as top padding;
+        // older devices already fit the window, so only 15 and up takes it.
+        // This lot keeps that implementation (it avoids double padding on
+        // pre-15) and its own device test asserts the resulting geometry.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
                 val bars = insets.getInsets(

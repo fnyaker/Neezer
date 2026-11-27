@@ -246,12 +246,13 @@ private fun PlayerColumn(
 
 /** The header: collapse, what is playing, the room's chips, the ⋯ menu. */
 @Composable
-private fun PlayerHeader(
+internal fun PlayerHeader(
     state: NowPlayingModel.State,
     model: NowPlayingModel,
     nav: NzNavigator,
     onClose: () -> Unit,
     wide: Boolean,
+    onStatusLayout: ((androidx.compose.ui.text.TextLayoutResult) -> Unit)? = null,
 ) {
     val colors = Sillon.colors
     Row(
@@ -283,8 +284,10 @@ private fun PlayerHeader(
                     text = status,
                     style = Sillon.type.mono,
                     color = colors.acText,
-                    maxLines = 1,
+                    maxLines = 2,
+                    textAlign = TextAlign.Center,
                     overflow = TextOverflow.Ellipsis,
+                    onTextLayout = onStatusLayout ?: {},
                 )
             }
         }
