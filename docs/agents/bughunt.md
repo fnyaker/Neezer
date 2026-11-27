@@ -177,9 +177,32 @@ by waiting on its own marker. One retry per click, only when the node was detach
 
 ## Le juge
 
-TODO B3 — the visual judge (Coder-Claude, T9's rubric) reads the two reports and their screenshots,
-confirms or downgrades each bug, and writes `bughunt-verdict-<app>.md`. This section is replaced by
-B3; until then, `bughunt.yaml` produces the artifact and nothing judges it.
+The visual judge (Coder-Claude, the same agent and the same grid as T9's `mobile/tools/judge/rubric.md`,
+unchanged: six criteria, seven blocking rules) reads the two reports and their screenshots and writes
+**one verdict per application**. It does not click, run, fix or push: the walkers produce the map, the
+judge says which lines of it are bugs.
+
+- **Who / when.** A swarm schedule (`neezer-bughunt-judge`, Monday 06:30 `Europe/Paris`, three hours
+  after the nightly `bughunt.yaml` pass) sends the prompt of `mobile/tools/bughunt/judge-trigger.md`
+  (mode `bughunt`). A workflow cannot send a swarm task (no token), so the Lead's heartbeat is the
+  fallback: a successful `bughunt.yaml` run whose artifacts have no verdict gets the same prompt by
+  hand. A `run-id` already judged is never judged again (the judge reads recent tasks and stops).
+- **What it reads.** `gh run download <run-id> -n bughunt-web` / `-n bughunt-native`: `bughunt-<app>.md`
+  (the generated report), the `.json` register, `screens/*.png` (it must be able to **look** at them: no
+  image, no verdict, it stops and says so).
+- **What it writes.** `bughunt-verdict-<app>.md`: `Verdict : PASS|BLOCK|INCOMPLETE`, the six-criteria
+  table **per screen** with a cited proof per cell (`—` where a screen cannot carry a criterion), then
+  *Bugs confirmés* (severity kept, with the report line and the capture) and *Faux positifs*
+  (what the proof does not support). It lowers or confirms a severity only with a sentence anyone can
+  check on the capture. It also lists what only the images show and the harness cannot (a toast one
+  character wide, a flat background behind a cover): those are findings of the judge, not of the walker.
+- **`INCOMPLETE`** means the run produced no usable artifact (missing after two downloads, a screen
+  never painted). It asks for **no code change**: rerun `bughunt.yaml`, resend the task.
+- **What a confirmed bug becomes.** One fix task per `bloquant` / `sérieux` bug and one per screen for
+  the `mineur` ones, routed by zone (plan §11); the fix PR carries the before/after report line of the
+  element, and the next pass must show it `state-changed` / `navigated`.
+- **Cost.** 8 to 12 minutes of Sonnet per application, once a week at most plus hand-sent runs; the
+  same quota as T9's judge, so the two add up.
 
 ## What the first passes measured, and the rules they changed
 
