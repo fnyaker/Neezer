@@ -93,9 +93,13 @@ cd webapp && node test/vizstrip/run.mjs             # the visualizer strip's rea
                                                      # contrast, a live custom accent, and no canvas at all in eco
 cd webapp && node test/backdrop/run.mjs              # the app's ground behind all seven routes: ONE blurred sleeve, 0 backdrop-filter,
                                                      # under the content, a 640 ms fade on a skip, one cover load, eco (no image,
-                                                     # data-eco), contrast over a white sleeve; SHOTS=<dir> for PNGs, DIST=<dir> as above
+                                                     # data-eco), contrast over a white sleeve, and a title with NO art taking
+                                                     # the ground away with no pageerror; SHOTS=<dir> for PNGs, DIST=<dir> as above
 cd webapp && node test/volume/run.mjs                # the player bar's volume: 8 px track, 22 px thumb centred (0.00 px), 44 px
                                                      # target, 14 % click -> 0.14, keyboard/mute, 1920/1440/1280/1181/641/390
+cd webapp && node test/gain/run.mjs                  # volume normalization on the graph the browser builds: the first title AND
+                                                     # the one after a skip carry their own ReplayGain (-10 / -20 dB -> 0.676 /
+                                                     # 2.138, i.e. 10 dB apart), off = unity, an unknown gain never invented
 cd webapp && node test/mobile/run.mjs                # the phone shell at 360/390/639/640/641 px: no sideways overflow, tab bar 64 + mini
                                                      # player 64 floating 8 above it, the library tab, the full-screen player, the theme kept
                                                      # (needs npm run build; PLAYWRIGHT=/path/to/playwright-core CHROMIUM=/usr/bin/chromium)
