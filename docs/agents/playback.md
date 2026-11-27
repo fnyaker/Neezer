@@ -212,6 +212,13 @@ on its own waits for the next voice; that is what `GAIN_LATE_GRACE` (2 s) protec
 Measured on the phone's queue: **−10.40 dB** at High for a 0 LUFS track (`docs/agents/mobile.md`,
 *Tests and emulation*).
 
+**The log says what the handover got, so "it is not levelled" is answerable.** Every track start writes
+one line (`logInfo("load")`, diagnostics on): `gain -10.0 dB (normalisation medium) for <track uuid>`.
+`gain none` means the track has no measured loudness at all — `Track.gain` is null on the server and no
+client can invent it (that is the DATA answer, and the only fix is a measurement); a number with a flat
+library means the LEVEL (`normalisation off`, or a level the person did not expect). `test/gain/run.mjs`
+pins both lines on the shipped graph, with the numbers the graph must hold (0.676 for −10 dB at medium).
+
 
 Leaving the graph needs a NEW element: the idle one is replaced at once, the playing one hands its
 track over to a fresh one at the position it has reached (seek at metadata and again at `canplay`,
