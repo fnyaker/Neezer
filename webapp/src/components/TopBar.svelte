@@ -107,7 +107,7 @@
       transition:fade={{ duration: DUR.fast, out: DUR.fast }}
     >
       <Icon name="search" size={16} />
-      <span class="hint">Titres, artistes, albums, podcasts…</span>
+      <span class="hint">Rechercher</span>
       <span class="kbd">⌘K</span>
     </button>
   {/if}
@@ -118,7 +118,6 @@
     use:link
     href="/settings/discovery"
     class="chip level"
-    title="Niveau du Flow — le régler dans Réglages › Découverte"
   >
     {step.name} · Flow
   </a>

@@ -705,13 +705,6 @@
             · {data.archived_count} archivé{data.archived_count > 1 ? "s" : ""} sur le serveur
           {/if}
         </div>
-        {#if data.local}
-          <p class="localnote">
-            Ce podcast n'existe plus sur Deezer. Tout ce qui a été archivé reste
-            ici, jouable et téléchargeable comme avant — c'est désormais un
-            podcast local.
-          </p>
-        {/if}
         {#if data.description}<p class="desc">{data.description}</p>{/if}
       </div>
     </GradientHeader>
@@ -732,7 +725,7 @@
         </button>
       {/if}
       {#if $isAdmin && CAN_KEEP}
-        <button class="icon-btn" on:click={unsubscribe} aria-label="Se désabonner" title="Se désabonner">
+        <button class="icon-btn" on:click={unsubscribe} aria-label="Se désabonner">
           <Icon name="trash" size={22} />
         </button>
       {/if}
@@ -769,11 +762,6 @@
           <h2 id="tr-card-title">Transcription des épisodes</h2>
           <span class="tr-count">{readyCount} sur {archivedEpisodes.length}</span>
         </div>
-        <p class="tr-sub">
-          Le texte est produit sur ce serveur, à partir des fichiers archivés. Aucun audio n'est
-          envoyé à un tiers.
-        </p>
-
         {#if $transcribeSettings.state === "loading" && !transcribe}
           <p class="tr-state" role="status" aria-busy="true">Vérification de la transcription…</p>
         {:else if $transcribeSettings.state === "error" && !transcribe}
@@ -849,10 +837,6 @@
                 {batchBusy ? "Envoi…" : "Transcrire"}
               </button>
             </div>
-            <p class="tr-help">
-              Un seul épisode à la fois, en arrière-plan. La transcription se met en pause pendant
-              l'écoute.
-            </p>
           {:else}
             <p class="tr-state">Aucun épisode archivé à transcrire.</p>
           {/if}
@@ -1030,7 +1014,6 @@
                     <button
                       type="button"
                       class="tr-chip"
-                      title="Ouvrir la transcription dans le lecteur"
                       aria-label={"Lire la transcription de " + ep.title}
                       on:click={() => openTranscript(ep)}
                     >
@@ -1268,13 +1251,6 @@
     transform: translateX(16px);
   }
 
-  .localnote {
-    margin: 10px 0 0;
-    max-width: 60ch;
-    font-size: 0.85rem;
-    line-height: 1.45;
-    color: var(--text-dim);
-  }
   .gone {
     display: inline-flex;
     align-items: center;
@@ -1655,7 +1631,6 @@
     font-size: 11px;
     font-variant-numeric: tabular-nums;
   }
-  .tr-sub,
   .tr-help {
     margin: 0;
     color: var(--dim);

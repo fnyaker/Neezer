@@ -20,7 +20,6 @@
   export let genre = "";
 
   const dispatch = createEventDispatcher();
-  let focus = null;
 
   $: byGroup = groups
     .map((g) => ({
@@ -31,8 +30,6 @@
     }))
     .filter((g) => g.worlds.length);
   $: count = Object.keys(meta).length;
-  $: shown = focus || (value !== "auto" ? value : resolved);
-  $: detail = shown && meta[shown] ? meta[shown] : null;
 
   function pick(id) {
     dispatch("pick", id);
@@ -48,20 +45,11 @@
         {#if value === "auto" && resolved && meta[resolved]}
           En ce moment : <strong>{meta[resolved].label}</strong>{#if genre}&nbsp;· {genre}{/if}
         {:else}
-          Le style reconnu choisit parmi les {count} mondes, et les habille à ses couleurs.
+          Choisi par le style.
         {/if}
       </span>
     </span>
   </button>
-
-  <p class="detail" aria-live="polite">
-    {#if detail}
-      <span class="detail-t">{detail.label}</span>
-      <span class="detail-b">{detail.blurb}</span>
-    {:else}
-      <span class="detail-b muted">Survolez un monde pour savoir ce qu'il montre ; touchez-le pour l'épingler.</span>
-    {/if}
-  </p>
 
   <div class="groups">
     {#each byGroup as g (g.id)}
@@ -74,12 +62,7 @@
               class:sel={value === w.id}
               class:now={value === "auto" && resolved === w.id}
               aria-pressed={value === w.id}
-              title={w.blurb}
               on:click={() => pick(w.id)}
-              on:mouseenter={() => (focus = w.id)}
-              on:mouseleave={() => (focus = null)}
-              on:focus={() => (focus = w.id)}
-              on:blur={() => (focus = null)}
             >
               {#if value === w.id}<Icon name="pin" size={13} />{/if}
               {w.label}
@@ -147,28 +130,6 @@
   .auto-h strong {
     color: var(--text);
     font-weight: 650;
-  }
-  /* One line that always says what the world under the pointer (or the one
-     chosen) looks like, at a fixed height so the grid below never jumps. */
-  .detail {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-height: 2.9em;
-    margin: 0;
-    padding: 0 2px;
-  }
-  .detail-t {
-    font-weight: 650;
-    font-size: 0.86rem;
-  }
-  .detail-b {
-    font-size: 0.8rem;
-    line-height: 1.45;
-    color: var(--text-dim);
-  }
-  .muted {
-    color: var(--text-dim);
   }
   .groups {
     display: grid;

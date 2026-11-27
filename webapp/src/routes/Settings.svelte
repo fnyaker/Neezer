@@ -96,22 +96,22 @@
     lanHere = !!probe?.supported;
   });
   $: SECTIONS = [
-    ...(CAN_KEEP ? [{ id: "playback", label: "Lecture & son", icon: "speaker", hint: "Sortie audio, volume, égaliseur, transitions" }] : []),
+    ...(CAN_KEEP ? [{ id: "playback", label: "Lecture & son", icon: "speaker" }] : []),
     // The theme is THIS device's preference (`ui.theme`, lib/theme.js), so it
     // is not offered while driving somebody else's player — like the storage
     // and the accounts below, it would speak about the wrong machine.
-    ...(REMOTE ? [] : [{ id: "appearance", label: "Apparence", icon: "moon", hint: "Thème Encre, Papier ou Pochette" }]),
-    { id: "viz", label: "Animations", icon: "sparkles", hint: "Ce qui s'anime pendant la lecture" },
-    ...(REMOTE ? [] : [{ id: "downloads", label: "Téléchargements", icon: "download", hint: "Qualité, hors-ligne, préchargement" }]),
-    { id: "discovery", label: "Découverte", icon: "compass", hint: "Flow, titres que vous n'aimez pas, nouveautés" },
-    ...(REMOTE ? [] : [{ id: "sources", label: "Sources", icon: "link", hint: "Ordre des sources, vos comptes, et qui peut s'en servir" }]),
+    ...(REMOTE ? [] : [{ id: "appearance", label: "Apparence", icon: "moon" }]),
+    { id: "viz", label: "Animations", icon: "sparkles" },
+    ...(REMOTE ? [] : [{ id: "downloads", label: "Téléchargements", icon: "download" }]),
+    { id: "discovery", label: "Découverte", icon: "compass" },
+    ...(REMOTE ? [] : [{ id: "sources", label: "Sources", icon: "link" }]),
     ...(REMOTE || !lanHere
       ? []
-      : [{ id: "lan", label: "Appareils et amis", icon: "monitor", hint: "Vos appareils inscrits, vos amis de confiance, ce qu'ils voient" }]),
-    { id: "account", label: REMOTE ? "Contrôle" : "Compte", icon: "user", hint: REMOTE ? "Le lecteur que vous pilotez" : "Votre compte, l'export vers d'autres services" },
-    ...($user?.admin && ADMIN() ? [{ id: "users", label: "Utilisateurs", icon: "users", hint: "Comptes, rôles et invitations" }] : []),
-    ...($user?.admin && ADMIN() ? [{ id: "server", label: "Serveur", icon: "archive", hint: "Archive, nettoyage, stockage, quotas" }] : []),
-    { id: "help", label: "Assistance", icon: "info", hint: "Recharger l'application, journal de diagnostic" },
+      : [{ id: "lan", label: "Appareils et amis", icon: "monitor" }]),
+    { id: "account", label: REMOTE ? "Contrôle" : "Compte", icon: "user" },
+    ...($user?.admin && ADMIN() ? [{ id: "users", label: "Utilisateurs", icon: "users" }] : []),
+    ...($user?.admin && ADMIN() ? [{ id: "server", label: "Serveur", icon: "archive" }] : []),
+    { id: "help", label: "Assistance", icon: "info" },
   ];
   // The menu, grouped (DESIGN §6): Écoute, Bibliothèque, Comptes & serveur. A
   // group and its items come from SECTIONS, so the conditions above (REMOTE,
@@ -655,10 +655,7 @@
       {/if}
     </div>
 
-    {#if !items.length}
-      <p class="muted hint">Aucun titre téléchargé. Utilisez le bouton de téléchargement sur un titre, un album ou une playlist pour les rendre disponibles hors-ligne.</p>
-    {:else}
-      <div class="list">
+    <div class="list">
         {#each items as m (m.id)}
           <div class="row">
             <div class="thumb"><Cover src={m.track?.album?.cover} alt={m.track?.title} size={40} kind="track" fallbackId={trackRef(m.track)} /></div>
@@ -668,11 +665,10 @@
             </div>
             <span class="q-badge">{qualityLabel(m.quality)}</span>
             <span class="sz muted">{fmtBytes(m.size)}</span>
-            <button class="rm" on:click={() => remove(m.id, m.track?.title)} aria-label="Retirer" title="Retirer du cache"><Icon name="trash" size={17} /></button>
+            <button class="rm" on:click={() => remove(m.id, m.track?.title)} aria-label="Retirer"><Icon name="trash" size={17} /></button>
           </div>
-        {/each}
-      </div>
-    {/if}
+      {/each}
+    </div>
   </section>
 {:else}
 <div class="settings" class:wide>
@@ -703,7 +699,6 @@
           <span class="cat-ico"><Icon name={c.icon} size={19} /></span>
           <span class="cat-txt">
             <span class="cat-title">{c.label}</span>
-            {#if !wide}<span class="cat-hint muted">{c.hint}</span>{/if}
           </span>
           {#if !wide}<Icon name="chevronRight" size={18} />{/if}
         </button>
@@ -742,11 +737,6 @@
   {#if canCar}
     <section class="card">
       <h2>Mode voiture</h2>
-      <p class="muted sub">
-        Une barre flottante par-dessus le GPS, sans quitter la route&nbsp;: lecture,
-        playlists épinglées et recherche. Elle apparaît quand une app GPS passe
-        devant ou que la voiture se connecte, et se règle depuis l'application.
-      </p>
       <button class="save car-open" on:click={openCar}>
         <Icon name="settings" size={16} />
         Ouvrir les réglages du mode voiture
@@ -772,7 +762,6 @@
 {#if tab === "downloads"}
 <section class="card">
   <h2>Qualité de téléchargement par défaut</h2>
-  <p class="muted sub">Utilisée pour les nouveaux téléchargements (modifiable au cas par cas).</p>
   <div class="quality">
     {#each QUALITIES as q}
       <button class="q" class:sel={$downloadQuality === q.id} on:click={() => downloadQuality.set(q.id)}>
@@ -786,7 +775,6 @@
 
 <section class="card">
   <h2>Stockage des téléchargements</h2>
-  <p class="muted sub">Vos téléchargements sont permanents : ils restent disponibles hors-ligne jusqu'à ce que vous les retiriez vous-même. Ce n'est pas un cache — rien n'est supprimé automatiquement.</p>
 
   <div class="gauge-txt">
     <span><strong>{fmtBytes($downloadsSize)}</strong> utilisés sur cet appareil</span>
@@ -796,7 +784,6 @@
   <button class="toggle" role="switch" aria-checked={$offlineOnlyDownloaded} on:click={() => offlineOnlyDownloaded.set(!$offlineOnlyDownloaded)}>
     <span class="tg-txt">
       <span class="tg-title">Hors-ligne : ne lire que les titres téléchargés</span>
-      <span class="tg-hint muted">Lancer une playlist hors-ligne ne met en file que ce qui est dispo sur l'appareil, sans sauter les manquants. Désactivez pour tenter de tout lire.</span>
     </span>
     <span class="sw" class:on={$offlineOnlyDownloaded}><span class="knob"></span></span>
   </button>
@@ -809,12 +796,10 @@
       <button class="wipe" on:click={wipeCache}><Icon name="trash" size={16} /> Vider</button>
     {/if}
   </div>
-  <p class="muted sub">Pendant la lecture, les titres à venir sont préchargés ici (audio + pochette). La lecture est vérifiée d'abord en local, donc une coupure réseau ne l'interrompt pas. C'est un cache : les plus anciens sont supprimés automatiquement au-delà de la limite.</p>
 
   <button class="toggle" role="switch" aria-checked={$prefetchEnabled} on:click={() => prefetchEnabled.set(!$prefetchEnabled)}>
     <span class="tg-txt">
       <span class="tg-title">Précharger les titres suivants</span>
-      <span class="tg-hint muted">Désactivez pour économiser les données mobiles.</span>
     </span>
     <span class="sw" class:on={$prefetchEnabled}><span class="knob"></span></span>
   </button>
@@ -825,12 +810,6 @@
         <span class="tg-title">Titres préchargés d'avance</span>
         <span class="ahead-val">{$prefetchCount}</span>
       </div>
-      <p class="tg-hint muted">
-        Ils sont téléchargés un par un, du plus proche au plus lointain, sans jamais
-        prendre la bande passante du titre en cours. Plus la réserve est grande, plus
-        vous traversez un tunnel ou une zone morte sans coupure — au prix de données
-        et d'espace ({fmtBytes($playCacheLimit)} au maximum, éviction automatique).
-      </p>
       <div class="steps" role="group" aria-label="Nombre de titres préchargés">
         {#each AHEAD_STEPS as n}
           <button
@@ -883,7 +862,7 @@
     </div>
     <button class="logout" on:click={leaveRemote}><Icon name="logOut" size={16} /> Quitter le contrôle</button>
   </div>
-  <p class="muted sub">Ces réglages sont ceux du lecteur que vous pilotez : ils s'appliquent là-bas, pas sur cet appareil.</p>
+  <p class="muted sub">S'applique au lecteur piloté.</p>
 </section>
 {:else}
 <section class="card">
@@ -911,18 +890,6 @@
 {#if $user?.admin && CAN_ADMIN}
 <section class="card">
   <h2>Archive du serveur</h2>
-  <p class="muted sub">
-    Un titre archivé est à vous&nbsp;: il reste lisible même si Deezer le retire de
-    son catalogue, ou si Deezer est injoignable. L'archivage est
-    <strong>automatique</strong>&nbsp;: dès que quelque chose entre dans votre
-    bibliothèque — vous écoutez un titre, vous l'ajoutez aux favoris, vous mettez
-    un album, une playlist ou un artiste en favori (un artiste&nbsp;: selon les règles
-    d'archivage ci-dessous), vous vous abonnez à un podcast — l'audio part en
-    téléchargement. Ce bouton est le filet de sécurité, pour rattraper d'un coup
-    ce qui manquerait encore.
-    <strong>Rien n'est jamais supprimé de l'archive</strong>, et relancer ne
-    re-télécharge pas ce qui est déjà là.
-  </p>
 
   {#if job?.running}
     <div class="gauge">
@@ -934,7 +901,7 @@
         </span>
       </div>
     </div>
-    <p class="muted hint">Vous pouvez fermer l'application, le serveur continue.</p>
+    <p class="muted hint">Le serveur continue.</p>
   {:else}
     <div class="arch-btns">
       <button class="save" on:click={() => startBackfill("all")}>
@@ -954,12 +921,6 @@
   {/if}
 
   <h3>Mise à niveau des fichiers</h3>
-  <p class="muted hint">
-    Réécrit les titres archivés avant le détachement de Deezer&nbsp;: plus de
-    volume Deezer dans les étiquettes, la date de sortie la plus ancienne, les
-    faits dans le fichier compagnon. Sans risque&nbsp;: un titre en cours de
-    lecture n'est jamais touché à moitié, et relancer ne change plus rien.
-  </p>
   {#if mig?.running}
     <div class="gauge">
       <div class="bar"><span class="indeterminate" data-motion="status"></span></div>
@@ -994,15 +955,10 @@
 {#if $user?.admin && CAN_ADMIN && rules}
 <section class="card">
   <h2>Règles d'archivage</h2>
-  <p class="muted sub">
-    Ce qui déclenche un archivage. La lecture n'est pas dans la liste&nbsp;: un
-    titre lu est toujours archivé, c'est ainsi que fonctionne le transcodage.
-  </p>
 
   {#if rulesMeta && !rulesMeta.archive_library}
     <p class="muted hint warn">
-      <Icon name="alert" size={14} /> L'archivage est désactivé côté serveur
-      (<code>archive_library</code>)&nbsp;: ces règles sont sans effet.
+      <Icon name="alert" size={14} /> Archivage désactivé côté serveur.
     </p>
   {/if}
 
@@ -1021,10 +977,6 @@
   </div>
 
   <h3>Artiste mis en favori</h3>
-  <p class="muted hint">
-    Une discographie complète peut représenter des dizaines de Go. Limitez-la si
-    le disque est petit.
-  </p>
   <div class="row">
     <select
       value={rules.artist_scope}
@@ -1061,7 +1013,6 @@
       />
       <span>
         Lire les chapitres à l'archivage
-        <em class="note">— depuis le fichier de l'épisode, sans requête à personne</em>
       </span>
     </label>
     <label class="rule">
@@ -1073,7 +1024,6 @@
       />
       <span>
         Suivre aussi le lien de chapitres du fichier
-        <em class="note">— une requête tierce par épisode ; désactivé par défaut</em>
       </span>
     </label>
   </div>
@@ -1089,13 +1039,6 @@
 {#if $user?.admin && CAN_ADMIN && rules}
 <section class="card danger">
   <h2>Nettoyage automatique</h2>
-  <p class="muted sub">
-    La <strong>seule</strong> fonction qui supprime de l'audio archivé. Elle ne
-    touche que des titres re-téléchargeables depuis Deezer&nbsp;— un fichier que
-    vous avez importé vous-même n'existe nulle part ailleurs et n'est jamais
-    concerné. Le titre reste dans vos playlists et se réarchive à la prochaine
-    lecture&nbsp;; seuls les octets partent.
-  </p>
 
   <label class="rule">
     <input
@@ -1136,8 +1079,7 @@
     </div>
     {#if !rules.clean_min_free_gb}
       <p class="muted hint warn">
-        <Icon name="alert" size={14} /> Seuil à 0&nbsp;Go&nbsp;: rien ne sera
-        jamais supprimé.
+        <Icon name="alert" size={14} /> Rien ne sera supprimé.
       </p>
     {/if}
 
@@ -1170,13 +1112,11 @@
         />
         <span>
           Les épisodes de podcast
-          <em class="note">— un podcast disparu de Deezer reste protégé quoi qu'il arrive</em>
         </span>
       </label>
     </div>
 
     <h3>Priorité de suppression</h3>
-    <p class="muted hint">Ce qui part en premier quand il faut faire de la place.</p>
     <select
       value={rules.clean_order}
       disabled={rulesSaving}
@@ -1231,11 +1171,6 @@
         <Icon name="trash" size={16} /> {flushing ? "Vidage…" : "Vider le cache"}
       </button>
     </div>
-    <p class="muted sub">
-      Le cache (transcodages Opus, pochettes proxifiées) se reconstruit tout seul&nbsp;:
-      le vider ne coûte que du CPU. L'archive, elle, n'est pas un cache — aucun
-      bouton ici ne peut y toucher.
-    </p>
 
     <div class="gauge">
       <div class="bar"><span style={`transform:scaleX(${diskPct / 100})`} class:warn={diskPct > 90}></span></div>
@@ -1274,10 +1209,6 @@
 {#if tab === "discovery"}
 <section class="card">
   <h2>Découverte</h2>
-  <p class="muted sub">
-    Jusqu'où le Flow et les suggestions « Pour vous » s'éloignent de ce que vous écoutez.
-    Le réglage vous suit sur tous vos appareils.
-  </p>
   <DiscoverySlider bare />
 </section>
 
@@ -1286,11 +1217,6 @@
 {#if $user?.admin && CAN_ADMIN && rel}
   <section class="card">
     <h2>Nouveautés</h2>
-    <p class="muted sub">
-      Le serveur vérifie les sorties de vos artistes favoris, des artistes que chacun écoute
-      le plus et de quelques artistes très proches des favoris. Rien n'est téléchargé&nbsp;:
-      les sorties apparaissent dans « Nouveautés ».
-    </p>
     <label class="rule">
       <input type="checkbox" checked={rel.on} disabled={relSaving} on:change={(e) => saveReleases("on", e.currentTarget.checked)} />
       <span>Vérifier les nouveautés automatiquement</span>
@@ -1334,17 +1260,6 @@
 {#if $user?.admin && CAN_ADMIN && dz}
   <section class="card">
     <h2>Compte Deezer (ARL)</h2>
-    <p class="muted sub">
-      Tout le catalogue passe par ce seul identifiant de session. Il expire
-      régulièrement&nbsp;:
-      {#if canLinkDeezer}
-        reconnectez-vous ci-dessous
-      {:else}
-        collez-en un nouveau ici
-      {/if}
-      et il remplacera aussitôt celui défini dans la configuration du serveur
-      (docker&nbsp;compose), sans redémarrage.
-    </p>
 
     <div class="arl-state">
       <span class="pill" class:ok={dzStatus?.ok} class:bad={dzStatus && !dzStatus.ok}>
@@ -1374,13 +1289,6 @@
         <Icon name="user" size={16} />
         {arlLinking ? "Connexion en cours…" : "Se connecter avec mon compte Deezer"}
       </button>
-      <p class="muted hint link-hint">
-        Ouvre la page de connexion officielle de Deezer. Vos identifiants sont
-        saisis chez Deezer&nbsp;: ni l'application ni le serveur ne les voient, et
-        seule la clé de session obtenue est enregistrée ici. Utilisez l'e-mail et
-        le mot de passe du compte&nbsp;— les connexions via Google ou Apple sont
-        refusées à l'intérieur d'une application.
-      </p>
       <div class="or"><span>ou coller un ARL</span></div>
     {/if}
 
@@ -1398,13 +1306,6 @@
         {arlSaving ? "Vérification…" : "Enregistrer"}
       </button>
     </div>
-    <p class="muted hint">
-      L'ARL est vérifié auprès de Deezer avant d'être enregistré&nbsp;: s'il est
-      refusé, rien n'est modifié. Il n'est jamais réaffiché ensuite.
-    </p>
-    <p class="muted hint">
-      Les playlists et favoris de ce compte s'importent dans Sources → Mes comptes.
-    </p>
     {#if dz.arl_source === "database"}
       <button class="ghost danger" on:click={clearArl} disabled={arlSaving}>
         <Icon name="trash" size={16} /> Revenir à l'ARL du serveur
@@ -1421,7 +1322,6 @@
 {#if $user?.admin && CAN_ADMIN && quotaGb !== null}
   <section class="card">
     <h2>Quota d'upload (utilisateurs non-admin)</h2>
-    <p class="muted sub">Limite l'espace total que chaque utilisateur non-administrateur peut occuper avec ses fichiers importés. Les administrateurs ne sont pas limités. Mettez 0 pour désactiver la limite.</p>
     <div class="quota-row">
       <input class="quota-input" type="number" min="0" step="1" bind:value={quotaGb} />
       <span class="muted">Go / utilisateur</span>
@@ -1437,24 +1337,11 @@
 {#if tab === "help"}
 <section class="card">
   <h2>Recharger l'application</h2>
-  <p class="muted sub">
-    Repart d'une page neuve&nbsp;: la dernière version est retéléchargée depuis le
-    serveur et ce que l'appareil a appris tout seul est oublié (chemin audio,
-    décalage appris, genres et silences mis en cache). Utile après un plantage
-    ou un gel du GPU, quand les animations restent bloquées sur les barres.
-    Vos réglages, votre file de lecture et vos téléchargements sont conservés.
-  </p>
   <HardReload />
 </section>
 
 <section class="card">
   <h2>Diagnostic</h2>
-  <p class="muted sub">
-    Enregistre ce que fait l'application (lecture, reprise de session, erreurs
-    audio) dans un journal local, à joindre à un rapport de bug. Désactivé par
-    défaut&nbsp;: rien n'est enregistré ni envoyé tant que vous ne l'activez pas,
-    et le journal ne quitte jamais l'appareil.
-  </p>
   <label class="dbg-toggle">
     <input type="checkbox" checked={$logsEnabled} on:change={(e) => logsEnabled.set(e.target.checked)} />
     <span>Enregistrer le journal</span>
@@ -1462,8 +1349,6 @@
   {#if $logsEnabled}
     <p class="muted sub logline">
       {logLines} ligne{logLines > 1 ? "s" : ""} enregistrée{logLines > 1 ? "s" : ""}.
-      Le journal survit à la fermeture de l'application&nbsp;: reproduisez le
-      problème, puis revenez ici le récupérer.
     </p>
     <div class="logbtns">
       <button class="save" on:click={saveLog} disabled={!logLines}>
@@ -1675,10 +1560,6 @@
     font-weight: 700;
     font-size: 1rem;
     color: var(--tx);
-  }
-  .cat-hint {
-    font-size: 0.82rem;
-    line-height: 1.3;
   }
   /* The desktop menu is the prototype's: names only, 38 px rows, the open one
      on the accent pill. At 200 px an icon chip plus a label left ~110 px for

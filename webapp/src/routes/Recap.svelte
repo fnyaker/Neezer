@@ -298,10 +298,10 @@
         : `Rien à raconter pour ${activeYear || ""}`.trim();
   $: emptyText =
     reason === "skips-only"
-      ? "Seulement des titres passés cette année-là."
+      ? "Seulement des titres passés."
       : reason === "thin"
-        ? `${count(totals.listens, "écoute", "écoutes")}, ${formatMinutes(totals.minutes)} — pas assez pour raconter une année.`
-        : "Aucune écoute enregistrée cette année-là.";
+        ? `${count(totals.listens, "écoute", "écoutes")}, ${formatMinutes(totals.minutes)}.`
+        : "Aucune écoute enregistrée.";
 </script>
 
 <div class="recap fade-in">
@@ -352,7 +352,6 @@
       <div class="deck panel">
         <span class="panel-icon"><Icon name="alert" size={26} /></span>
         <h2 class="panel-title">Cette année n'existe pas dans ton récap</h2>
-        <p class="panel-text">Le lien est peut-être incomplet, ou l'année est hors de l'historique de ce serveur.</p>
         <div class="panel-actions">
           <a class="btn btn-ghost" href="#/"><Icon name="home" size={16} /> Retour à l'accueil</a>
         </div>
@@ -386,7 +385,7 @@
     <div class="recap-grid" in:fadeIn>
       <div class="deck panel">
         <span class="panel-icon"><Icon name="music" size={26} /></span>
-        <h2 class="panel-title">Ton récap apparaîtra quand tu auras écouté quelques titres.</h2>
+        <h2 class="panel-title">Pas encore de récap</h2>
         <div class="panel-actions">
           <a class="btn btn-primary" href="#/library"><Icon name="library" size={16} /> Ouvrir la bibliothèque</a>
         </div>

@@ -52,15 +52,15 @@
   // step; the stale counts are rows behind on that step only.
   $: steps = plan
     ? [
-        { id: "measure", name: "Mesure", hint: "tempo, style", late: never + plan.stale_measure },
+        { id: "measure", name: "Mesure", late: never + plan.stale_measure },
         {
           id: "embed",
           name: "Empreinte",
-          hint: plan.extractor ? "ce que le modèle écoute" : "extracteur absent",
+          hint: plan.extractor ? "" : "extracteur absent",
           late: plan.extractor ? never + plan.stale_embed : 0,
           off: !plan.extractor,
         },
-        { id: "decide", name: "Classement", hint: "genre retenu", late: never + plan.stale_decide },
+        { id: "decide", name: "Classement", late: never + plan.stale_decide },
       ]
     : [];
   $: pct = job?.total ? Math.min(100, Math.round((job.scanned / job.total) * 100)) : 0;
@@ -230,7 +230,7 @@
           {#if cj.failed}· <span class="bad">{cj.failed} en échec</span>{/if}
         </p>
         {#if cj.paused}
-          <p class="pause"><Icon name="moon" size={14} /> En pause : vous écoutez de la musique. Reprend entre deux titres.</p>
+          <p class="pause"><Icon name="moon" size={14} /> En pause : vous écoutez de la musique.</p>
         {:else if cj.current.length}<p class="st-dim line">{cj.current.join(", ")}</p>{/if}
         {#if cj.error}<div class="st-note bad"><Icon name="alert" size={16} /><span>{cj.error}</span></div>{/if}
       </div>
@@ -243,7 +243,7 @@
           {#if job.failed}· <span class="bad">{job.failed} en échec</span>{/if}
         </p>
         {#if job.paused}
-          <p class="pause"><Icon name="moon" size={14} /> En pause : {WHY[job.paused] || job.paused}. Reprend toute seule.</p>
+          <p class="pause"><Icon name="moon" size={14} /> En pause : {WHY[job.paused] || job.paused}.</p>
         {/if}
       </div>
     {:else if !onClient && plan.todo && schedule.enabled}
@@ -278,9 +278,6 @@
         </li>
       {/each}
     </ol>
-    <p class="st-dim foot">
-      Un nouveau modèle ne refait que l'étape 3, sans toucher au fichier audio.
-    </p>
   </section>
 
   <section class="st-card" in:fadeIn>
@@ -300,10 +297,6 @@
         </select>
       </label>
     </div>
-    <p class="st-dim foot">
-      L'analyse s'efface devant vous : elle se met en pause dès qu'on écoute de la musique ou
-      que le serveur est chargé, et reprend après.
-    </p>
   </section>
 
   {#if explorer}
@@ -313,17 +306,12 @@
         <input type="checkbox" bind:checked={explorer.enabled} on:change={saveExplorer} />
         <span>
           <strong>Chercher de nouveaux sons en arrière-plan</strong>
-          <span class="st-dim sw-sub">
-            Uniquement des genres que l'analyseur sait reconnaître, vérifiés sur l'extrait de 30 s,
-            jamais pendant que vous écoutez. Le Flow et les radios les proposent comme découvertes.
-          </span>
         </span>
       </label>
       <label class="switch top" class:dim={!explorer.enabled}>
         <input type="checkbox" bind:checked={explorer.archive} on:change={saveExplorer} disabled={!explorer.enabled} />
         <span>
           <strong>Archiver tout ce qui est trouvé</strong>
-          <span class="st-dim sw-sub">Par défaut non : un titre n'est archivé que si vous l'écoutez ou l'aimez.</span>
         </span>
       </label>
       <p class="st-dim foot">
@@ -399,7 +387,6 @@
   .switch.top { align-items: flex-start; padding: 6px 0; }
   .switch.top input { margin-top: 3px; flex: none; }
   .switch.top > span { display: grid; gap: 2px; }
-  .sw-sub { font-size: 0.82rem; line-height: 1.4; }
   .switch.dim { opacity: 0.5; }
   .fld { display: inline-flex; align-items: center; gap: 8px; }
   .fld.dim { opacity: 0.45; }

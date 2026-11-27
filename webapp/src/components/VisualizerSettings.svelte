@@ -41,7 +41,7 @@
   import { push } from "svelte-spa-router";
   import { MODES, effectiveMode, needsWave } from "../lib/viz/modes.js";
   import { PALETTES } from "../lib/viz/palette.js";
-  import { TIERS, autoTier } from "../lib/viz/quality.js";
+  import { TIERS } from "../lib/viz/quality.js";
   import { LEVEL, subscribeFrames, readout, delivery } from "../lib/audio/engine.js";
   import { LOOKAHEAD_MAX, getContext } from "../lib/audio/graph.js";
   import { reportedLag } from "../lib/audio/latency.js";
@@ -58,10 +58,10 @@
   import TrimControl from "./TrimControl.svelte";
 
   const FPS_CHOICES = [
-    { v: 30, label: "30", hint: "Le plus économe" },
-    { v: 45, label: "45", hint: "Bon compromis" },
-    { v: 60, label: "60", hint: "Fluide" },
-    { v: 0, label: "Écran", hint: "Sans limite (120 Hz…)" },
+    { v: 30, label: "30" },
+    { v: 45, label: "45" },
+    { v: 60, label: "60" },
+    { v: 0, label: "Écran" },
   ];
 
   const KICK_LABEL = { soft: "souple", hard: "dur", industrial: "industriel" };
@@ -71,10 +71,10 @@
   // the exception — a strobe on the kicks, past that threshold — so it is only
   // ever set through the warning below, and only once that has been accepted.
   const FLASH_CHOICES = [
-    { v: "off", label: "Aucun", hint: "Rien ne clignote, jamais" },
-    { v: "soft", label: "Doux", hint: "Une lueur sur les drops" },
-    { v: "full", label: "Plein", hint: "Le vrai éclair de scène" },
-    { v: "unleashed", label: "Débridé", hint: "Un stroboscope sur les frappes — sous avertissement" },
+    { v: "off", label: "Aucun" },
+    { v: "soft", label: "Doux" },
+    { v: "full", label: "Plein" },
+    { v: "unleashed", label: "Débridé" },
   ];
   let flashWarning = false;
   let reducedMotion = false;
@@ -98,18 +98,17 @@
   // launch never parses it, and importing it for two arrays of labels would
   // hoist the whole scene back into the settings chunk.
   const SCOPE_AXES = [
-    { v: "horizontal", label: "Horizontal", hint: "Deux bandes, l'une sous l'autre" },
-    { v: "vertical", label: "Vertical", hint: "Deux colonnes, côte à côte" },
+    { v: "horizontal", label: "Horizontal" },
+    { v: "vertical", label: "Vertical" },
   ];
   const SCOPE_TINTS = [
-    { v: "duo", label: "Deux teintes", hint: "Gauche et droite aux deux bouts de la palette" },
-    { v: "mono", label: "Une teinte", hint: "Les deux voies sur la couleur de base" },
-    { v: "sweep", label: "Dégradé", hint: "La teinte parcourt la trace, comme les barres" },
+    { v: "duo", label: "Deux teintes" },
+    { v: "mono", label: "Une teinte" },
+    { v: "sweep", label: "Dégradé" },
   ];
 
   $: mode = effectiveMode($vizMode, $vizBeatDetect, $ecoMode);
   $: degraded = mode !== $vizMode && !$ecoMode;
-  $: autoLabel = autoTier();
   // "Aucune" means none — including here. A preview that keeps a canvas alive
   // to show what the user just switched OFF is exactly the kind of pointless
   // work this setting exists to stop.
@@ -197,10 +196,6 @@
 
 <section class="card">
   <h2><Icon name="maximize" size={18} /> Animations</h2>
-  <p class="sub muted">
-    Ce que le lecteur plein écran affiche pendant la lecture. Tout se règle ici et
-    l'aperçu suit en direct.
-  </p>
 
   {#if showPreview}
     <div class="preview" class:idle={!previewLive}>
@@ -219,7 +214,7 @@
         flash={$vizFlash}
       />
       {#if !previewLive}
-        <span class="ph">Lancez un titre pour voir l'aperçu</span>
+        <span class="ph">Aperçu pendant la lecture.</span>
       {/if}
     </div>
   {:else}
@@ -237,11 +232,6 @@
   <div class="block eco-row">
     <div class="block-head">
       <span class="block-title">Mode éco</span>
-      <span class="block-hint muted">
-        Coupe toutes les animations d'un coup — le visualiseur, le fondu de la
-        pochette en arrière-plan et la ligne de paroles qui défile — sans perdre
-        vos réglages. Le même bouton est dans le lecteur plein écran.
-      </span>
     </div>
     <label class="sw">
       <input type="checkbox" checked={$ecoMode} on:change={(e) => ecoMode.set(e.target.checked)} />
@@ -253,9 +243,6 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Type d'animation</span>
-      <span class="block-hint muted">
-        « Aucune » rend le lecteur d'origine, sans canvas ni analyse.
-      </span>
     </div>
     <div class="modes" class:overridden={$ecoMode}>
       {#each MODES as m}
@@ -285,10 +272,6 @@
     <div class="block">
       <div class="block-head">
         <span class="block-title">Monde</span>
-        <span class="block-hint muted">
-          Chaque genre a son monde et ses couleurs. Épinglez-en un pour le garder quel
-          que soit le morceau : il prend quand même la teinte du genre qui passe.
-        </span>
       </div>
       <WorldPicker
         value={$vizWorld}
@@ -308,20 +291,12 @@
     <div class="block">
       <div class="block-head">
         <span class="block-title">Oscilloscope</span>
-        <span class="block-hint muted">
-          Une trace par canal, déclenchée sur le grave comme un vrai oscilloscope —
-          l'image tient en place au lieu de glisser. La précision suit le niveau de
-          détail plus bas : à « ultra » chaque échantillon est tracé, avec un
-          déclenchement au sous-échantillon. Les couleurs viennent de la palette
-          choisie ci-dessous.
-        </span>
       </div>
       <div class="seg">
         {#each SCOPE_AXES as o}
           <button
             class="seg-btn"
             class:sel={$vizScopeOrientation === o.v}
-            title={o.hint}
             on:click={() => vizScopeOrientation.set(o.v)}>{o.label}</button
           >
         {/each}
@@ -331,7 +306,6 @@
           <button
             class="seg-btn"
             class:sel={$vizScopeColour === c.v}
-            title={c.hint}
             on:click={() => vizScopeColour.set(c.v)}>{c.label}</button
           >
         {/each}
@@ -342,9 +316,6 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Couleurs</span>
-      <span class="block-hint muted">
-        « Spectre » teinte selon l'équilibre grave/aigu et fait tourner la couleur au tempo.
-      </span>
     </div>
     <div class="seg">
       {#each PALETTES as p}
@@ -358,7 +329,7 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Intensité</span>
-      <span class="block-hint muted">L'ampleur du mouvement, pas la luminosité.</span>
+      <span class="block-hint muted">Ampleur du mouvement.</span>
     </div>
     <div class="slider-row">
       <input
@@ -378,14 +349,7 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title"><Icon name="zap" size={15} /> Flashs</span>
-      <span class="block-hint muted">
-        L'éclair qui accompagne un drop ou une grosse frappe. Même en « Plein », jamais
-        plus de trois par seconde : au-delà, une lumière qui clignote devient un risque
-        pour les personnes photosensibles. « Débridé » lève cette limite et fait de
-        l'animation un stroboscope calé sur les frappes, après un avertissement à
-        accepter. Coupés d'office si l'appareil demande de réduire les animations. Vaut
-        aussi pour l'écran séparé.
-      </span>
+      <span class="block-hint muted">Trois flashs par seconde au maximum.</span>
     </div>
     <div class="seg">
       {#each FLASH_CHOICES as f}
@@ -393,7 +357,6 @@
           class="seg-btn"
           class:sel={$vizFlash === f.v}
           class:hot={f.v === "unleashed"}
-          title={f.hint}
           on:click={() => pickFlash(f.v)}
           >{#if f.v === "unleashed"}<Icon name="zap" size={13} />{/if}{f.label}</button
         >
@@ -404,10 +367,6 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Fond animé dans le lecteur</span>
-      <span class="block-hint muted">
-        L'animation remplace la pochette floutée en arrière-plan. Décoché, elle reste
-        confinée à sa bande.
-      </span>
     </div>
     <label class="sw">
       <input type="checkbox" checked={$vizFullBleed} on:change={(e) => vizFullBleed.set(e.target.checked)} />
@@ -418,34 +377,18 @@
 
 <section class="card">
   <h2><Icon name="activity" size={18} /> Analyse rythmique</h2>
-  <p class="sub muted">
-    Tempo, grille de temps, type de kick et style. C'est ce qui permet aux animations
-    de tomber juste plutôt que de réagir après coup. Le tempo et le style sont
-    mesurés une fois par le serveur sur le morceau entier — l'animation est donc
-    juste dès la première mesure ; ici on ne cherche plus que la phase, le kick et
-    les frappes, qui sont les seules choses réellement instantanées.
-  </p>
 
   <div class="block">
     <label class="sw">
       <input type="checkbox" checked={$vizBeatDetect} on:change={(e) => vizBeatDetect.set(e.target.checked)} />
       <span>Activer l'analyse</span>
     </label>
-    <p class="block-hint muted">
-      Quelques centaines de microsecondes par image. Désactivée, les modes qui en
-      dépendent basculent sur « Aurore ».
-    </p>
   </div>
 
   <div class="block" class:off={!$vizBeatDetect}>
     <div class="block-head">
       <span class="block-title">Compensation de latence</span>
-      <span class="block-hint muted">
-        Le système annonce combien de temps le son met à sortir de vos enceintes,
-        et chaque image attend son son. Une frappe demande environ 45 ms d'écoute
-        pour être sûre : si la sortie est plus courte, l'automatique retarde le son
-        de ce qui manque, trop lentement pour que ça s'entende.
-      </span>
+      <span class="block-hint muted">Cale l'image sur le son.</span>
     </div>
     <div class="seg">
       <button class="seg-btn" class:sel={autoLead} disabled={!$vizBeatDetect} on:click={() => vizLookaheadMode.set("auto")}>
@@ -497,7 +440,7 @@
       </div>
     </div>
     {#if !$delivery.measured}
-      <p class="block-hint muted mt">Les mesures s'affichent pendant la lecture.</p>
+      <p class="block-hint muted mt">Mesures pendant la lecture.</p>
     {/if}
   </div>
 
@@ -506,12 +449,7 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Décalage de la sortie</span>
-      <span class="block-hint muted">
-        Pour ce que le système ne voit pas : une enceinte Bluetooth qui n'annonce
-        pas sa latence, une barre de son, un ampli. Les animations et les paroles
-        tombent avant le son ? Avancez. Après ? Retardez. Vaut pour cet appareil,
-        et pour la soirée d'écoute aussi.
-      </span>
+      <span class="block-hint muted">Pour une sortie qui retarde.</span>
     </div>
     <TrimControl value={$outputTrim} reported={reportedMs} on:change={(e) => outputTrim.set(e.detail)} />
   </div>
@@ -556,11 +494,6 @@
     <div class="studio">
       <div>
         <strong>Studio de genres</strong>
-        <p class="muted">
-          Le classifieur ci-dessus connaît les styles avec lesquels il a été écrit.
-          Si le vôtre lui échappe — un sous-genre, une scène, votre propre découpage —
-          créez-le, étiquetez quelques titres et entraînez le modèle ici même.
-        </p>
       </div>
       <button class="studio-btn" on:click={() => push("/genres")}>
         <Icon name="sliders" size={16} /> Ouvrir
@@ -571,10 +504,6 @@
 
 <section class="card">
   <h2><Icon name="monitor" size={18} /> Rendu</h2>
-  <p class="sub muted">
-    « Auto » lit l'appareil (ici : <strong>{autoLabel}</strong>) et redescend d'un cran
-    tout seul si une image prend trop de temps.
-  </p>
 
   <div class="block">
     <div class="block-head"><span class="block-title">Niveau de détail</span></div>
@@ -593,15 +522,10 @@
   <div class="block">
     <div class="block-head">
       <span class="block-title">Images par seconde</span>
-      <span class="block-hint muted">
-        L'analyse tourne à part, à sa propre cadence : baisser ce plafond n'a jamais
-        fait rater un temps.
-      </span>
     </div>
     <div class="seg">
       {#each FPS_CHOICES as f}
-        <button class="seg-btn" class:sel={$vizFps === f.v} on:click={() => vizFps.set(f.v)} title={f.hint}
-          >{f.label}</button
+        <button class="seg-btn" class:sel={$vizFps === f.v} on:click={() => vizFps.set(f.v)}           >{f.label}</button
         >
       {/each}
     </div>
@@ -610,11 +534,6 @@
 
 <section class="card">
   <h2><Icon name="cast" size={18} /> Écran séparé</h2>
-  <p class="sub muted">
-    Ouvre l'animation dans une seconde fenêtre, à poser sur un vidéoprojecteur ou un
-    grand écran et à passer en plein écran. Rien n'y est lu : c'est cet onglet qui
-    joue et qui lui envoie son analyse, au même instant.
-  </p>
   <div class="row-actions">
     <button class="primary" on:click={openScreen}>
       <Icon name="maximize" size={16} /> Ouvrir l'écran d'animation
@@ -625,20 +544,10 @@
       </button>
     {/if}
   </div>
-  <p class="sub muted tight">
-    Les deux sont séparés : le lecteur peut être sur <em>Aucune</em> pendant que
-    l'écran dédié tourne. L'analyse du son, elle, n'a lieu qu'UNE fois — dans cet
-    onglet, au niveau du plus exigeant des deux — donc le genre, le tempo et la
-    grille sont les mêmes des deux côtés, par construction.
-  </p>
 
   <div class="block">
     <div class="block-head">
       <span class="block-title">Réglages de cet écran</span>
-      <span class="block-hint muted">
-        Indépendants de ceux du lecteur : un grand écran mérite une autre réponse
-        qu'un téléphone. Ils se règlent aussi depuis la fenêtre elle-même.
-      </span>
     </div>
     <div class="seg">
       {#each MODES.filter((m) => m.id !== "off") as m}

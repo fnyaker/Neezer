@@ -930,7 +930,6 @@
               class="members-stack"
               on:click={() => (showMembers = true)}
               aria-label={`Voir les collaborateurs (${memberCount})`}
-              title="Voir les collaborateurs"
             >
               <span class="faces" aria-hidden="true">
                 {#each stack as m (m.id || m.name)}
@@ -968,8 +967,7 @@
           class="btn btn-ghost"
           on:click={() => (showAdd = true)}
           disabled={!ready}
-          aria-label="Ajouter des titres"
-          title="Ajouter des titres"><Icon name="plus" size={16} /> Ajouter des titres</button>
+          aria-label="Ajouter des titres"><Icon name="plus" size={16} /> Ajouter des titres</button>
         <button
           class="btn"
           class:btn-primary={editing}
@@ -992,15 +990,13 @@
       {#if stale}
         <button
           class="btn btn-ghost stale"
-          on:click={refreshStale}
-          title="Recharger la playlist"
-        >
+          on:click={refreshStale}>
           <Icon name="refresh" size={16} />
           {stale.by ? `Modifiée par ${stale.by} — actualiser` : "La playlist a changé — actualiser"}
         </button>
       {/if}
       {#if menuItems.length}
-        <button class="btn btn-icon" on:click={openActions} aria-label="Plus d'actions : exporter, collaborateurs, renommer, supprimer" title="Plus d'actions">
+        <button class="btn btn-icon" on:click={openActions} aria-label="Plus d'actions : exporter, collaborateurs, renommer, supprimer">
           <Icon name="more" size={20} />
         </button>
       {/if}
@@ -1029,7 +1025,7 @@
           </select>
           <Icon name="chevronDown" size={15} />
         </span>
-        <button class="btn btn-icon" class:rev={plDir === -1} on:click={() => (plDir = -plDir)} aria-label="Inverser l'ordre" title="Inverser l'ordre">
+        <button class="btn btn-icon" class:rev={plDir === -1} on:click={() => (plDir = -plDir)} aria-label="Inverser l'ordre">
           <Icon name="sort" size={17} />
         </button>
       </div>

@@ -195,7 +195,6 @@
       <header>
         <div class="ttl">
           <h2 id="flow-panel-title">Orienter le Flow</h2>
-          <p>Les genres sur lesquels il s'appuie, et jusqu'où il peut s'en écarter.</p>
         </div>
         <button type="button" class="x" on:click={closePanel} aria-label="Fermer">
           <Icon name="close" size={18} />

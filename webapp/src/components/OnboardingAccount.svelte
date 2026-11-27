@@ -323,7 +323,6 @@
 <div class="account">
   <header class="intro">
     <h1>Reliez ce que vous écoutez ailleurs</h1>
-    <p class="sub">Chaque option est facultative. Rien n'est publié ni modifié sur vos comptes.</p>
   </header>
 
   {#if notice}
@@ -357,7 +356,7 @@
     {#if importInFlight}
       <p class="queued">
         <Icon name="refresh" size={14} />
-        <span>Un import est déjà en cours. Attendez qu'il finisse pour en lancer un autre.</span>
+        <span>Un import est déjà en cours.</span>
       </p>
     {/if}
     <div class="cards" in:fadeIn>
@@ -374,10 +373,6 @@
             <span class="glyph"><Icon name="music" size={20} /></span>
             <div class="titles">
               <h2>Deezer</h2>
-              <p>
-                Retrouvez vos artistes suivis, vos titres aimés et vos playlists. Le compte est lu,
-                jamais modifié.
-              </p>
             </div>
           </div>
           {#if dzState}
@@ -389,11 +384,9 @@
             </p>
           {/if}
           {#if dz && dz.account && dz.available}
-            <p class="hint">
-              {dz.account.running && dz.account.running.running
-                ? "L'import de votre compte continue sur le serveur. Vous pouvez quitter cette page."
-                : "Votre compte est relié : ses nouveaux éléments sont importés automatiquement."}
-            </p>
+            {#if dz.account.running && dz.account.running.running}
+              <p class="hint">Import en cours sur le serveur.</p>
+            {/if}
           {:else if dz && open !== "deezer" && dz.can_link}
             <button
               class="primary"
@@ -412,13 +405,8 @@
               autocapitalize="none"
               spellcheck="false"
               bind:value={arl}
-              aria-describedby="ob-arl-help"
               placeholder="Collez votre ARL"
             />
-            <p class="hint" id="ob-arl-help">
-              Votre ARL vaut une session : il est chiffré sur le serveur et ne sert qu'à lire vos
-              favoris.
-            </p>
             <button
               class="primary"
               type="button"
@@ -450,10 +438,6 @@
             <span class="glyph"><Icon name="youtube" size={20} /></span>
             <div class="titles">
               <h2>YouTube Music</h2>
-              <p>
-                Importez vos playlists et vos favoris. La connexion se fait depuis un ordinateur,
-                avec les en-têtes d'une session ouverte.
-              </p>
             </div>
           </div>
           {#if ytState}
@@ -465,11 +449,9 @@
             </p>
           {/if}
           {#if yt && yt.account && yt.available}
-            <p class="hint">
-              {yt.account.running && yt.account.running.running
-                ? "L'import de votre compte continue sur le serveur. Vous pouvez quitter cette page."
-                : "Votre compte est relié : ses nouveaux éléments sont importés automatiquement."}
-            </p>
+            {#if yt.account.running && yt.account.running.running}
+              <p class="hint">Import en cours sur le serveur.</p>
+            {/if}
           {:else if yt && yt.can_link && open !== "youtube"}
             <button
               class="primary"
@@ -487,14 +469,9 @@
               spellcheck="false"
               autocapitalize="none"
               bind:value={headers}
-              aria-describedby="ob-yt-help"
               placeholder="cookie: …&#10;authorization: …"
             ></textarea>
-            <p class="hint" id="ob-yt-help">
-              Copiez les en-têtes d'une requête browse de music.youtube.com, connecté. Ils valent une
-              session : ils sont chiffrés sur le serveur.
-            </p>
-            <p class="hint">Cette connexion se fait depuis un ordinateur. Sur téléphone, importez plutôt une playlist.</p>
+            <p class="hint">Depuis un ordinateur uniquement.</p>
             <button
               class="primary"
               type="button"
@@ -526,10 +503,6 @@
             <span class="glyph"><Icon name="link" size={20} /></span>
             <div class="titles">
               <h2>Playlist publique</h2>
-              <p>
-                Importez une playlist publique par son lien. Les favoris d'un compte Spotify ne sont
-                pas accessibles sans application développeur.
-              </p>
             </div>
           </div>
 
@@ -555,7 +528,7 @@
                   <span style={`transform:scaleX(${Math.max(0, Math.min(100, progress.percent)) / 100})`}></span>
                 </div>
               {/if}
-              <p class="hint">L'import continue sur le serveur si vous quittez cette page.</p>
+              <p class="hint">Import en cours sur le serveur.</p>
             {:else if progress.done}
               {#if missed}
                 <details class="missed">
@@ -611,13 +584,8 @@
               autocapitalize="none"
               spellcheck="false"
               bind:value={url}
-              aria-describedby="ob-url-help"
               placeholder="https://open.spotify.com/playlist/…"
             />
-            <p class="hint" id="ob-url-help">
-              Deezer, Spotify, Apple Music ou YouTube. Les titres sont rapprochés de votre
-              bibliothèque ; rien n'est enregistré avant votre accord.
-            </p>
             <button class="primary" type="button" disabled={busy === "playlist"} on:click={startImport}>
               {busy === "playlist" ? "Analyse…" : "Importer"}
             </button>
@@ -631,8 +599,6 @@
         {/if}
       </article>
     </div>
-
-    <p class="foot">Vous pourrez relier ces comptes plus tard dans Réglages, puis Sources.</p>
   {/if}
 </div>
 
@@ -656,13 +622,6 @@
     font-weight: 700;
     line-height: 1.15;
     letter-spacing: -0.03em;
-  }
-  .sub {
-    margin: 0;
-    max-width: 62ch;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.45;
   }
   .notice {
     display: flex;
@@ -738,12 +697,6 @@
     font-size: 18px;
     font-weight: 700;
     letter-spacing: -0.02em;
-  }
-  .titles p {
-    margin: 0;
-    color: var(--dim);
-    font-size: 13.5px;
-    line-height: 1.45;
   }
   .state {
     display: flex;
@@ -977,12 +930,6 @@
     margin: 0;
     padding: 0;
   }
-  .foot {
-    margin: 0 0 8px;
-    color: var(--dim);
-    font-size: 12.5px;
-    line-height: 1.45;
-  }
   @media (min-width: 900px) {
     .cards {
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -993,9 +940,6 @@
     h1 {
       font-size: 40px;
       line-height: 1.1;
-    }
-    .sub {
-      font-size: 15px;
     }
   }
   @media (prefers-reduced-motion: reduce) {

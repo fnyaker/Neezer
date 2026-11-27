@@ -157,14 +157,6 @@
     choosing = false;
   }
 
-  // Lot P3: what this account is used for, besides the import.
-  function useLine(a) {
-    if (a.provider !== "deezer" || a.server || a.status === "auth" || a.status === "broken") return "";
-    if (a.lossless === false)
-      return "Vos recherches et vos pages Deezer passent par ce compte. Sans FLAC (offre gratuite), la musique est récupérée par un autre compte.";
-    return "Vos recherches, vos pages et votre musique Deezer passent par ce compte.";
-  }
-
   const title = (a) => (a.server ? `${a.name} · compte du serveur` : a.name);
 
   async function toggleAuto(a, kind) {
@@ -258,12 +250,6 @@
 
 <section class="card">
   <h2>Mes comptes</h2>
-  <p class="muted sub">
-    Reliez votre propre compte pour retrouver ici vos artistes suivis (ils alimentent
-    Nouveautés), vos titres aimés, vos albums et vos playlists. Chaque élément n'est importé
-    qu'une fois&nbsp;: ce que vous retirez ici n'est jamais remis, et rien n'est jamais écrit
-    sur votre compte.
-  </p>
 
   {#if failed}
     <p class="muted" role="alert">Impossible de lire vos comptes&nbsp;: {failed}. <button class="link" on:click={load}>Réessayer</button></p>
@@ -287,10 +273,9 @@
         </div>
         <p class="fine muted hint">
           {#if data.default}
-            Ses favoris sont relus chaque jour et ce qui est nouveau est ajouté. Les autres comptes
-            ne sont importés que lorsque vous le demandez.
+            Un seul compte relu chaque jour.
           {:else}
-            Aucun compte n'est relu automatiquement&nbsp;: vous importez quand vous le demandez.
+            Aucun compte relu automatiquement.
           {/if}
         </p>
       </div>
@@ -308,7 +293,6 @@
             {#if !a.running}
               <span class="muted st" class:warn={a.status === "auth" || a.status === "broken"}>{statusLine(a)}</span>
             {/if}
-            {#if useLine(a)}<span class="muted st">{useLine(a)}</span>{/if}
           </span>
         </header>
 
@@ -324,7 +308,7 @@
               <span data-motion="status" style={`transform:scaleX(${p.share === null ? 1 : Math.max(0.02, p.share)})`}></span>
             </div>
             <span class="st">{p.text}</span>
-            <span class="fine muted">L'import continue sur le serveur si vous quittez cette page.</span>
+            <span class="fine muted">Import en cours sur le serveur.</span>
           </div>
         {/if}
 
@@ -362,7 +346,6 @@
           <span class="glyph"><Icon name="music" size={18} /></span>
           <span class="txt">
             <span class="nm">Deezer</span>
-            <span class="muted st">Votre compte, pour vos favoris et vos playlists à vous.</span>
           </span>
           {#if !linking}
             <button class="pill" on:click={() => (native ? linkNative() : (linking = true))}>Relier</button>
@@ -381,9 +364,7 @@
             <button class="ghost-btn quiet" type="button" on:click={() => ((linking = false), (arl = ""))}>Annuler</button>
           </form>
           <p class="fine muted">
-            L'ARL est le cookie <code>arl</code> de deezer.com une fois connecté (outils de développement
-            du navigateur → Stockage → Cookies). C'est la clé de votre compte : il reste chiffré sur le
-            serveur et n'est montré à personne.
+            Votre cookie arl de deezer.com.
           </p>
         {/if}
       </article>
@@ -392,7 +373,7 @@
     {#if !hasYoutube}
       <p class="fine muted yt">
         <Icon name="youtube" size={15} />
-        <span>YouTube Music&nbsp;: reliez votre session dans Compte → Services de streaming&nbsp;; elle sert aussi à l'import.</span>
+        <span>Reliez YouTube dans Services de streaming.</span>
       </p>
     {/if}
   {/if}
@@ -412,11 +393,6 @@
   .card h2 {
     margin-top: 0;
     font-size: 1.05rem;
-  }
-  .sub {
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin: 4px 0 14px;
   }
   .fine {
     font-size: 0.78rem;

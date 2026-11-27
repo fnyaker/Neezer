@@ -883,7 +883,6 @@
         <header class="head">
           <div class="titles">
             <h1>Quels artistes écoutez-vous ?</h1>
-            <p>Choisissez-en au moins un. Trois à cinq nous donnent un bon départ.</p>
           </div>
           <div class="searchwrap">
             <label class="sr" for="ob-search">Chercher un artiste</label>
@@ -917,7 +916,6 @@
               {/each}
             </span>
             <span class="count">{artistCountLabel(likedTotal)}</span>
-            <span class="hint">{progressHint(likedTotal)}</span>
           </div>
           <p class="sr" role="status" aria-live="polite">
             {artistCountLabel(likedTotal)}. {progressHint(likedTotal)}{insertNote ? ` ${insertNote}.` : ""}
@@ -997,10 +995,6 @@
             </div>
             {#if canPass}
               <div class="escape">
-                <p>
-                  En passant, vos recommandations resteront génériques au début. Vous pourrez suivre
-                  des artistes plus tard.
-                </p>
                 <button class="ghost" type="button" on:click={passArtists}>Passer pour l'instant</button>
               </div>
             {/if}
@@ -1213,13 +1207,6 @@
     font-weight: 700;
     line-height: 1.15;
     letter-spacing: -0.03em;
-  }
-  .titles p {
-    margin: 0;
-    max-width: 56ch;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.45;
   }
   .searchwrap {
     position: relative;
@@ -1444,13 +1431,6 @@
     border-top: 1px solid var(--ln);
     width: 100%;
   }
-  .escape p {
-    margin: 0;
-    max-width: 46ch;
-    color: var(--dim);
-    font-size: 12.5px;
-    line-height: 1.45;
-  }
   .preparing {
     text-align: center;
   }
@@ -1552,9 +1532,6 @@
     h1 {
       font-size: 40px;
       line-height: 1.1;
-    }
-    .titles p {
-      font-size: 15px;
     }
   }
   @media (min-width: 1100px) {

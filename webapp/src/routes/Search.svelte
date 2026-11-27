@@ -670,7 +670,6 @@
       class:chip-active={scope === "podcasts"}
       aria-pressed={scope === "podcasts"}
       on:click={toggleShows}
-      title="Chercher dans les titres des émissions et le texte des épisodes transcrits"
       aria-label="Chercher dans les titres des émissions et le texte des épisodes transcrits"
     >
       Podcasts
@@ -684,7 +683,7 @@
     bind:this={inputEl}
     type="search"
     enterkeyhint="search"
-    placeholder={scope === "podcasts" ? "Rechercher dans les podcasts…" : "Titres, artistes, albums, podcasts…"}
+    placeholder={scope === "podcasts" ? "Rechercher dans les podcasts…" : "Rechercher"}
     aria-label={scope === "podcasts" ? "Rechercher dans les podcasts" : "Rechercher un titre, un artiste, un album ou un podcast"}
     bind:value={q}
     on:input={onInput}
@@ -716,12 +715,11 @@
     <span class="s-icon"><Icon name="link" size={20} /></span>
     <span class="s-text">
       <strong>Importer cette playlist {shared.label}</strong>
-      <span class="muted">Retrouver ses titres pour les écouter ici, et la garder si tu veux.</span>
     </span>
   </a>
 {/if}
 
-{#if !q.trim() && !shared}
+{#if !q.trim() && !shared && (recent.length || scope !== "podcasts")}
   <div class="landing">
     {#if recent.length}
       <section class="recents">
@@ -731,21 +729,14 @@
         </div>
         <div class="recent-chips">
           {#each recent as term (term)}
-            <button class="chip" on:click={() => useRecent(term)} title="Rechercher {term}">
+            <button class="chip" on:click={() => useRecent(term)}>
               <Icon name="search" size={14} /> {term}
             </button>
           {/each}
         </div>
       </section>
-    {:else if scope === "library"}
-      <p class="muted lead">
-        Cherche un titre, un artiste, un album ou un podcast — les titres de ta bibliothèque
-        d'abord, puis le catalogue, et YouTube quand il a ce que le catalogue n'a pas.
-      </p>
     {/if}
-    {#if scope === "podcasts"}
-      <p class="muted lead">Tape un mot pour chercher dans le texte des épisodes transcrits.</p>
-    {:else}
+    {#if scope !== "podcasts"}
       <ExplorerStyles />
     {/if}
   </div>
@@ -833,7 +824,7 @@
         </p>
       {/if}
       {#if !trBusy && !trLocal && trMore}
-        <p class="tr-scope">20 passages affichés — la recherche s'arrête là.</p>
+        <p class="tr-scope">20 passages affichés.</p>
       {/if}
 
       {#if trBusy}
@@ -845,10 +836,6 @@
           <p class="muted hint">Aucun passage parlé pour « {q.trim()} ».</p>
         {:else}
           <p class="muted hint">Rien pour « {q.trim()} » dans les podcasts.</p>
-          <p class="muted hint">
-            La recherche porte sur les titres des émissions et sur le texte des épisodes déjà
-            transcrits.
-          </p>
         {/if}
       {/if}
     {/if}
@@ -856,7 +843,7 @@
     {#if loading}
       <Skeleton kind="shelf" />
     {:else if !q.trim()}
-      <p class="muted hint">Tape un mot pour chercher un podcast.</p>
+      <!-- Before typing there is nothing to list: the field is the screen. -->
     {:else if loadError}
       <LoadFailed error={loadError} inline on:retry={() => run(searchedFor || q.trim())} />
     {:else if shows.length}

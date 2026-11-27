@@ -151,8 +151,6 @@
             <h2>Listen party</h2>
             {#if host}
               <span class="live-line"><span class="dot"></span>En direct · {count === 0 ? "personne à l'écoute" : count === 1 ? "1 personne à l'écoute" : `${count} personnes à l'écoute`}</span>
-            {:else}
-              <span class="muted sub">La même musique, au même instant, sur chaque appareil.</span>
             {/if}
           </div>
         </div>
@@ -160,20 +158,6 @@
       </header>
 
       {#if !host}
-        <div class="intro">
-          <div class="point">
-            <Icon name="link" size={18} />
-            <p>Partagez un lien. Ceux qui l'ouvrent entendent ce que vous jouez, calé à la milliseconde près — sans compte.</p>
-          </div>
-          <div class="point">
-            <Icon name="users" size={18} />
-            <p>Dans une même pièce, chaque téléphone devient une enceinte de plus.</p>
-          </div>
-          <div class="point">
-            <Icon name="music" size={18} />
-            <p>Vous gardez la main : ils suivent vos titres, vos pauses et vos enchaînements.</p>
-          </div>
-        </div>
         {#if $current}
           <div class="now">
             <Cover src={$current.album?.cover} alt={$current.title} size={44} kind={$current.podcast ? "podcast" : "album"} fallbackId={trackRef($current)} />
@@ -190,10 +174,10 @@
         </footer>
       {:else}
         {#if host.elsewhere}
-          <p class="note"><Icon name="info" size={16} /> Cette party est animée depuis un autre onglet : c'est lui qui donne le tempo.</p>
+          <p class="note"><Icon name="info" size={16} /> Animée depuis un autre onglet.</p>
         {/if}
         {#if host.lost}
-          <p class="note warn"><Icon name="alert" size={16} /> Le serveur a redémarré et le lien a changé — partagez le nouveau.</p>
+          <p class="note warn"><Icon name="alert" size={16} /> Lien changé — partagez le nouveau.</p>
         {/if}
 
         <div class="invite">
@@ -208,7 +192,7 @@
             {/if}
           </div>
           <div class="linkcol">
-            <span class="lbl muted">Scannez, ou envoyez le lien</span>
+            <span class="lbl muted">Lien de la party</span>
             <button class="link" on:click={copy} title="Copier le lien">
               <span class="url">{host.link.replace(/^https?:\/\//, "")}</span>
               <Icon name="copy" size={16} />
@@ -223,7 +207,7 @@
         <section class="people">
           <h3>À l'écoute</h3>
           {#if count === 0}
-            <p class="muted empty">Personne pour l'instant. Dès qu'un invité ouvre le lien, il apparaît ici.</p>
+            <p class="muted empty">Personne pour l'instant.</p>
           {:else}
             <ul>
               {#each host.listeners as l (l.id)}
@@ -320,9 +304,6 @@
     font-weight: 800;
     letter-spacing: -0.01em;
   }
-  .sub {
-    font-size: 0.86rem;
-  }
   .live-line {
     display: inline-flex;
     align-items: center;
@@ -358,24 +339,6 @@
     background: var(--bg-hover);
   }
 
-  .intro {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .point {
-    display: grid;
-    grid-template-columns: 22px 1fr;
-    gap: 12px;
-    align-items: start;
-    color: var(--accent);
-  }
-  .point p {
-    margin: 0;
-    color: var(--text);
-    font-size: 0.92rem;
-    line-height: 1.45;
-  }
   .now {
     display: flex;
     align-items: center;

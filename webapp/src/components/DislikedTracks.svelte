@@ -51,11 +51,6 @@
 
 <section class="card">
   <h2>Titres que vous n'aimez pas</h2>
-  <p class="muted sub">
-    Ils ne reviennent plus dans le Flow, les radios et les mixes, ni les titres qui sonnent
-    presque pareil&nbsp;; les plus lointains sont seulement moins souvent proposés. Vous pouvez
-    toujours les chercher et les écouter vous-même.
-  </p>
   {#if failed}
     <div class="state">
       <span class="muted">Liste indisponible pour l'instant.</span>
@@ -66,7 +61,7 @@
   {:else if !tracks.length}
     <div class="state empty">
       <Icon name="thumbsDown" size={18} />
-      <span class="muted">Aucun pour l'instant. Touchez <strong>Je n'aime pas</strong> dans le lecteur ou le menu d'un titre.</span>
+      <span class="muted">Aucun pour l'instant.</span>
     </div>
   {:else}
     <ul class="list" in:fadeIn>
@@ -106,11 +101,6 @@
   .card h2 {
     margin-top: 0;
     font-size: 1.05rem;
-  }
-  .sub {
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin: 4px 0 12px;
   }
   .ghost-btn {
     flex: none;

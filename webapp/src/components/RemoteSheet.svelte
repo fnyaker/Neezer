@@ -228,8 +228,6 @@
             <h2>Contrôle à distance</h2>
             {#if live > 0}
               <span class="live-line"><span class="dot"></span>{live === 1 ? "1 appareil pilote ce lecteur" : `${live} appareils pilotent ce lecteur`}</span>
-            {:else}
-              <span class="muted sub">Confiez ce lecteur à quelqu'un : il le pilote depuis son téléphone, avec la même app.</span>
             {/if}
           </div>
         </div>
@@ -253,7 +251,7 @@
               <Icon name={LEVEL_INFO[invite.level].icon} size={15} />
               {LEVEL_INFO[invite.level].name}{#if invite.label} · pour {invite.label}{/if}
             </span>
-            <span class="lbl muted">Scannez, ou envoyez le lien. {expiry(invite)}.</span>
+            <span class="lbl muted">{expiry(invite)}.</span>
             <button class="link" on:click={() => copy(invite)} title="Copier le lien">
               <span class="url">{linkOf(invite).replace(/^https?:\/\//, "")}</span>
               <Icon name="copy" size={16} />
@@ -280,7 +278,6 @@
                 <span class="li"><Icon name={LEVEL_INFO[l].icon} size={18} /></span>
                 <span class="lt">
                   <span class="ln">{LEVEL_INFO[l].name}</span>
-                  <span class="lb">{LEVEL_INFO[l].blurb}</span>
                 </span>
                 <span class="tick" aria-hidden="true">{#if level === l}<Icon name="check" size={14} />{/if}</span>
               </button>
@@ -297,7 +294,7 @@
           </div>
           <label class="row">
             <span class="rl">Pour</span>
-            <input type="text" maxlength="40" placeholder="Prénom, pour s'y retrouver (facultatif)" bind:value={label} />
+            <input type="text" maxlength="40" placeholder="Prénom (facultatif)" bind:value={label} />
           </label>
 
           <footer>
@@ -313,7 +310,7 @@
         {#if !loaded}
           <p class="muted empty">…</p>
         {:else if !links.length}
-          <p class="muted empty">Aucun lien sur ce lecteur. Celui que vous créez apparaît ici, avec qui s'en sert.</p>
+          <p class="muted empty">Aucun lien sur ce lecteur.</p>
         {:else}
           <ul>
             {#each links as l (l.id)}
@@ -325,8 +322,8 @@
                     {#if l.label}{LEVEL_INFO[l.level].short} · {/if}{expiry(l)}{#if l.controllers > 0} · <b class="ok">{l.controllers === 1 ? "connecté" : `${l.controllers} connectés`}</b>{/if}
                   </span>
                 </span>
-                <button class="mini" on:click={() => (invite = l)} title="Afficher le QR code" aria-label="Afficher le QR code"><Icon name="share" size={16} /></button>
-                <button class="mini danger" on:click={() => cut(l)} title="Couper ce lien" aria-label="Couper ce lien"><Icon name="close" size={16} /></button>
+                <button class="mini" on:click={() => (invite = l)} aria-label="Afficher le QR code"><Icon name="share" size={16} /></button>
+                <button class="mini danger" on:click={() => cut(l)} aria-label="Couper ce lien"><Icon name="close" size={16} /></button>
               </li>
             {/each}
           </ul>
@@ -409,10 +406,6 @@
     font-size: 1.15rem;
     font-weight: 800;
     letter-spacing: -0.01em;
-  }
-  .sub {
-    font-size: 0.86rem;
-    line-height: 1.4;
   }
   .live-line {
     display: inline-flex;
@@ -519,11 +512,6 @@
   .ln {
     font-weight: 750;
     font-size: 0.93rem;
-  }
-  .lb {
-    font-size: 0.8rem;
-    line-height: 1.4;
-    color: var(--text-dim);
   }
   .tick {
     position: absolute;

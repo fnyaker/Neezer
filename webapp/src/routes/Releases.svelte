@@ -70,18 +70,8 @@
   }
 
   export const SHELF_COPY = {
-    artists: {
-      title: "Tes artistes",
-      short: "Les sorties de tes favoris et des artistes que tu écoutes.",
-      description:
-        "Les sorties récentes des artistes que tu suis et de ceux que tu écoutes le plus.",
-    },
-    discovery: {
-      title: "Découverte",
-      short: "Des artistes proches de tes favoris, et d'autres à découvrir.",
-      description:
-        "Des artistes proches de tes favoris, et des sorties que tu n'as pas encore écoutées.",
-    },
+    artists: { title: "Tes artistes" },
+    discovery: { title: "Découverte" },
   };
 
   /**
@@ -126,16 +116,12 @@
       }
     }
 
-    const closeNames = [
-      ...new Set(buckets.discovery.releases.map((r) => r.close_to).filter(Boolean)),
-    ];
     return {
       artists: { key: "artists", releases: buckets.artists.releases, tracks: buckets.artists.tracks },
       discovery: {
         key: "discovery",
         releases: buckets.discovery.releases,
         tracks: buckets.discovery.tracks,
-        closeNames,
       },
     };
   }
@@ -182,7 +168,6 @@
     .map((key) => ({
       ...shelves[key],
       title: SHELF_COPY[key].title,
-      subtitle: SHELF_COPY[key].short,
     }))
     .filter((s) => s.tracks.length);
   $: listed = new Set(tracks.map((t) => t.release?.deezer_id).filter(Boolean));
@@ -308,10 +293,6 @@
 
 <div class="headline">
   <h1 class="page-title">Nouveautés</h1>
-  <p class="lead muted">
-    Les sorties récentes de tes artistes favoris, de ceux que tu écoutes le plus et de quelques
-    artistes très proches d'eux.
-  </p>
 </div>
 
 {#if loading && !items.length && !tracks.length}
@@ -335,9 +316,6 @@
       <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
     </svg>
     <p class="empty-title">Rien de neuf pour l'instant</p>
-    <p class="empty-text">
-      Ajoute des artistes à tes favoris : leurs prochaines sorties apparaîtront ici.
-    </p>
     <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
   </div>
 {:else}
@@ -370,12 +348,9 @@
         </button>
       </div>
       {#if showAll}
-        <p class="muted all-hint">Regroupées par sortie, la plus récente d'abord.</p>
         {#if pending}
           <p class="muted all-hint">
-            {pending} sortie{pending > 1 ? "s" : ""} n'{pending > 1 ? "ont" : "a"} pas encore
-            {pending > 1 ? "leurs" : "son"} titre{pending > 1 ? "s" : ""} : le serveur
-            {pending > 1 ? "les" : "le"} lit en arrière-plan.
+            {pending} sortie{pending > 1 ? "s" : ""} en cours de lecture.
           </p>
         {/if}
         {#if groups.length}
@@ -442,12 +417,6 @@
   }
   .headline .page-title {
     margin: 0;
-  }
-  .lead {
-    margin: 0;
-    max-width: 560px;
-    font-size: 14px;
-    line-height: 1.5;
   }
   .bar {
     display: flex;
@@ -634,13 +603,6 @@
     font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.015em;
-  }
-  .empty-text {
-    margin: 0;
-    max-width: 420px;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.5;
   }
   .failure {
     text-align: center;

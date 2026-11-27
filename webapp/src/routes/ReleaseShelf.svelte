@@ -43,10 +43,9 @@
   onDestroy(() => project.free());
 
   $: shelves = feed ? buildReleaseShelves(feed) : null;
-  $: view = shelves?.[key] || { tracks: [], releases: [], closeNames: [] };
+  $: view = shelves?.[key] || { tracks: [], releases: [] };
   $: tracks = view.tracks;
   $: releases = view.releases;
-  $: closeNames = view.closeNames || [];
   $: total = tracks.reduce((s, t) => s + (t.duration || 0), 0);
   $: facts = [
     `${tracks.length} titre${tracks.length > 1 ? "s" : ""}`,
@@ -54,7 +53,6 @@
   ]
     .filter(Boolean)
     .join(" · ");
-  $: description = shelfDescription(key, closeNames, copy.description);
   $: failureText = loadError
     ? `Cette sélection n'a pas pu être chargée (${failureCause(loadError)}).`
     : "Cette sélection n'a pas pu être chargée.";
@@ -67,18 +65,6 @@
   $: sleeves = (releases.length ? releases : [null]).slice(0, 4);
   $: mosaic = sleeves.some((r) => r && r.cover) ? sleeves : sleeves.slice(0, 1);
   $: cells = mosaic.length;
-
-  function shelfDescription(name, names, fallback) {
-    if (name !== "discovery" || !names.length) return fallback;
-    const shown = names.slice(0, 3);
-    const more = names.length - shown.length;
-    if (!more) return `Des artistes proches de ${listFr(shown)}.`;
-    return `Des artistes proches de ${shown.join(", ")} et ${more} autre${more > 1 ? "s" : ""}.`;
-  }
-  function listFr(names) {
-    if (names.length <= 1) return names[0] || "";
-    return names.slice(0, -1).join(", ") + " et " + names[names.length - 1];
-  }
 
   async function load() {
     loading = true;
@@ -140,13 +126,12 @@
       </div>
       <div class="meta">
         <div class="kicker">
-          <button class="back" on:click={back} aria-label="Retour aux nouveautés" title="Retour aux nouveautés">
+          <button class="back" on:click={back} aria-label="Retour aux nouveautés">
             <Icon name="chevronLeft" size={18} />
           </button>
           <span class="kind"><span class="prefix">Nouveautés · </span>{facts}{#if total}<span class="total"> · {fmtDuration(total)}</span>{/if}</span>
         </div>
         <h1>{copy.title}</h1>
-        <p class="desc muted">{description}</p>
       </div>
     </header>
 
@@ -181,7 +166,6 @@
           class:rev={dir === -1}
           on:click={() => (dir = -dir)}
           aria-label="Inverser l'ordre"
-          title="Inverser l'ordre"
         >
           <Icon name="sort" size={17} />
         </button>
@@ -194,11 +178,6 @@
     {:else}
       <div class="empty">
         <p class="empty-title">Rien par ici pour l'instant</p>
-        <p class="empty-text">
-          {key === "artists"
-            ? "Ajoute des artistes à tes favoris : leurs prochaines sorties apparaîtront ici."
-            : "Le serveur proposera des artistes proches de tes favoris dès qu'il en trouvera."}
-        </p>
         <a class="btn btn-ghost" href="#/releases"><Icon name="sparkles" size={15} /> Voir les nouveautés</a>
       </div>
     {/if}
@@ -293,11 +272,6 @@
     letter-spacing: -0.04em;
     overflow-wrap: anywhere;
   }
-  .desc {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.45;
-  }
   .actions {
     display: flex;
     align-items: center;
@@ -380,13 +354,6 @@
     font-family: var(--font-display);
     font-size: 20px;
     font-weight: 600;
-  }
-  .empty-text {
-    margin: 0;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.5;
-    max-width: 52ch;
   }
   .empty .btn {
     margin-top: 6px;

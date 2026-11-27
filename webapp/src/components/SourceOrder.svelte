@@ -96,9 +96,6 @@
     save({ enabled: { [s.id]: on } }, preview);
   }
 
-  const names = (xs) =>
-    xs.length <= 1 ? xs.map((x) => x.name).join("") : `${xs.slice(0, -1).map((x) => x.name).join(", ")} et ${xs[xs.length - 1].name}`;
-
   function placeLabel(s) {
     if (s.place === "main") return "Principale";
     if (s.place === "fallback") return `Secours ${s.rank}`;
@@ -107,15 +104,8 @@
 
   function statusLine(s) {
     if (!s.configured) return s.setup || "Pas encore configurée sur ce serveur.";
-    if (s.resting)
-      return `A refusé ou n'a pas répondu : laissée tranquille encore ${Math.max(1, Math.ceil(s.resting / 60))} min.`;
-    if (s.place === "main") return "Recherche, pages et musique. Toujours interrogée en premier.";
-    if (s.place === "fallback") {
-      const before = [...(main ? [main] : []), ...fallbacks.filter((x) => x.rank < s.rank)];
-      const verb = before.length > 1 ? "n'ont" : "n'a";
-      return before.length ? `Interrogée quand ${names(before)} ${verb} pas un titre.` : "Interrogée quand aucune autre source n'a un titre.";
-    }
-    return "Coupée : ce qui en est déjà archivé reste lisible.";
+    if (s.resting) return `En pause encore ${Math.max(1, Math.ceil(s.resting / 60))} min.`;
+    return "";
   }
 
   const qualityText = (q) => (q?.label ? `${q.label}${q.lossless ? " · sans perte" : ""}` : "");
@@ -123,19 +113,13 @@
 
 <section class="card">
   <h2>Ordre des sources</h2>
-  <p class="muted sub">
-    La source principale sert la recherche, les pages et la musique. Quand elle n'a pas un
-    titre, les sources de secours sont interrogées dans l'ordre ci-dessous. Entre deux
-    propositions aussi proches d'un titre, la meilleure qualité passe devant&nbsp;; à qualité
-    égale, cet ordre départage. Ce qui est déjà archivé reste lisible quoi qu'il arrive.
-  </p>
 
   {#if failed}
     <p class="muted" role="alert">Impossible de lire les sources&nbsp;: {failed}. <button class="link" on:click={load}>Réessayer</button></p>
   {:else if !data}
     <p class="muted">Chargement…</p>
   {:else if !list.length}
-    <p class="muted">Aucune source de musique n'est installée sur ce serveur&nbsp;: seule la bibliothèque est lisible.</p>
+    <p class="muted">Aucune source installée.</p>
   {:else}
     {#if admin && leaders.length > 1}
       <div class="lead">
@@ -162,15 +146,17 @@
               {s.name}
               {#if qualityText(s.quality)}<span class="q" class:ll={s.quality.lossless}>{qualityText(s.quality)}</span>{/if}
             </span>
-            <span class="muted st" class:warn={!s.configured || s.resting}>{statusLine(s)}</span>
+            {#if statusLine(s)}
+              <span class="muted st" class:warn={!s.configured || s.resting}>{statusLine(s)}</span>
+            {/if}
           </span>
           {#if admin}
             <span class="ctl">
               {#if s.place === "fallback" && fallbacks.length > 1}
                 <button class="arrow" disabled={saving || fi === 0} on:click={() => move(fi, -1)}
-                  aria-label="Monter {s.name}" title="Interroger plus tôt"><Icon name="chevronUp" size={18} /></button>
+                  aria-label="Monter {s.name}"><Icon name="chevronUp" size={18} /></button>
                 <button class="arrow" disabled={saving || fi === fallbacks.length - 1} on:click={() => move(fi, 1)}
-                  aria-label="Descendre {s.name}" title="Interroger plus tard"><Icon name="chevronDown" size={18} /></button>
+                  aria-label="Descendre {s.name}"><Icon name="chevronDown" size={18} /></button>
               {/if}
               {#if s.switchable}
                 <button class="sw" class:on={s.enabled} role="switch" aria-checked={s.enabled}
@@ -189,7 +175,7 @@
       </button>
     {/if}
     {#if !admin}
-      <p class="fine muted">Réglé par l'administrateur du serveur.</p>
+      <p class="fine muted">Réglé par l'administrateur.</p>
     {/if}
   {/if}
 </section>
@@ -204,11 +190,6 @@
   .card h2 {
     margin-top: 0;
     font-size: 1.05rem;
-  }
-  .sub {
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin: 4px 0 14px;
   }
   .fine {
     font-size: 0.78rem;

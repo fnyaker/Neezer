@@ -269,11 +269,6 @@
       </div>
     {/if}
   </div>
-  <p class="sub muted">
-    Le frenchcore est un sous-genre du hardcore, qui est plus ou moins sous la techno. Quand le
-    modèle hésite entre deux frères, il répond leur parent. Un genre peut avoir plusieurs parents,
-    chaque lien avec son poids.
-  </p>
 
   {#if loading}
     <p class="muted">Chargement…</p>

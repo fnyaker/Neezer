@@ -65,15 +65,11 @@
       <input type="checkbox" bind:checked={force} />
       Tout recommencer
     </label>
-    <span class="muted small">
-      {#if job?.tracks}
-        {job.tracks} titre{job.tracks > 1 ? "s" : ""} ont leurs voisins. Un titre mesuré les reçoit tout seul ; ce bouton
-        sert à rattraper une bibliothèque mesurée avant.
-      {:else}
-        Ce qui fait marcher la radio, le flow et l'accueil : les 50 titres qui sonnent le plus
-        comme chacun.
-      {/if}
-    </span>
+    {#if job?.tracks}
+      <span class="muted small">
+        {job.tracks} titre{job.tracks > 1 ? "s" : ""} avec voisins
+      </span>
+    {/if}
   {/if}
 </div>
 {#if job?.error}

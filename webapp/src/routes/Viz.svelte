@@ -178,16 +178,12 @@
   {#if !supported}
     <div class="notice">
       <h1>Écran d'animation</h1>
-      <p>Ce navigateur ne permet pas la liaison entre onglets (BroadcastChannel).</p>
+      <p>Liaison entre onglets indisponible.</p>
     </div>
   {:else if !live}
     <div class="notice">
       <h1>En attente du lecteur</h1>
-      <p>
-        Gardez Neezer ouvert dans un autre onglet et lancez la lecture : cette
-        page s'anime toute seule. Rien n'est lu ici, c'est le même morceau, la
-        même analyse, la même seconde.
-      </p>
+      <p>Lancez la lecture dans un autre onglet.</p>
     </div>
   {:else if !playing}
     <div class="notice quiet">

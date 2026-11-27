@@ -70,25 +70,21 @@ export const LEVEL_INFO = {
     icon: "queue",
     name: "File d'attente",
     short: "File",
-    blurb: "Lecture, pause, titre suivant, position, volume — et se promener dans la file.",
   },
   read: {
     icon: "eye",
     name: "Lecture seule",
     short: "Lecture seule",
-    blurb: "Toute l'app sans rien modifier : chercher, ajouter à la file, choisir les animations.",
   },
   full: {
     icon: "sliders",
     name: "Complet",
     short: "Complet",
-    blurb: "Tout sauf l'administration : playlists, favoris, réglages du lecteur, étiquetage.",
   },
   admin: {
     icon: "shield",
     name: "Administrateur",
     short: "Admin",
-    blurb: "Tout, administration comprise. Réservé à quelqu'un de confiance.",
   },
 };
 

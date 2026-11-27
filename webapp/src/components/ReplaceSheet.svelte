@@ -223,8 +223,7 @@
         <div class="ttl">
           <h2>Remplacer le titre</h2>
           <p class="muted">
-            « {target.title} » — {artistLine(target)} n'est plus lisible. Choisissez
-            un remplaçant&nbsp;: il prendra sa place partout où il apparaît.
+            « {target.title} » — {artistLine(target)} n'est plus lisible.
           </p>
         </div>
         <button class="close" on:click={closeReplace} aria-label="Fermer"><Icon name="close" size={20} /></button>
@@ -248,7 +247,6 @@
         {:else if !candidates.length}
           <p class="muted pad">
             Aucun titre proche trouvé{query ? ` pour « ${query} »` : ""}{everywhere ? ` (cherché dans : ${everywhere})` : ""}.
-            Essayez une autre recherche, ou importez votre propre fichier ci-dessous.
           </p>
         {:else}
           <ul class="list" in:fadeIn>
@@ -257,8 +255,7 @@
                 <button
                   class="prev"
                   on:click={() => preview(c)}
-                  aria-label={previewId === trackKey(c) ? "Arrêter l'écoute" : "Écouter"}
-                  title="Écouter avant de remplacer">
+                  aria-label={previewId === trackKey(c) ? "Arrêter l'écoute" : "Écouter"}>
                   <Icon name={previewId === trackKey(c) ? "pause" : "play"} size={15} />
                 </button>
                 <div class="thumb">
@@ -285,8 +282,7 @@
             {#if yt === "done"}
               <p class="muted hint">
                 {#if ytAuto}
-                  Rien sur {mainName || "la source principale"} : {ytFound > 1 ? `les ${ytFound} titres les plus proches sur ${nameOf(ytFrom)}` : `le titre le plus proche sur ${nameOf(ytFrom)}`},
-                  archivés{from?.quality ? ` en ${from.quality}` : ""} à la première écoute.
+                  Rien sur {mainName || "la source principale"} : {ytFound > 1 ? `les ${ytFound} titres les plus proches sur ${nameOf(ytFrom)}` : `le titre le plus proche sur ${nameOf(ytFrom)}`}{from?.quality ? `, en ${from.quality}` : ""}.
                 {:else}
                   {ytFound
                     ? `${ytFound} titre${ytFound > 1 ? "s" : ""} trouvé${ytFound > 1 ? "s" : ""} sur ${nameOf(ytFrom)}, ajouté${ytFound > 1 ? "s" : ""} à la liste.`
@@ -298,14 +294,9 @@
                 <Icon name={iconOf(fbs[0].id)} size={16} />
                 {yt === "loading" ? `Recherche sur ${chain(fbs)}…` : `Chercher aussi sur ${chain(fbs)}`}
               </button>
-              <p class="muted hint">
-                {#if yt === "error"}
-                  {chain(fbs)} n'a pas répondu. Réessayez plus tard.
-                {:else}
-                  Source{fbs.length > 1 ? "s" : ""} de secours, dans l'ordre choisi dans Réglages → Sources.
-                  Un titre trouvé est archivé à la première écoute{fbs[0].quality ? `, en ${fbs[0].quality} au mieux` : ""}.
-                {/if}
-              </p>
+              {#if yt === "error"}
+                <p class="muted hint">{chain(fbs)} n'a pas répondu.</p>
+              {/if}
             {/if}
           </div>
         {/if}
@@ -323,10 +314,6 @@
           <Icon name="upload" size={16} />
           {uploading ? "Import…" : "Importer mon fichier"}
         </button>
-        <p class="muted hint">
-          Votre fichier devient un titre local — il ne dépend plus de Deezer et ne
-          pourra plus disparaître.
-        </p>
 
         <div class="drop">
           <button
@@ -337,15 +324,9 @@
             <Icon name="trash" size={16} />
             {confirming ? "Confirmer la suppression" : "Supprimer ce titre"}
           </button>
-          <p class="muted hint">
-            {#if confirming}
-              Le titre disparaîtra de vos playlists et de vos favoris. Le serveur
-              vérifie d'abord qu'il est bien introuvable des deux côtés.
-            {:else}
-              Ce titre n'existe plus ni sur Deezer ni sur le disque. Si vous ne
-              voulez pas le remplacer, retirez-le de la bibliothèque.
-            {/if}
-          </p>
+          {#if confirming}
+            <p class="muted hint">Suppression définitive, partout.</p>
+          {/if}
         </div>
       </footer>
     </div>

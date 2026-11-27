@@ -74,7 +74,6 @@
         >
           <Icon name="sliders" size={13} /> {step.name}
         </button>
-        <span class="note">Le Flow suit ton écoute, au niveau choisi.</span>
       </div>
     </section>
     <ResumeCard />
@@ -185,10 +184,6 @@
   .flow:disabled {
     opacity: 0.7;
   }
-  .note {
-    font-size: 14px;
-    line-height: 1.35;
-  }
   /* The discovery level, on the hero's accent: the same outline language as
      the energy chips (--ac on --ac is invisible). */
   .tune {
@@ -249,9 +244,6 @@
     }
     h1 {
       font-size: 34px;
-    }
-    .note {
-      font-size: 13px;
     }
   }
 </style>

@@ -608,11 +608,11 @@
   <h1 class="page-title">Bibliothèque</h1>
   {#if counts}<span class="counts mono">{counts}</span>{/if}
   <span class="head-actions">
-    <a class="btn btn-icon" href="#/import" title="Importer une playlist partagée" aria-label="Importer une playlist partagée">
+    <a class="btn btn-icon" href="#/import" aria-label="Importer une playlist partagée">
       <Icon name="link" size={18} />
     </a>
     {#if CAN_KEEP || CAN_BROWSE}
-    <button class="btn btn-icon add" on:click={addMenu} disabled={uploading || $syncing} aria-label="Ajouter à la bibliothèque" title="Ajouter">
+    <button class="btn btn-icon add" on:click={addMenu} disabled={uploading || $syncing} aria-label="Ajouter à la bibliothèque">
       {#if uploading || $syncing}<span class="spin" data-motion="status"><Icon name="refresh" size={20} /></span>{:else}<Icon name="plus" size={20} />{/if}
     </button>
     {/if}
@@ -657,7 +657,6 @@
         data-move="up"
         disabled={i === 0}
         aria-label={`Monter la playlist ${p.title}`}
-        title="Monter"
         on:click={() => organizeMove(i, -1)}
         on:keydown={(e) => organizerKey(e, i)}
       ><Icon name="chevronUp" size={18} /></button>
@@ -666,7 +665,6 @@
         data-move="down"
         disabled={i === organizeRows.length - 1}
         aria-label={`Descendre la playlist ${p.title}`}
-        title="Descendre"
         on:click={() => organizeMove(i, 1)}
         on:keydown={(e) => organizerKey(e, i)}
       ><Icon name="chevronDown" size={18} /></button>
@@ -674,7 +672,6 @@
         class="org-act"
         data-move="folder"
         aria-label={`Déplacer la playlist ${p.title} vers un dossier`}
-        title="Déplacer…"
         on:click={() => openMoveToFolder({ playlist: p })}
       ><Icon name="folderMove" size={18} /></button>
     </span>
@@ -695,7 +692,6 @@
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Rien ici pour l'instant</p>
-      <p class="empty-text">Touche le cœur d'un titre pour le garder ici.</p>
       <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
     </div>
   {:else}
@@ -723,8 +719,7 @@
         class="btn btn-icon"
         class:rev={fDir === -1}
         on:click={() => (fDir = -fDir)}
-        aria-label="Inverser l'ordre"
-        title="Inverser l'ordre"><Icon name="sort" size={17} /></button>
+        aria-label="Inverser l'ordre"><Icon name="sort" size={17} /></button>
       <button
         class="btn btn-icon"
         on:click={archiveFavorites}
@@ -749,10 +744,6 @@
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Aucun artiste suivi</p>
-      <p class="empty-text">
-        Ouvre la page d'un artiste et touche le cœur pour le suivre : ses nouveautés arriveront
-        sur l'accueil.
-      </p>
       <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
     </div>
   {:else}
@@ -792,7 +783,6 @@
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Aucun album gardé</p>
-      <p class="empty-text">Touche le cœur sur la page d'un album pour le garder ici.</p>
       <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Parcourir les albums</button>
     </div>
   {:else}
@@ -812,7 +802,6 @@
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Aucune playlist</p>
-      <p class="empty-text">Une playlist pour un moment, une humeur, une route : crée la première.</p>
       {#if CAN_KEEP}
         <button class="btn btn-primary" on:click={newPlaylist}><Icon name="plus" size={16} /> Nouvelle playlist</button>
       {:else}
@@ -865,7 +854,6 @@
                     data-move="up"
                     disabled={i === 0}
                     aria-label={`Monter le dossier ${f.title}`}
-                    title="Monter"
                     on:click={() => organizeMove(i, -1)}
                     on:keydown={(e) => organizerKey(e, i)}
                   ><Icon name="chevronUp" size={18} /></button>
@@ -874,7 +862,6 @@
                     data-move="down"
                     disabled={i === organizeRows.length - 1}
                     aria-label={`Descendre le dossier ${f.title}`}
-                    title="Descendre"
                     on:click={() => organizeMove(i, 1)}
                     on:keydown={(e) => organizerKey(e, i)}
                   ><Icon name="chevronDown" size={18} /></button>
@@ -945,7 +932,6 @@
                   class="sec-menu"
                   on:click={(e) => sectionMenu(e, s)}
                   aria-label={`Actions pour le dossier ${s.title}`}
-                  title="Actions du dossier"
                 ><Icon name="more" size={18} /></button>
               {/if}
             </div>
@@ -961,7 +947,7 @@
                     <div class="grow" use:nearEnd={() => (cardLimit += SECTION_STEP)}></div>
                   {/if}
                 {:else}
-                  <p class="folder-empty">Ce dossier est vide. Déplacez-y une playlist depuis son menu.</p>
+                  <p class="folder-empty">Dossier vide.</p>
                 {/if}
               </div>
             {/if}
@@ -982,10 +968,6 @@
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Rien hors-ligne</p>
-      <p class="empty-text">
-        Télécharge un titre, un album ou une playlist pour l'écouter sans réseau, en avion comme
-        dans le métro.
-      </p>
       <button class="btn btn-primary" on:click={() => push("/search")}><Icon name="search" size={16} /> Explorer</button>
     </div>
   {:else}
@@ -1004,19 +986,10 @@
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Aucun titre indisponible</p>
-      <p class="empty-text">
-        Quand Deezer retire un titre de son catalogue, il apparaît ici pour que tu puisses lui
-        trouver un remplaçant. Ceux que tu as déjà écoutés sont archivés sur le serveur&nbsp;:
-        ceux-là restent lisibles quoi qu'il arrive.
-      </p>
       <button class="btn btn-primary" on:click={() => choose("favorites")}><Icon name="play" size={15} /> Écouter mes favoris</button>
     </div>
   {:else}
-    <p class="muted hint gone-hint">
-      Ces titres ne peuvent plus être lus. Choisissez un remplaçant&nbsp;: il
-      prendra leur place dans toutes vos playlists et vos favoris. Ou cochez
-      ceux dont vous ne voulez plus et supprimez-les d'un coup.
-    </p>
+    <p class="muted hint gone-hint">Remplacer vaut pour toutes tes playlists.</p>
     <UnavailableList bind:tracks={gone} />
   {/if}
 {:else if tab === "local"}
@@ -1030,7 +1003,6 @@
         <circle cx="32" cy="32" r="28" /><circle cx="32" cy="32" r="18" /><circle cx="32" cy="32" r="6" />
       </svg>
       <p class="empty-title">Aucun fichier à toi</p>
-      <p class="empty-text">Ajoute ta propre musique : n'importe quel format, elle rejoint la bibliothèque.</p>
       {#if CAN_KEEP}
         <button class="btn btn-primary" on:click={() => fileInput.click()}><Icon name="upload" size={16} /> Importer des fichiers</button>
       {:else}
@@ -1454,13 +1426,6 @@
     font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.015em;
-  }
-  .empty-text {
-    margin: 0;
-    max-width: 420px;
-    color: var(--dim);
-    font-size: 14px;
-    line-height: 1.5;
   }
   .empty .btn {
     margin-top: 4px;

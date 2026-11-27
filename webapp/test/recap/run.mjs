@@ -591,7 +591,7 @@ console.log(`\n-- 1440x900: cold #/recap, the nine cards, a year change, the sha
     `the empty year says "Rien à raconter pour ${EMPTY}"`
   );
   check(
-    (await page.locator(".panel-text").innerText()).trim() === "Aucune écoute enregistrée cette année-là.",
+    (await page.locator(".panel-text").innerText()).trim() === "Aucune écoute enregistrée.",
     "the empty year names the fact, not an error"
   );
   check(
@@ -932,7 +932,7 @@ console.log(`\n-- the empty states: thin year, skips-only year, no history at al
   );
   check(
     (await page.locator(".panel-text").innerText()).trim() ===
-      `${THIN.listens} écoutes, ${THIN.minutes} minutes — pas assez pour raconter une année.`,
+      `${THIN.listens} écoutes, ${THIN.minutes} minutes.`,
     "the thin year reports its real numbers (5 listens, 12 minutes)"
   );
   check((await page.locator(".share-head, .share-btn").count()) === 0, "a thin year offers no share");
@@ -946,7 +946,7 @@ console.log(`\n-- the empty states: thin year, skips-only year, no history at al
     { timeout: 20000 }
   );
   check(
-    (await page.locator(".panel-text").innerText()).trim() === "Seulement des titres passés cette année-là.",
+    (await page.locator(".panel-text").innerText()).trim() === "Seulement des titres passés.",
     "a skips-only year names the skips, and says there was no listen"
   );
   check(st.covers === coversBefore, "a skips-only year asks no cover");
@@ -962,13 +962,13 @@ console.log(`\n-- the empty states: thin year, skips-only year, no history at al
   await page.waitForFunction(
     () =>
       document.querySelector(".panel-title")?.textContent.trim() ===
-      "Ton récap apparaîtra quand tu auras écouté quelques titres.",
+      "Pas encore de récap",
     null,
     { timeout: 20000 }
   );
   check(
     (await page.locator(".panel-title").innerText()).trim() ===
-      "Ton récap apparaîtra quand tu auras écouté quelques titres.",
+      "Pas encore de récap",
     "no history at all: the screen promises, it does not error"
   );
   check(st.years === 1 && st.year === 0, `no history: one /years, no year (measured ${st.years}+${st.year})`);

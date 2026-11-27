@@ -43,7 +43,6 @@
   {#if reported != null}
     <p class="os">
       Le système annonce <b>{reported} ms</b> de latence de sortie pour cet appareil, déjà compensés.
-      Ce réglage ne sert qu'à ce qu'il ne voit pas.
     </p>
   {/if}
 </div>

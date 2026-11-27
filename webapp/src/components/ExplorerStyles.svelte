@@ -34,11 +34,11 @@
   // words the person reads. "Prudent" stays inside the style; "Large" asks for
   // everything Deezer relates to it.
   const LEVELS = [
-    { n: 1, name: "Prudent", hint: "Des playlists qui restent dans le style, sans surprise." },
-    { n: 2, name: "Mesuré", hint: "Le style, avec quelques voisins immédiats." },
-    { n: 3, name: "Équilibré", hint: "Le style et ce qui l'entoure." },
-    { n: 4, name: "Curieux", hint: "Le style, ses voisins et des passerelles." },
-    { n: 5, name: "Large", hint: "Tout ce que Deezer rapproche de ce style." },
+    { n: 1, name: "Prudent" },
+    { n: 2, name: "Mesuré" },
+    { n: 3, name: "Équilibré" },
+    { n: 4, name: "Curieux" },
+    { n: 5, name: "Large" },
   ];
   const LEVEL_KEY = "explorer.discover.level";
   const STYLES_KEY = "explorer.styles.v1";
@@ -691,9 +691,6 @@
   <div class="head">
     <h2 class="section-title" id="explorer-styles-title">Parcourir par style</h2>
     <div class="head-actions">
-      {#if styles.length}
-        <span class="lead">Vos styles les plus écoutés</span>
-      {/if}
       <button
         type="button"
         class="btn btn-ghost btn-sm allbtn"
@@ -761,9 +758,7 @@
     </div>
   {:else}
     <p class="state">
-      Votre historique d'écoute est encore vide : les styles que vous écoutez le plus apparaîtront
-      ici. La recherche et la bibliothèque restent ouvertes au-dessus, et « Toutes les stations »
-      lance un genre sans historique.
+      Votre historique d'écoute est encore vide.
     </p>
   {/if}
 </section>
@@ -790,7 +785,6 @@
             {:else}
               Un style de votre historique
             {/if}
-            · playlists et titres vérifiés chez Deezer
           </p>
         </div>
         <button type="button" class="x" on:click={close} aria-label="Fermer">
@@ -812,11 +806,10 @@
           value={level}
           style={`--p:${((level - 1) / 4) * 100}%`}
           aria-label="Niveau de découverte"
-          aria-valuetext={`${aim.name}, ${level} sur 5 : ${aim.hint}`}
+          aria-valuetext={`${aim.name}, ${level} sur 5`}
           on:input={(e) => setLevel(+e.target.value)}
         />
         <div class="ends"><span>Prudent</span><span>Large</span></div>
-        <p class="ahint">{aim.hint}</p>
       </div>
 
       <button
@@ -844,8 +837,7 @@
             {/each}
           </div>
           <p class="state pending-note">
-            Recherche de playlists Deezer pour {picked.name}… La vérification des titres prend
-            quelques secondes.
+            Recherche pour {picked.name}…
           </p>
         {:else if phase === "busy"}
           <div class="state fail" role="alert">
@@ -862,8 +854,6 @@
             <p>Aucune playlist Deezer ne correspond à {picked.name} à ce niveau.</p>
             {#if level < 5}
               <button type="button" class="btn btn-ghost" on:click={widen}>Essayer un niveau plus large</button>
-            {:else}
-              <p class="muted">Essayez un autre style.</p>
             {/if}
           </div>
         {:else if phase === "ready"}
@@ -888,11 +878,6 @@
               </div>
             {/each}
           </div>
-        {:else}
-          <p class="state hint">
-            Choisissez un niveau, puis « Découvrir » : le serveur cherche des playlists Deezer
-            dans ce style et vérifie leurs titres.
-          </p>
         {/if}
       </div>
     </div>
@@ -915,10 +900,9 @@
         <div class="ttl">
           <p class="kicker">Stations</p>
           <h2 id="all-stations-title">Toutes les stations</h2>
-          <p class="sub">
-            Un genre, ses sous-genres et votre écoute.
-            {#if allLoaded}{shownStations.length} style{shownStations.length === 1 ? "" : "s"}{/if}
-          </p>
+          {#if allLoaded}
+            <p class="sub">{shownStations.length} style{shownStations.length === 1 ? "" : "s"}</p>
+          {/if}
         </div>
         <button type="button" class="x" on:click={closeStations} aria-label="Fermer">
           <Icon name="close" size={18} />
@@ -1020,11 +1004,6 @@
   .allbtn {
     white-space: nowrap;
     gap: 7px;
-  }
-  .lead {
-    flex: none;
-    font-size: 12.5px;
-    color: var(--dim);
   }
   /* Two columns on the narrowest phone, five at a wide window: ten parents read
      as one shelf, never as a wall. */
@@ -1375,13 +1354,6 @@
     font-size: 12px;
     color: var(--dim);
   }
-  .ahint {
-    margin: 4px 0 0;
-    min-height: 1.25em;
-    font-size: 12.5px;
-    line-height: 1.35;
-    color: var(--dim);
-  }
   .go {
     width: 100%;
     height: 44px;
@@ -1422,10 +1394,6 @@
   .pending-note {
     margin: 2px 0 0;
     text-align: center;
-    font-size: 13px;
-  }
-  .hint {
-    margin: 0;
     font-size: 13px;
   }
   .rows {
@@ -1595,9 +1563,6 @@
     }
     .name {
       font-size: 17px;
-    }
-    .lead {
-      display: none;
     }
     /* The sleeve is 50 px tall on a phone: the disc sits at its foot. */
     .station {

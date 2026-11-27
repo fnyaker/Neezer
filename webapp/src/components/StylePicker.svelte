@@ -100,7 +100,6 @@
   <section class="style-block fade-in">
     <div class="section-head">
       <h2 class="section-title">Par style</h2>
-      <span class="hint">filtre Nouveautés et Pour toi</span>
     </div>
     <div class="chips" role="group" aria-label="Style du Flow">
       <button
@@ -169,10 +168,6 @@
     flex-direction: column;
     gap: 12px;
     min-width: 0;
-  }
-  .hint {
-    color: var(--dim);
-    font-size: 13px;
   }
   /* A phone: one scrolling row, the standard chip rail of the app. A wide
      window gets the prototype's wrap: the whole vocabulary is worth seeing. */

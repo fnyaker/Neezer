@@ -111,7 +111,6 @@
     <header>
       <div class="ttl">
         <h2>Ajouter des titres</h2>
-        <p class="sub">Cherche dans Deezer ou dans ta bibliothèque locale.</p>
       </div>
       <button type="button" class="close" on:click={() => onclose?.()} aria-label="Fermer">
         <Icon name="close" size={18} />
@@ -131,8 +130,6 @@
         <LoadFailed error={searchError} inline on:retry={() => search()} />
       {:else if q.trim() && !results.length}
         <p class="state">Aucun résultat pour « {q.trim()} ».</p>
-      {:else if !q.trim()}
-        <p class="state">Tape le nom d'un titre, d'un artiste ou d'un album.</p>
       {/if}
 
       {#each results as t (trackKey(t))}
@@ -212,11 +209,6 @@
     font-weight: 700;
     letter-spacing: -0.02em;
     line-height: 1.1;
-  }
-  .sub {
-    margin: 4px 0 0;
-    font-size: 14px;
-    color: var(--dim);
   }
   .close {
     flex: none;

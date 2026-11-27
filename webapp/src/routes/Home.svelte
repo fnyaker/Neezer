@@ -369,17 +369,9 @@
       <span class="empty-icon"><Icon name={allFailed ? "server" : "compass"} size={26} /></span>
       {#if allFailed}
         <h2>L'accueil n'a pas pu se charger</h2>
-        <p class="muted">
-          Le serveur n'a pas répondu. Ta musique reste sur l'appareil : la bibliothèque et tes
-          téléchargements s'ouvrent normalement.
-        </p>
         <button class="btn btn-primary" on:click={loadAll}><Icon name="refresh" size={15} /> Réessayer</button>
       {:else}
         <h2>Ta bibliothèque est vide pour l'instant</h2>
-        <p class="muted">
-          Cherche un titre ou un artiste et lance la lecture. Ajoute des artistes à tes favoris
-          pour voir ici leurs nouveautés.
-        </p>
         <a class="btn btn-primary" href="#/search"><Icon name="search" size={15} /> Explorer</a>
       {/if}
     </section>
@@ -611,11 +603,6 @@
   .empty h2 {
     margin: 0;
     font-size: 22px;
-  }
-  .empty p {
-    margin: 0;
-    max-width: 54ch;
-    line-height: 1.45;
   }
   .empty-icon {
     display: grid;

@@ -57,7 +57,6 @@
     </span>
     <span class="rc-heading">
       <h2 class="rc-title" id={titleId}>{shelf.title}</h2>
-      <span class="rc-sub">{shelf.subtitle}</span>
       <span class="rc-count mono" id={countId}>{count}</span>
     </span>
   </header>
@@ -164,17 +163,6 @@
     letter-spacing: -0.02em;
     line-height: 1.05;
     overflow-wrap: anywhere;
-  }
-  .rc-sub {
-    color: var(--dim);
-    font-size: 13px;
-    line-height: 1.4;
-    /* Two lines keep the two cards' headers level without truncating a real
-       sentence to a fragment. */
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
   }
   .rc-count {
     color: var(--dim);

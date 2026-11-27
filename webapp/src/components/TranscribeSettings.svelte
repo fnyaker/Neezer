@@ -128,15 +128,6 @@
 
 <section class="card">
   <h2>Transcription des podcasts</h2>
-  <p class="sub">
-    {#if onAWorker}
-      Le texte est produit sur l'ordinateur enrôlé, à partir des fichiers archivés du serveur.
-    {:else}
-      Le texte est produit sur ce serveur, à partir des fichiers archivés.
-    {/if}
-    Aucun audio n'est envoyé à un tiers. Rien n'est transcrit automatiquement : chaque épisode se
-    demande depuis sa page ou depuis le lecteur.
-  </p>
 
   {#if loading}
     <p class="state" role="status" aria-busy="true">Chargement des réglages…</p>
@@ -165,7 +156,6 @@
     >
       <span class="switch-text">
         <span class="switch-title">Transcrire les podcasts</span>
-        <span class="switch-hint">Le moteur reste désactivé tant que cette option est fermée.</span>
       </span>
       <span class="sw" class:on={data.enabled}><span class="knob"></span></span>
     </button>
@@ -235,7 +225,7 @@
           />
           <span class="unit">min</span>
         </span>
-        <span class="ts-field-hint">0 = illimité. La transcription s'arrête d'elle-même au budget.</span>
+        <span class="ts-field-hint">0 = illimité.</span>
       </label>
 
       <label class="ts-field">
@@ -253,7 +243,7 @@
           <span class="unit">segments</span>
         </span>
         <span class="ts-field-hint">
-          {data.search_segments ? `${data.search_segments.toLocaleString("fr-FR")} segments parcourus au plus.` : "Toute la bibliothèque transcrite."}
+          {data.search_segments ? `${data.search_segments.toLocaleString("fr-FR")} segments au plus.` : "Toute la bibliothèque."}
         </span>
       </label>
     </div>
@@ -288,7 +278,7 @@
       {#if data.available !== false}
         <span class="state ok"><Icon name="check" size={14} /> Prêt à transcrire</span>
         {#if workerOffline}
-          <span class="state">L'ordinateur enrôlé est hors ligne : la file attend son retour.</span>
+          <span class="state">Appareil enrôlé hors ligne.</span>
         {/if}
       {/if}
     </div>
@@ -309,13 +299,6 @@
     font-size: 16px;
     font-weight: 600;
     line-height: 1.3;
-  }
-  .sub {
-    margin: 4px 0 16px;
-    color: var(--dim);
-    font-size: 0.85rem;
-    line-height: 1.5;
-    max-width: 70ch;
   }
   .switch-row {
     display: flex;
@@ -351,11 +334,6 @@
   .switch-title {
     font-weight: 650;
     font-size: 0.92rem;
-  }
-  .switch-hint {
-    color: var(--dim);
-    font-size: 0.78rem;
-    line-height: 1.4;
   }
   .sw {
     flex: none;

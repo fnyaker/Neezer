@@ -71,14 +71,6 @@
     savingId = false;
   }
 
-  function hostOf(url) {
-    try {
-      return new URL(url).host;
-    } catch {
-      return url;
-    }
-  }
-
   function copy(text) {
     navigator.clipboard?.writeText(text).then(
       () => toasts.push("Copié"),
@@ -97,10 +89,6 @@
 
 <section class="card">
   <h2>Services de streaming</h2>
-  <p class="muted sub">
-    Pour envoyer une playlist vers vos propres comptes&nbsp;: chaque titre y est
-    recherché (ISRC d'abord, puis titre et artiste) et ceux qui manquent vous sont listés.
-  </p>
 
   {#if !$services}
     <p class="muted">Chargement…</p>
@@ -126,31 +114,22 @@
         {/if}
       {/each}
     </ul>
-    <p class="muted fine">
-      Apple Music, Tidal, Amazon Music… n'ouvrent leur API qu'aux développeurs
-      sous contrat&nbsp;: exportez la liste en CSV depuis la playlist et importez-la
-      avec TuneMyMusic ou Soundiiz.
-    </p>
   {/if}
 
   {#if $isAdmin && spotify && spotify.client_id !== undefined}
     <h3>Application Spotify du serveur</h3>
     <p class="muted fine">
-      Spotify n'accepte que des applications enregistrées. Sur
-      <b>developer.spotify.com</b> → Dashboard → Create app (« Web API »), ajoutez
-      l'URI de redirection ci-dessous, puis chaque compte qui exportera dans
-      <b>User Management</b> (5 au plus en mode développement, et le propriétaire de
-      l'app doit être Premium). Spotify exige une adresse en https (ou 127.0.0.1).
+      Application à créer sur developer.spotify.com.
     </p>
     <div class="uri">
       <code>{spotify.redirect_uri}</code>
-      <button class="icon-btn" on:click={() => copy(spotify.redirect_uri)} aria-label="Copier l'URI" title="Copier"><Icon name="copy" size={16} /></button>
+      <button class="icon-btn" on:click={() => copy(spotify.redirect_uri)} aria-label="Copier l'URI"><Icon name="copy" size={16} /></button>
     </div>
     {#if moved}
-      <p class="warn"><Icon name="alert" size={14} /><span>Vous êtes sur <b>{hostOf(spotify.redirect_here)}</b>, pas sur l'adresse enregistrée. Pour relier depuis celle-ci, ajoutez-la chez Spotify puis enregistrez à nouveau.</span></p>
+      <p class="warn"><Icon name="alert" size={14} /><span>Adresse non enregistrée : enregistrez à nouveau.</span></p>
     {/if}
     {#if spotify.redirect_uri && spotify.redirect_uri.startsWith("http://") && !/^http:\/\/127\./.test(spotify.redirect_uri)}
-      <p class="warn"><Icon name="alert" size={14} /> Cette adresse est en http : Spotify la refusera. Ouvrez l'app par son adresse https pour relier un compte.</p>
+      <p class="warn"><Icon name="alert" size={14} /> Spotify exige https.</p>
     {/if}
     <div class="cid">
       <input type="text" bind:value={clientId} placeholder="Client ID (32 caractères)" spellcheck="false" autocomplete="off" maxlength="32" aria-label="Client ID Spotify" />
@@ -176,11 +155,6 @@
     font-size: 0.9rem;
     font-weight: 700;
     margin: 20px 0 6px;
-  }
-  .sub {
-    font-size: 0.85rem;
-    line-height: 1.5;
-    margin: 4px 0 12px;
   }
   .svc {
     list-style: none;

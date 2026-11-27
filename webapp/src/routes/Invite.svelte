@@ -7,10 +7,8 @@
   import Icon from "../components/Icon.svelte";
   import LoadFailed from "../components/LoadFailed.svelte";
   import {
-    MAX_PASSWORD,
     MAX_USERNAME,
     MIN_PASSWORD,
-    MIN_USERNAME,
     clearDraft,
     expiryLabel,
     foldName,
@@ -315,7 +313,7 @@
       <div class="state">
         <span class="state-icon"><Icon name="alert" size={24} /></span>
         <h1 id="invite-title">Cette invitation n'est plus valide.</h1>
-        <p class="sub">Demande un nouveau lien à la personne qui t'a invité.</p>
+        <p class="sub">Demande un nouveau lien.</p>
       </div>
       <button class="primary wide" type="button" on:click={openApp}>
         {account ? "Retour à l'application" : "Se connecter"}
@@ -334,8 +332,7 @@
     {:else if account}
       <h1 id="invite-title">Tu es déjà connecté</h1>
       <p class="sub">
-        Tu es connecté en tant que <strong>{account.name}</strong>. Créer un compte ici te
-        déconnectera de celui-ci.
+        Connecté en tant que <strong>{account.name}</strong>. Cela te déconnectera.
       </p>
       {#if leaveError}
         <p class="alert" role="alert" in:fadeIn>{leaveError}</p>
@@ -352,7 +349,6 @@
       <div class="intro">
         {#if label}<span class="label-mono">{label}</span>{/if}
         <h1 id="invite-title">Rejoindre Neezer</h1>
-        <p class="sub">Crée ton compte. Ce lien ne fonctionne qu'une fois.</p>
         {#if expires}<p class="expiry">{expires}</p>{/if}
       </div>
 
@@ -370,12 +366,9 @@
             autocorrect="off"
             spellcheck="false"
             maxlength={MAX_USERNAME}
-            aria-describedby={nameError ? "invite-name-help invite-name-err" : "invite-name-help"}
+            aria-describedby={nameError ? "invite-name-err" : undefined}
             aria-invalid={nameError ? "true" : "false"}
           />
-          <p class="hint" id="invite-name-help">
-            {MIN_USERNAME} à {MAX_USERNAME} caractères : a–z, 0–9, point, tiret, tiret bas.
-          </p>
           {#if nameError}
             <p class="err" id="invite-name-err" role="alert" in:fadeIn>
               <Icon name="alert" size={14} /><span>{nameError}</span>
@@ -397,7 +390,7 @@
               autocapitalize="none"
               autocorrect="off"
               spellcheck="false"
-              aria-describedby={passError ? "invite-pass-help invite-pass-err" : "invite-pass-help"}
+              aria-describedby={passError ? "invite-pass-err" : undefined}
               aria-invalid={passError ? "true" : "false"}
             />
             <button
@@ -431,10 +424,6 @@
               {/if}
             </div>
           {/if}
-          <p class="hint" id="invite-pass-help">
-            {MIN_PASSWORD} caractères minimum, {MAX_PASSWORD} au plus. Une phrase de passe fait très
-            bien l'affaire.
-          </p>
           {#if passError}
             <p class="err" id="invite-pass-err" role="alert" in:fadeIn>
               <Icon name="alert" size={14} /><span>{passError}</span>
@@ -610,12 +599,6 @@
   }
   input[aria-invalid="true"] {
     border-color: var(--ac-text);
-  }
-  .hint {
-    margin: 0;
-    color: var(--dim);
-    font-size: 12.5px;
-    line-height: 1.45;
   }
   .err {
     display: flex;

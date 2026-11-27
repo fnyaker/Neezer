@@ -102,22 +102,18 @@
     {
       id: "auto",
       label: "Automatique",
-      desc: "Tête linéaire, et un réseau seulement s'il fait mieux sur des titres qu'il n'a pas vus.",
     },
     {
       id: "linear",
       label: "Rapide",
-      desc: "Tête linéaire. Une seconde. Le bon choix par défaut.",
     },
     {
       id: "deep",
       label: "Approfondi",
-      desc: "Réseau 256, une couche cachée, compilé en WebAssembly. Quelques secondes.",
     },
     {
       id: "deep2",
       label: "Maximum",
-      desc: "Réseau 2×512, deux couches cachées. Plusieurs minutes — pour les genres que rien d'autre ne sépare.",
     },
   ];
   const TRAIN_OPTS = {
@@ -1071,9 +1067,6 @@
     </button>
     <div class="titles">
       <h1>Studio de genres</h1>
-      <p class="muted sub-line">
-        Vos étiquettes et votre modèle — entraîné dans ce navigateur.
-      </p>
     </div>
   </header>
 
@@ -1084,7 +1077,7 @@
   {:else if !$user?.admin}
     <div class="banner bad">
       <Icon name="alert" size={16} />
-      <span>Le studio est réservé à l'administrateur : il n'y a qu'un modèle.</span>
+      <span>Réservé à l'administrateur.</span>
     </div>
   {:else}
     <nav class="tabs">
@@ -1118,7 +1111,7 @@
             <Icon name="alert" size={16} />
             <span>
               <strong>Révision</strong> — {candidates.length} étiquette{candidates.length > 1 ? "s" : ""}
-              que le modèle conteste. Confirmez ou corrigez.
+              contestée{candidates.length > 1 ? "s" : ""}
             </span>
             <button class="ghost small-btn" on:click={endReview}>Terminer</button>
           </div>
@@ -1153,11 +1146,6 @@
               <p>Plus rien à étiqueter pour l'instant.</p>
             {:else}
               <p>Aucun titre ne porte encore d'empreinte.</p>
-              <p class="small">
-                {extractor.available
-                  ? "Lancez l'analyse dans l'onglet Bibliothèque : le studio ne propose que les titres déjà mesurés."
-                  : "Installez d'abord l'extracteur (onglet Bibliothèque, Avancé)."}
-              </p>
               <button class="primary" on:click={() => (tab = "library")}>
                 <Icon name={extractor.available ? "activity" : "download"} size={16} />
                 Ouvrir la bibliothèque
@@ -1200,11 +1188,7 @@
                   <b>{current.review.predicted}</b> ({pct(current.review.other)} %)
                 </p>
               {:else if !scored}
-                <p class="muted small">
-                  Pas encore d'avis sur ce titre : les genres sont classés par usage.
-                </p>
-              {:else if current.uncertainty != null && current.uncertainty >= 0.6}
-                <p class="muted small">Le modèle hésite : ce titre lui apprendra beaucoup.</p>
+                <p class="muted small">Pas encore d'avis sur ce titre.</p>
               {/if}
               <div class="preview-bar" class:on={previewId === current.id}>
                 <button
@@ -1295,9 +1279,8 @@
                     {#if r.score != null}<small>{pct(r.score)} %</small>{/if}
                   </button>
                 {/each}
-                {#if !found.length}<span class="muted small">Aucun genre ne correspond — créez-le dans l'onglet « Genres ».</span>{/if}
+                {#if !found.length}<span class="muted small">Aucun genre ne correspond.</span>{/if}
               </div>
-              {#if found.length}<p class="hint muted"><kbd>↵</kbd> choisit « {found[0].tag.name} » · <kbd>échap</kbd> efface</p>{/if}
             {:else}
               {#if recentRows.length}
                 <div class="chips-row">
@@ -1347,10 +1330,6 @@
               <span class="lbl">Passer</span> <kbd>→</kbd>
             </button>
           </div>
-          <p class="hint muted keys">
-            <kbd>1</kbd>…<kbd>9</kbd> choisir · <kbd>↵</kbd> le premier · <kbd>/</kbd> chercher ·
-            <kbd>espace</kbd> écouter · <kbd>→</kbd> passer · <kbd>z</kbd> annuler
-          </p>
         {:else if !candidatesLoaded}
           <p class="muted empty">Chargement…</p>
         {:else}
@@ -1390,8 +1369,6 @@
                 {readyAll ? "Réduire" : `Voir les ${readiness.length} genres`}
               </button>
             {/if}
-          {:else}
-            <p class="muted small">Étiquetez quelques titres pour entraîner un modèle.</p>
           {/if}
         </div>
 
@@ -1403,7 +1380,6 @@
             {#each MODES as m}
               <button class="mode" class:sel={mode === m.id} on:click={() => (mode = m.id)}>
                 <strong>{m.label}</strong>
-                <span class="muted">{m.desc}</span>
               </button>
             {/each}
           </div>
@@ -1411,25 +1387,12 @@
           <input type="checkbox" bind:checked={useConstruction} />
           <span class="option-text">
             <strong>Lire aussi le tempo et la construction</strong>
-            <span class="muted">
-              Le modèle d'empreinte entend bien le timbre mais mal le tempo, et il n'a
-              jamais appris le Pieep ni le Deutscher Krach. L'analyseur du lecteur mesure,
-              lui, comment le morceau est construit : la hauteur du kick, le squeak du
-              pieep, les rolls, le buzz, le kick sur chaque temps. Ces mesures sont
-              gardées si elles améliorent réellement la note — l'entraînement le vérifie.
-            </span>
           </span>
         </label>
         <label class="option" class:on={useSelfTrain}>
           <input type="checkbox" bind:checked={useSelfTrain} />
           <span class="option-text">
             <strong>Apprendre aussi des titres non étiquetés</strong>
-            <span class="muted">
-              Les titres de la bibliothèque dont le modèle est sûr servent d'exemples
-              supplémentaires, avec moins de poids que vos étiquettes. Le résultat n'est
-              gardé que s'il fait mieux sur des titres qu'il n'a jamais vus — l'entraînement
-              le vérifie. Utile surtout quand un genre n'a encore que quelques titres.
-            </span>
           </span>
         </label>
           </div>
@@ -1516,13 +1479,12 @@
               <div class="score">
                 <span class="k">Justesse équilibrée</span>
                 <span class="v">{pct(head.metrics.balanced)} %</span>
-                <span class="muted small">moyenne des rappels, chaque genre à poids égal</span>
               </div>
               <div class="score">
                 <span class="k">Justesse brute</span>
                 <span class="v">{pct(head.metrics.accuracy)} %</span>
                 <span class="muted small">
-                  validation croisée {head.metrics.folds} plis{head.metrics.grouped ? " par artiste" : ""} ·
+                  {head.metrics.folds} plis{head.metrics.grouped ? " par artiste" : ""} ·
                   {head.metrics.examples} titres
                 </span>
               </div>
@@ -1531,8 +1493,7 @@
                   <span class="k">Sur ses propres exemples</span>
                   <span class="v">{pct(head.metrics.fitBalanced)} %</span>
                   <span class="muted small">
-                    l'écart avec la note ci-dessus mesure l'apprentissage par cœur
-                    ({pct(head.metrics.fitBalanced - head.metrics.balanced)} points)
+                    {pct(head.metrics.fitBalanced - head.metrics.balanced)} points d'écart
                   </span>
                 </div>
               {/if}
@@ -1541,9 +1502,7 @@
                   <span class="k">Calibration</span>
                   <span class="v">×{head.metrics.temperature.toFixed(2)}</span>
                   <span class="muted small">
-                    {head.metrics.temperature > 1
-                      ? "le modèle était trop sûr de lui : ses confiances sont ramenées à ce qu'elles valent avant que le serveur ne s'en serve"
-                      : "le modèle était trop timide : ses confiances sont relevées"}
+                    {head.metrics.temperature > 1 ? "trop sûr de lui" : "trop timide"}
                   </span>
                 </div>
               {/if}
@@ -1554,8 +1513,7 @@
                   {#if l.older}
                     <span class="v">indisponible</span>
                     <span class="muted small">
-                      {l.older} empreinte{l.older > 1 ? "s" : ""} antérieure{l.older > 1 ? "s" : ""} — relancez
-                      la mesure de la bibliothèque pour les refaire
+                      {l.older} empreinte{l.older > 1 ? "s" : ""} antérieure{l.older > 1 ? "s" : ""}
                     </span>
                   {:else}
                     <span class="v">{l.used ? "utilisée" : "écartée"}</span>
@@ -1588,10 +1546,6 @@
                 <div class="score">
                   <span class="k">Bagging</span>
                   <span class="v">{head.metrics.bagged} têtes</span>
-                  <span class="muted small">
-                    plusieurs entraînements moyennés, pour que la note ne dépende pas
-                    du hasard des lots
-                  </span>
                 </div>
               {/if}
             </div>
@@ -1616,21 +1570,8 @@
                 {/each}
               </tbody>
             </table>
-            {#if head.metrics.grouped && head.metrics.perClass.some((c) => c.artists < 2)}
-              <p class="muted small">
-                Un genre dont tous les exemples viennent d'un seul artiste ne peut pas
-                être testé sur quelqu'un d'autre : son rappel dit zéro parce que rien ne
-                prouve encore que le modèle connaît le genre plutôt que cet artiste.
-                Quelques titres d'autres artistes suffisent.
-              </p>
-            {/if}
-
             <div class="confusion">
               <h3>Confusions</h3>
-              <p class="muted small">
-                Une ligne par genre réel, une colonne par genre prédit. Ce qui sort de
-                la diagonale est ce qu'il reste à étiqueter.
-              </p>
               <div class="grid" style={`--n:${head.labels.length}`}>
                 <span class="corner"></span>
                 {#each head.labels as l}<span class="col-h" title={l}>{l.slice(0, 3)}</span>{/each}
@@ -1666,12 +1607,6 @@
                       </li>
                     {/each}
                   </ul>
-                  <p class="muted small">
-                    Deux genres qui se confondent sont soit deux sons vraiment
-                    proches — l'étiquetage est bon, la frontière est difficile —
-                    soit un seul genre que tu as nommé de deux façons. Le modèle
-                    ne peut pas trancher entre les deux ; toi, si.
-                  </p>
                 </div>
               {/if}
             </div>
@@ -1717,7 +1652,7 @@
                 <p class="small" class:bad={status.model.metrics.health.level === "poor"}>
                   {status.model.metrics.health.level === "poor"
                     ? "Jugé peu fiable à l'entraînement."
-                    : "Utilisable, à surveiller (voir l'entraînement)."}
+                    : "Utilisable, à surveiller."}
                 </p>
               {/if}
               {#if !status.model.usable}
@@ -1732,7 +1667,7 @@
             {#each status.model.labels as l}<span class="chip">{l}</span>{/each}
           </div>
         {:else}
-          <p class="muted empty">Aucun modèle actif — l'analyse utilise ses règles par défaut.</p>
+          <p class="muted empty">Aucun modèle actif.</p>
         {/if}
         {#if relabel && (relabel.running || relabel.scanned)}
           <div class="relabel">
@@ -1745,8 +1680,7 @@
               </span>
             {:else}
               <span class="muted small">
-                Appliqué à <strong>{relabel.scanned}</strong> titres déjà mesurés,
-                sans nouvelle mesure : {relabel.changed} verdict{relabel.changed > 1 ? "s" : ""} changé{relabel.changed > 1 ? "s" : ""}
+                Appliqué à <strong>{relabel.scanned}</strong> titres : {relabel.changed} verdict{relabel.changed > 1 ? "s" : ""} changé{relabel.changed > 1 ? "s" : ""}
                 · {relabel.model} par le modèle{#if relabel.family}, dont {relabel.family} à la famille près{/if}
                 · {relabel.tag} étiqueté{relabel.tag > 1 ? "s" : ""} à la main
                 · {relabel.heuristic} par les règles.
@@ -1764,11 +1698,6 @@
 
       <section class="card" in:fadeIn>
         <h2><Icon name="share" size={18} /> Partager le modèle</h2>
-        <p class="sub muted">
-          Un fichier avec vos genres, vos étiquettes et le modèle actif. Sur un autre
-          serveur, le modèle sert tel quel et les étiquettes s'ajoutent aux siennes :
-          un titre déjà étiqueté là-bas garde son genre.
-        </p>
         {#if sharePreview}
           {@const t = sharePreview.tags}
           {@const h = sharePreview.head}
@@ -1877,10 +1806,6 @@
     font-size: 1.5rem;
     letter-spacing: -0.02em;
   }
-  .titles p {
-    margin: 4px 0 0;
-    font-size: 0.86rem;
-  }
   .muted {
     color: var(--text-dim, #9aa0a6);
   }
@@ -1977,18 +1902,9 @@
     margin: 0 0 6px;
     font-size: 1.04rem;
   }
-  .sub {
-    margin: 0 0 16px;
-    font-size: 0.86rem;
-    line-height: 1.5;
-  }
   .empty {
     padding: 18px 0;
     text-align: center;
-  }
-  .hint {
-    margin: 12px 0 0;
-    font-size: 0.8rem;
   }
 
   /* -- vocabulary ---------------------------------------------------------- */
@@ -2456,10 +2372,6 @@
     font: inherit;
     cursor: pointer;
   }
-  .mode span {
-    font-size: 0.82rem;
-    line-height: 1.45;
-  }
   .mode.sel {
     border-color: var(--accent, #22d3ee);
     box-shadow: 0 0 0 1px var(--accent, #22d3ee) inset;
@@ -2480,6 +2392,9 @@
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
+  }
+  .card > .share-actions {
+    margin-top: 8px;
   }
   .share-review {
     display: grid;
@@ -2643,10 +2558,6 @@
   .option-text {
     display: grid;
     gap: 4px;
-  }
-  .option-text .muted {
-    font-size: 0.82rem;
-    line-height: 1.45;
   }
   .per-class td.solo {
     color: #fbbf24;
@@ -2919,9 +2830,6 @@
     }
     .titles h1 {
       font-size: 1.28rem;
-    }
-    .sub-line {
-      display: none;
     }
     .tabs {
       margin: 12px 0 14px;
@@ -3224,7 +3132,6 @@
     .picks {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-    .hint.keys,
     .search .slash {
       display: none;
     }

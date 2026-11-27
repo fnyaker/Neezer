@@ -6,6 +6,13 @@ Reference notes for agents working on this area. Read [CLAUDE.md](../../CLAUDE.m
 `src/app.css`, `lib/theme.js`, the pure rules in `lib/sillon.js` and the fonts in `src/assets/fonts/` —
 build a screen from those, never from a literal colour. Rules that cost something to learn:
 
+- **No help lines.** A screen is read, not explained: a label, a value, an icon and the
+  screen's own shape carry the meaning (owner decision 2026-11-27, « un texte c'est moche, on
+  garde que ce qui sert vraiment »). What may stay is data (a count, a size, a date, a state),
+  an error or a disabled reason, and at most a six-word line the label cannot replace. Empty
+  states keep a title; a destructive action keeps one « Suppression définitive. ». The judge
+  rubric scores the absence of text as correct (mobile/tools/judge/rubric.md).
+
 **Motion is its own area:** every appearance, disappearance and displacement of the interface —
 pages, sheets, menus, rows, lists, the player's chrome — is [transitions.md](transitions.md)
 (tokens, the three levels, the eco/reduced guard, and the lint that keeps `svelte/transition` out of

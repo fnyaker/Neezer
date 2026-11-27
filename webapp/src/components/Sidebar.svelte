@@ -209,7 +209,7 @@
       </a>
     </li>
   {:else}
-    <li><p class="pl-empty folder-empty">Ce dossier est vide. Déplacez-y une playlist depuis son menu.</p></li>
+    <li><p class="pl-empty folder-empty">Dossier vide.</p></li>
   {/each}
 {/snippet}
 
@@ -281,7 +281,6 @@
               class:spin={$syncing}
               on:click={syncDeezer}
               disabled={$syncing}
-              title="Synchroniser depuis Deezer"
               aria-label="Synchroniser depuis Deezer"
               data-motion={$syncing ? "status" : undefined}
             >
@@ -289,10 +288,10 @@
             </button>
           {/if}
           {#if CAN_KEEP}
-            <button class="iconbtn" on:click={newFolder} title="Nouveau dossier" aria-label="Nouveau dossier">
+            <button class="iconbtn" on:click={newFolder} aria-label="Nouveau dossier">
               <Icon name="folderPlus" size={16} />
             </button>
-            <button class="iconbtn" on:click={openNewPlaylist} title="Nouvelle playlist" aria-label="Nouvelle playlist">
+            <button class="iconbtn" on:click={openNewPlaylist} aria-label="Nouvelle playlist">
               <Icon name="plus" size={16} />
             </button>
           {/if}
@@ -319,7 +318,6 @@
             <button
               class="pl-more"
               on:click={(e) => folderMenu(e, f)}
-              title="Actions du dossier"
               aria-label={`Actions pour le dossier ${f.title}`}
             >
               <Icon name="more" size={16} />
@@ -443,7 +441,7 @@
         <span class="name">{REMOTE.owner}</span>
         <span class="sub">Contrôle à distance</span>
       </span>
-      <button class="out" on:click={logout} title="Quitter le contrôle" aria-label="Quitter le contrôle">
+      <button class="out" on:click={logout} aria-label="Quitter le contrôle">
         <Icon name="logOut" size={16} />
       </button>
     {:else}
@@ -452,7 +450,7 @@
         <span class="name">{$user?.name}</span>
         <span class="sub">{status}</span>
       </span>
-      <button class="out" on:click={logout} title="Se déconnecter" aria-label="Se déconnecter">
+      <button class="out" on:click={logout} aria-label="Se déconnecter">
         <Icon name="logOut" size={16} />
       </button>
     {/if}

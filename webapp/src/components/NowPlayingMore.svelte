@@ -150,7 +150,7 @@
     />
   {:else}
   {#if !id && !artistId && !credits?.credits?.length}
-    <p class="muted empty">Rien à afficher pour ce titre : les crédits et les titres similaires viennent de Deezer.</p>
+    <p class="muted empty">Rien à afficher.</p>
   {/if}
 
   <!-- P17/I6: one section, one fade when its answer arrives — never a per-card

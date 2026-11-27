@@ -46,9 +46,9 @@ export const DEFAULT_THEME = "encre";
 // Labels and blurbs live with the theme so Réglages and any other surface show
 // the same words (DESIGN, Réglages › Apparence).
 export const THEME_INFO = {
-  encre: { label: "Encre", hint: "Sombre, accent citron. Le défaut." },
-  papier: { label: "Papier", hint: "Clair chaud, encre noire, citron en surlignage." },
-  pochette: { label: "Pochette", hint: "Sombre, l'accent suit la pochette qui joue." },
+  encre: { label: "Encre" },
+  papier: { label: "Papier" },
+  pochette: { label: "Pochette" },
 };
 
 // The accent a theme paints before the person chooses one. This is the value
