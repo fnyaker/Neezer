@@ -647,6 +647,9 @@
   }
   main :global(.notices) {
     top: var(--topbar-h);
+    /* The shell's content column: the notices float over the page, never in
+       its flow (see Notices.svelte), so they start where the column starts. */
+    left: calc(var(--sidebar-w) + var(--page-x));
   }
   /* The top bar brings the top margin itself, so the page's own top padding
      would double it — and a sticky box cannot be pulled up by a negative
@@ -664,15 +667,23 @@
     padding-bottom: calc(var(--player-h) + 80px);
     font-size: 0.95rem;
   }
+  /* The server-unreachable banner arrives on its own (a reconnect that fails
+     to revalidate the session), so it floats over the page instead of pushing
+     it down — the same rule as the notices, and the same geometry. */
   .boot-banner {
+    position: fixed;
+    top: calc(var(--topbar-h) + 6px);
+    left: calc(var(--sidebar-w) + var(--page-x));
+    right: var(--page-x);
+    z-index: 59;
     display: flex;
     align-items: center;
     gap: 16px;
-    margin: 12px var(--page-x) 0;
     padding: 10px 12px 10px 16px;
     border: 1px solid var(--ln);
     border-radius: var(--r-card);
     background: var(--s1);
+    box-shadow: var(--glass-shadow-2);
   }
   .boot-banner p {
     margin: 0;
@@ -735,6 +746,11 @@
          controls and grows by the safe area, and every sticky page header
          follows the same token. */
       --topbar-h: calc(60px + var(--safe-top, 0px));
+    }
+    /* One column: there is no sidebar to start after. */
+    main :global(.notices),
+    .boot-banner {
+      left: var(--page-x);
     }
     .layout,
     .layout.np-open {

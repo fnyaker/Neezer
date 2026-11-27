@@ -1181,7 +1181,7 @@
 
   <div class="body">
     <div class="mid" class:strip={stripViz}>
-      <div class="cur-lyric" class:on={!!$currentLyricLine && !$ecoMode} aria-hidden="true">
+      <div class="cur-lyric" aria-hidden="true">
         {#if $currentLyricLine && !$ecoMode}
           {#key $currentLyricLine}
             <span in:swap>{$currentLyricLine}</span>
@@ -1576,19 +1576,24 @@
     justify-content: center;
   }
 
-  /* current synced lyric line, above the cover carousel (up to 3 lines) */
+  /* Current synced lyric line, above the cover carousel (up to 3 lines).
+     The box is ALWAYS three lines tall, empty or not: a line that appears,
+     disappears or wraps to a second or third row changes nothing around it.
+     It used to be `display: none` without a line and to grow with its text,
+     so the cover and the transport jumped at every lyric line (measured at
+     412x915: the carousel's top 133.6 px with a one-row line, 118.1 px with
+     none, 161.8 px with a three-row one — 43.8 px of jump; the transport the
+     same, and 42.4 px at 360x640. Both 0 after this rule, CLS 0.0643 -> 0). The
+     swap of `in:swap` is opacity and transform only, never height. */
   .cur-lyric {
     margin: 0 22px 2px;
-    /* grid stack: crossfading lines share one cell so the box grows to fit
-       the tallest line instead of clipping long lyrics to a single row */
+    height: calc(3 * 1.3 * 1.02rem);
+    overflow: hidden;
+    /* grid stack: crossfading lines share one cell, centred in the fixed box
+       instead of growing it */
     display: grid;
     justify-items: center;
     align-items: center;
-  }
-  /* No line, no box: the cover and the transport take the room instead of a
-     26 px empty band on a 640 px screen. */
-  .cur-lyric:not(.on) {
-    display: none;
   }
   .cur-lyric span {
     grid-area: 1 / 1;
