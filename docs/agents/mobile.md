@@ -8694,3 +8694,38 @@ constraints` à l'ouverture, l'app mourait. **Correctif.** `rememberHistoryItems
 (`LibraryActions.historyItems`) emploient ; les clés sont préfixées `history-` (la liste de la
 Bibliothèque a déjà son `head`). **Preuve.** `LibraryHistoryLeafTest` lève l'exception sur l'ancien
 code et passe après.
+
+### NP1 — Le titre, la pochette et le son suivent la même ligne (delivered 2026-11-27)
+
+**Symptôme** (téléphone réel, v1.6.9) : après précédent / suivant, le titre et le fond (dérivé de la
+pochette) montraient un autre titre que celui entendu. Cinq causes, chacune reproduite par un test
+qui échoue sur l'ancien code (`nz-core/src/player/tests/sync.rs`, `nz-audio/src/mixer.rs`) :
+
+1. **Le mélangeur hoistait tous les `InstallNext` d'un tampon avant le reste**
+   (`mixer.rs#drain`). Un saut est suivi aussitôt du préchargement de la ligne d'après : les deux
+   arrivaient dans le même tampon, le préchargement remplaçait la voix que la promotion allait
+   prendre, `promote_next` ne trouvait plus la génération, **rien ne changeait côté haut-parleur**
+   et aucun `Started` ne venait. La file nommait C, le son restait B. Règle : seuls les
+   `InstallNext` envoyés AVANT un `PromoteNext` passent devant, le reste suit l'ordre d'envoi
+   (`a_preload_sent_after_a_promotion_does_not_replace_the_promoted_voice`,
+   `rapid_next_and_previous_end_on_the_row_the_screen_names` : 6 échecs sur 6 avant, 0 sur 6 après).
+2. **`install_next` / `install_current` n'étaient pas atomiques** : la commande au mélangeur et
+   l'enregistrement `preloaded` pouvaient s'entrelacer (voix effacée du mélangeur, enregistrement
+   gardé). Ils prennent maintenant le verrou de l'enregistrement.
+3. **`skip_to_preloaded` ne faisait pas avancer `load_gen`** : un `load` ou un `seek` encore en
+   ouverture se posait par-dessus la voix promue (`a_skip_onto_the_preloaded_voice_supersedes_the_seek_still_opening`).
+4. **Un `Started` de la ligne suivante lu comme un passage gapless** alors qu'un chargement était en
+   attente (suivant puis précédent d'un coup : la file avançait d'un cran de trop). Un passage
+   gapless n'existe que sans `pending_load`.
+5. **Deux fils poussaient des instantanés** (le worker et les rappels de focus / route / veille) :
+   pris puis livrés, un instantané ancien pouvait arriver après un neuf et rester jusqu'au prochain
+   changement (`snapshots_reach_a_listener_in_order_and_the_last_is_the_newest`). `emit_change`
+   prend un verrou de livraison ; `PlayerFeed` et `NzPlayer` ignorent en plus tout instantané de
+   `version` plus ancienne (`PlayerFeedOrderTest`).
+
+Deux règles de plus : suivant / précédent vers une ligne qui n'est pas la voix préchargée **coupe la
+voix précédente** (comme `Jump` le faisait déjà) au lieu de la laisser jouer sous le nouveau titre
+pendant l'ouverture du flux ; et `PlayerBackdrop` peint d'abord la rainure du titre, puis la
+pochette, pour ne jamais garder la pochette du titre précédent derrière le nouveau. Un écouteur
+ne doit pas pousser (`set_audio`, `set_ducked`…) depuis son propre rappel : le verrou de livraison
+est tenu pendant les rappels.

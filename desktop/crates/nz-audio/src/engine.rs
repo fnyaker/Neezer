@@ -601,6 +601,11 @@ impl Engine {
         let Some(preloaded) = self.inner.take_preloaded(id, quality) else {
             return false;
         };
+        // The promotion IS a load: a `load` or a `seek` still opening for the
+        // row left behind carries the previous mark and would otherwise land
+        // over the promoted voice (`install_current` only drops a stale mark),
+        // so the speaker played the old row while the queue named this one.
+        self.inner.load_gen.fetch_add(1, Ordering::SeqCst);
         {
             let mut state = self.inner.state.lock().expect("engine state poisoned");
             if let Some(old) = state.current.replace(Slot {
@@ -1113,9 +1118,17 @@ impl Inner {
         }
         drop(state);
         // Whatever was preloaded belongs to the old queue position: playing it
-        // now would jump the queue.
-        self.send(MixerCmd::InstallNext(None));
-        self.clear_preloaded();
+        // now would jump the queue. The mixer's next voice and the engine's
+        // record of it change TOGETHER, under the record's lock, against
+        // `install_next`: interleaved, a preload landed in the mixer and was
+        // wiped from it while its record survived, and the skip that promoted
+        // that record changed nothing in the mixer (the queue named the row, the
+        // speaker kept the old one).
+        {
+            let mut slot = self.preloaded.lock().expect("preloaded poisoned");
+            self.send(MixerCmd::InstallNext(None));
+            slot.take();
+        }
         self.send(MixerCmd::InstallCurrent(Some(built.consumer)));
         if self.playing.load(Ordering::SeqCst) {
             self.shared.set_paused(false);
@@ -1123,6 +1136,9 @@ impl Inner {
     }
 
     fn install_next(&self, mark: u64, id: &str, quality: Quality, built: Built) {
+        // The check, the mixer command and the record are ONE step under the
+        // record's lock (see `install_current`).
+        let mut slot = self.preloaded.lock().expect("preloaded poisoned");
         if self.stopped.load(Ordering::Relaxed) || mark != self.load_gen.load(Ordering::SeqCst) {
             built.stop();
             return;
@@ -1142,7 +1158,7 @@ impl Inner {
         self.send(MixerCmd::InstallNext(Some(built.consumer)));
         // Recorded AFTER the command: a skip that raced the preload sees no
         // record and falls back to a real load, which is always correct.
-        *self.preloaded.lock().expect("preloaded poisoned") = Some(Preloaded {
+        *slot = Some(Preloaded {
             id: id.to_string(),
             quality,
             generation: built.generation,

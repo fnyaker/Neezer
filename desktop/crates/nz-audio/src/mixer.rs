@@ -376,10 +376,23 @@ impl Mixer {
                 count += 1;
             }
         }
-        for slot in pending.iter_mut().take(count) {
+        // Only a drain that carries a promotion reorders anything, and only the
+        // `InstallNext` commands SENT BEFORE it (the queued voice it consumes
+        // must have landed). Everything else applies in the order it was sent.
+        // Hoisting every `InstallNext` put a preload that followed a load before
+        // that load's own `InstallNext(None)` (wiped from the mixer while the
+        // engine still recorded it as queued), and put the preload that follows a
+        // skip before the skip's own promotion (it replaced the voice the
+        // promotion was about to take, so the skip changed nothing in the mixer:
+        // the queue named the row, the speaker kept the old one).
+        let promote_at = pending
+            .iter()
+            .take(count)
+            .position(|slot| matches!(slot, Some(MixerCmd::PromoteNext { .. })));
+        for slot in pending.iter_mut().take(promote_at.unwrap_or(0)) {
             // 1. The queued next voice lands first: a PromoteNext in the same
             // drain consumes it.
-            if matches!(slot.as_ref(), Some(MixerCmd::InstallNext(_)))
+            if matches!(slot.as_ref(), Some(MixerCmd::InstallNext(Some(_))))
                 && let Some(cmd) = slot.take()
             {
                 self.apply(cmd);
@@ -1019,6 +1032,79 @@ mod tests {
     ///
     /// Measured before the fix: a skip re-opened the source and the preloaded
     /// voice was thrown away — the `PromoteNext` path did not exist.
+    /// A skip is followed at once by the preload of the row after it, and both
+    /// can reach one drain: the preload must NOT replace the voice the promotion
+    /// is about to take (measured through the player: the queue named row C, the
+    /// speaker kept B, and no `Started` ever came).
+    #[test]
+    fn a_preload_sent_after_a_promotion_does_not_replace_the_promoted_voice() {
+        let shared = Arc::new(MixerShared::new(48_000, 1.0));
+        shared.set_paused(false);
+        let (note_tx, mut note_rx) = RingBuffer::new(64);
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
+            Arc::clone(&shared),
+            note_tx,
+            Settings::new(),
+            crate::tap::Tap::pair(crate::tap::TAP_FRAMES).0,
+            48_000,
+        );
+        let (mut a, a_consumer, _a_status) = voice_ring(48_000, 0.5, 1, 0.0);
+        let (mut b, b_consumer, _b_status) = voice_ring(48_000, 0.5, 2, 0.0);
+        let (mut c, c_consumer, _c_status) = voice_ring(48_000, 0.5, 3, 0.0);
+        feed(&mut a, 24_000);
+        feed(&mut b, 24_000);
+        feed(&mut c, 24_000);
+        cmds.push(MixerCmd::InstallCurrent(Some(a_consumer)))
+            .unwrap();
+        cmds.push(MixerCmd::InstallNext(Some(b_consumer))).unwrap();
+        let mut out = vec![0.0f32; 480 * 2];
+        mixer.render(&mut out);
+        assert_eq!(note_rx.pop().unwrap(), MixerNote::Started { generation: 1 });
+
+        // The skip and the preload that follows it, in ONE drain.
+        cmds.push(MixerCmd::PromoteNext { generation: 2 }).unwrap();
+        cmds.push(MixerCmd::InstallNext(Some(c_consumer))).unwrap();
+        mixer.render(&mut out);
+        assert_eq!(
+            note_rx.pop().ok(),
+            Some(MixerNote::Started { generation: 2 }),
+            "the promoted voice never started"
+        );
+        assert_eq!(shared.current_generation(), 2);
+    }
+
+    /// A load's `InstallNext(None)` and the preload that follows that load,
+    /// drained together, apply in the order sent: the preload survives.
+    #[test]
+    fn a_preload_sent_after_a_load_survives_that_loads_clearing_of_the_next() {
+        let shared = Arc::new(MixerShared::new(48_000, 1.0));
+        shared.set_paused(false);
+        let (note_tx, _note_rx) = RingBuffer::new(64);
+        let (mut mixer, mut cmds, _party, _gain) = Mixer::new(
+            Arc::clone(&shared),
+            note_tx,
+            Settings::new(),
+            crate::tap::Tap::pair(crate::tap::TAP_FRAMES).0,
+            48_000,
+        );
+        let (mut a, a_consumer, a_status) = voice_ring(48_000, 0.5, 1, 0.0);
+        let (mut b, b_consumer, _b_status) = voice_ring(48_000, 0.5, 2, 0.0);
+        feed(&mut a, 4);
+        feed(&mut b, 24_000);
+        a_status.finish();
+        cmds.push(MixerCmd::InstallNext(None)).unwrap();
+        cmds.push(MixerCmd::InstallCurrent(Some(a_consumer)))
+            .unwrap();
+        cmds.push(MixerCmd::InstallNext(Some(b_consumer))).unwrap();
+        let mut out = vec![0.0f32; 480 * 2];
+        mixer.render(&mut out);
+        assert_eq!(
+            shared.current_generation(),
+            2,
+            "the queued voice was wiped, so nothing took over from the first"
+        );
+    }
+
     #[test]
     fn a_manual_skip_promotes_the_preloaded_voice_without_a_gap() {
         let shared = Arc::new(MixerShared::new(48_000, 1.0));

@@ -129,7 +129,12 @@ class NzPlayer(private val api: PlayerApi) : SimpleBasePlayer(Looper.getMainLoop
     // --- what Rust pushes ------------------------------------------------
 
     override fun onSnapshot(snapshot: PlayerSnapshot) {
-        this.snapshot = snapshot
+        // `version` only grows: a snapshot older than the one held (two Rust
+        // threads push) must not put the previous track back in the session.
+        synchronized(this) {
+            if (snapshot.version < this.snapshot.version) return
+            this.snapshot = snapshot
+        }
         invalidate()
     }
 

@@ -19,6 +19,7 @@
 mod audio;
 mod preload;
 mod rules;
+mod sync;
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -130,6 +131,34 @@ pub struct BenchState {
     /// (`None` = measured as absent, which normalisation must leave alone).
     pub gains: Mutex<HashMap<String, Option<f32>>>,
     pub flow_calls: AtomicUsize,
+    /// Tracks whose `/stream` answer is held until the test opens the gate: a
+    /// load that is still opening, without a clock.
+    pub holds: Mutex<HashMap<String, Arc<Gate>>>,
+}
+
+/// A door a test opens: the server's answer waits on it.
+#[derive(Default)]
+pub struct Gate {
+    open: Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+impl Gate {
+    pub fn open(&self) {
+        *self.open.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            let (guard, _) = self
+                .changed
+                .wait_timeout(open, Duration::from_millis(50))
+                .unwrap();
+            open = guard;
+        }
+    }
 }
 
 /// The in-process server.
@@ -202,6 +231,17 @@ impl Bench {
         if let Some(track) = tracks.get_mut(id) {
             track.edges = Some((start, end, duration));
         }
+    }
+
+    /// Holds `id`'s stream answer until the returned gate is opened.
+    pub fn hold(&self, id: &str) -> Arc<Gate> {
+        let gate = Arc::new(Gate::default());
+        self.state
+            .holds
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), Arc::clone(&gate));
+        gate
     }
 
     /// A slow body: the ladder's measurement reads what the socket delivers.
@@ -572,6 +612,10 @@ fn route(
             let Some(served) = served else {
                 return json(404, r#"{"error":"not found"}"#.to_owned());
             };
+            let gate = state.holds.lock().unwrap().get(id).cloned();
+            if let Some(gate) = gate {
+                gate.wait();
+            }
             stream_body(&served, headers, param("start"), state)
         }
         _ => json(404, r#"{"error":"not found"}"#.to_owned()),

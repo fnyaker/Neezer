@@ -3,6 +3,7 @@ package fr.neezer.mobile.feature.nowplaying
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import uniffi.nz_ffi.PlayerListener
 import uniffi.nz_ffi.PlayerSnapshot
 import uniffi.nz_ffi.PositionInfo
@@ -25,6 +26,10 @@ import uniffi.nz_ffi.PositionInfo
 object PlayerFeed {
     private val _snapshot = MutableStateFlow<PlayerSnapshot?>(null)
     val snapshot: StateFlow<PlayerSnapshot?> = _snapshot.asStateFlow()
+
+    /** The snapshot to keep: [incoming] unless [shown] is a newer one. */
+    internal fun newer(shown: PlayerSnapshot?, incoming: PlayerSnapshot): PlayerSnapshot =
+        if (shown != null && incoming.version < shown.version) shown else incoming
 
     private val installed = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -53,7 +58,11 @@ object PlayerFeed {
                 // into the core from here is the deadlock the boundary's rules
                 // name. The reconcile step (a podcast's rate) runs on the
                 // collector's own thread, where `NowPlayingHost` drives it.
-                _snapshot.value = snapshot
+                // A snapshot older than the one shown is never the screen's
+                // last word (`version` only grows): two Rust threads push, and
+                // a late delivery would leave the previous track on screen
+                // until the next change.
+                _snapshot.update { shown -> newer(shown, snapshot) }
             }
 
             override fun onQueueChanged(version: ULong) {
@@ -82,6 +91,7 @@ object PlayerFeed {
      */
     internal fun usePortForTest(port: PlayerPort, subscribe: ((PlayerListener) -> Unit)?) {
         installed.set(false)
+        _snapshot.value = null
         install(port, subscribe)
     }
 
