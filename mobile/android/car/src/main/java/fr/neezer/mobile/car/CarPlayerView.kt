@@ -70,6 +70,8 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         const val ULTRA_DP = 76
         /** The visual floor for the five FULL controls when the row is tight. */
         const val MIN_TARGET_DP = 56
+        /** The Material touch-target floor (C48): every clickable box is this big. */
+        const val TOUCH = 48
         const val PRESS_ALPHA = 0.86f
         const val DEFAULT_ULTRA_DESCRIPTION =
             "Sillon : toucher pour lire, glisser à gauche pour le titre précédent, " +
@@ -251,9 +253,11 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     // button stays centred. That span becomes the move handle's slot: the same
     // balance, the title keeps its width, and a drag has its own control away
     // from the heart/play pair. The visible button is 44 dp inside the 64 dp
-    // slot (the accessible minimum, and no transport glyph is near it).
+    // slot; its TOUCH box is the 48 dp floor (C48), the extra 4 dp taken from
+    // the slot's empty margin, so no other control moves.
     private val fullMove = iconButton(
         sizeDp = 44,
+        touchDp = TOUCH,
         fill = veil(CarStyle.TX, 0.10f),
         stroke = Color.TRANSPARENT,
         strokeDp = 0f,
@@ -264,7 +268,7 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
     private val fullMoveSlot = FrameLayout(context).apply {
         addView(
             fullMove,
-            FrameLayout.LayoutParams(dp(44f), dp(44f), Gravity.CENTER),
+            FrameLayout.LayoutParams(dp(TOUCH.toFloat()), dp(TOUCH.toFloat()), Gravity.CENTER),
         )
     }
 
@@ -852,11 +856,17 @@ class CarPlayerView(context: Context, private val host: CarHost) : FrameLayout(c
         strokeDp: Float,
         icon: View,
         description: String,
+        // The 48 dp floor (C48): the box is `touchDp`, the drawn circle keeps
+        // `sizeDp` and is centred by an inset of (touchDp - sizeDp) / 2, so a
+        // control under the floor grows its TARGET without changing a pixel.
+        touchDp: Int = sizeDp,
         onClick: (() -> Unit)? = null,
     ): FrameLayout = FrameLayout(context).apply {
-        background = CarStyle.roundRect(context, fill, stroke, sizeDp / 2f, strokeDp)
-        minimumWidth = dp(sizeDp.toFloat())
-        minimumHeight = dp(sizeDp.toFloat())
+        val circle = CarStyle.roundRect(context, fill, stroke, sizeDp / 2f, strokeDp)
+        val inset = dp((touchDp - sizeDp) / 2f)
+        background = if (touchDp > sizeDp) InsetDrawable(circle, inset) else circle
+        minimumWidth = dp(touchDp.toFloat())
+        minimumHeight = dp(touchDp.toFloat())
         isClickable = true
         isFocusable = true
         contentDescription = description
