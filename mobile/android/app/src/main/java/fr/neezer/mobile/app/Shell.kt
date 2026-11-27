@@ -26,6 +26,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination
@@ -159,38 +161,42 @@ fun AnimatedContentTransitionScope<NavBackStackEntry>.isTabSwap(): Boolean =
 fun TabPage(
     page: Int,
     nav: NzNavigator,
+    visible: Boolean,
     searchQuery: String? = null,
     libraryTab: String? = null,
 ) {
     when (tabOfPage(page)) {
-        Tab.Accueil -> HomeEntry(nav)
-        Tab.Rechercher -> SearchEntry(searchQuery, nav)
-        Tab.Bibliotheque -> LibraryEntry(libraryTab, nav)
-        Tab.Podcasts -> PodcastsEntry(nav)
+        Tab.Accueil -> HomeEntry(nav, visible = visible)
+        Tab.Rechercher -> SearchEntry(searchQuery, nav, visible = visible)
+        Tab.Bibliotheque -> LibraryEntry(libraryTab, nav, visible = visible)
+        Tab.Podcasts -> PodcastsEntry(nav, visible = visible)
         null -> Unit
     }
 }
 
 /**
- * The four tab roots in ONE pager, so a horizontal drag moves the screens with the
- * finger, and a tap on the bar animates the same page instead of replacing the
- * whole content (two animations fighting each other was the "it resets after the
- * gesture" feeling on Android).
+ * Les quatre racines d'onglet dans UN pager, pour qu'un glissement horizontal
+ * emmène les écrans avec le doigt et qu'un tap sur la barre anime la même page au
+ * lieu de remplacer tout le contenu (deux animations qui se battent : « ça se
+ * remet à zéro après le geste » sur Android).
  *
- * The settle is `PagerDefaults`' own fling behaviour with the plan's numbers (§3):
- * `snapPositionalThreshold = 0.28f` — released past 28 % of the width the next
- * page wins even with no velocity — and `spring(1f, StiffnessMediumLow)` from the
- * release velocity. Under eco or reduced motion the settle lands at once
- * (`transitions.md` M14): the finger still moves the page, nothing animates after
- * it.
+ * Le règlement est le `PagerDefaults` du plan (§3) : `snapPositionalThreshold =
+ * 0.28f` — relâché au-delà de 28 % de la largeur la page suivante gagne, même
+ * sans vitesse — et `spring(1f, StiffnessMediumLow)` depuis la vitesse du
+ * relâchement. Sous éco ou mouvement réduit le règlement se pose d'un coup
+ * (`transitions.md` M14) : le doigt déplace toujours la page, rien n'anime après.
  *
- * `beyondViewportPageCount` is 1 only WHILE the finger is down: the neighbouring
- * page is composed from the first pixel of the drag (nothing appears half-way
- * through), and back to 0 on release so a settled shell holds one page. That is
- * the one extra compose this lot adds, and it costs a recomposition of the
- * neighbour — no request (each tab's read is its own, on the `User` lane, once;
- * `NzCore::stats()` counts them).
+ * **Les quatre pages restent composées** (`beyondViewportPageCount = 3`, lot
+ * SB2) : la personne ne veut pas voir un onglet se reconstruire, donc un onglet
+ * revenu retrouve son modèle, son défilement et ses données sans une requête. Ce
+ * que ça coûte : trois compositions de plus au lancement, mesurées dans
+ * l'acceptation ; une page qu'on n'a pas encore visitée ne CHARGE rien
+ * (`LoadWhenShown`, la porte des quatre entrées).
  *
+ * @param shown `false` quand la personne n'est pas sur une racine d'onglet (une
+ *   fiche, Réglages, la mise en route) : les pages restent composées mais aucune
+ *   n'est visible, donc aucune ne charge ni ne mesure sa mise en page
+ *   ([KeepComposed]).
  * @param page the page's content. The shell passes nothing and [TabPage] draws
  *   the real entry; a JVM test passes a text node, because those entries need the
  *   Rust core.
@@ -199,6 +205,7 @@ fun TabPage(
 fun TabPager(
     nav: NzNavigator,
     pager: PagerState,
+    shown: Boolean = true,
     searchQuery: String? = null,
     libraryTab: String? = null,
     page: (@Composable (Int) -> Unit)? = null,
@@ -207,7 +214,7 @@ fun TabPager(
     HorizontalPager(
         state = pager,
         modifier = Modifier.fillMaxSize(),
-        beyondViewportPageCount = if (pager.isScrollInProgress) 1 else 0,
+        beyondViewportPageCount = Tab.entries.size - 1,
         flingBehavior = PagerDefaults.flingBehavior(
             state = pager,
             pagerSnapDistance = PagerSnapDistance.atMost(1),
@@ -219,7 +226,56 @@ fun TabPager(
             snapPositionalThreshold = 0.28f,
         ),
     ) { index ->
-        if (page != null) page(index) else TabPage(index, nav, searchQuery, libraryTab)
+        if (page != null) {
+            page(index)
+        } else {
+            TabPage(index, nav, shown && pager.currentPage == index, searchQuery, libraryTab)
+        }
+    }
+}
+
+/**
+ * Garde [content] composé, mais ne le mesure ni ne le place quand [shown] est
+ * faux : rien n'est dessiné, aucun toucher ne l'atteint, et sa composition
+ * (modèles, `remember`, défilement) survit. C'est ce qui permet au pager des
+ * onglets de vivre sous le `NavHost` sans se montrer derrière une fiche ou
+ * Réglages (lot SB2).
+ *
+ * **Cachée, la couche sort aussi de l'arbre d'accessibilité** : `clearAndSetSemantics`
+ * retire tout son sous-arbre de la sémantique, donc TalkBack n'annonce pas un
+ * écran qu'on ne voit pas, et un test qui cherche « la première zone qui
+ * défile » ne tombe pas sur le pager des onglets caché derrière Réglages
+ * (mesuré : `ShellSmokeTest.settingsShowsTheRustVersion` et `CrashCardTest`
+ * échouaient sans ça, sur l'émulateur).
+ */
+@Composable
+fun KeepComposed(shown: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val semantics = if (shown) Modifier else Modifier.clearAndSetSemantics { }
+    Layout(content = content, modifier = modifier.fillMaxSize().then(semantics)) { measurables, constraints ->
+        val placeables = if (shown) measurables.map { it.measure(constraints) } else emptyList()
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeables.forEach { it.place(0, 0) }
+        }
+    }
+}
+
+/**
+ * Les quatre racines d'onglet, montées UNE fois pour toute l'app, sous le
+ * `NavHost` (lot SB2). Les routes d'onglet du graphe ne dessinent rien : elles
+ * disent seulement où l'on est. Quand la destination n'est pas un onglet
+ * (fiche, Réglages, Setup), la couche est cachée mais reste composée.
+ */
+@Composable
+fun TabLayer(
+    shown: Boolean,
+    nav: NzNavigator,
+    pager: PagerState,
+    searchQuery: String?,
+    libraryTab: String?,
+    page: (@Composable (Int) -> Unit)? = null,
+) {
+    KeepComposed(shown) {
+        TabPager(nav, pager, shown, searchQuery, libraryTab, page)
     }
 }
 

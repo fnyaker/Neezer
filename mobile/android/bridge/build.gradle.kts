@@ -172,4 +172,17 @@ dependencies {
     // `Context.filesDir`, which android.jar's stubs cannot give. Literal pin, like
     // every module's JVM tests (the catalog belongs to MB0).
     testImplementation("org.robolectric:robolectric:4.18")
+    // SB2: `LoadWhenShownTest` mounts the real gate in a real composition, so the
+    // module needs the same JVM compose harness every screen module has — the BOM
+    // is what gives `ui-test-junit4` its version (this module had no compose
+    // version of its own: it took one transitively from `coil-compose`).
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui)
+    testImplementation(libs.androidx.activity.compose)
+    testImplementation("androidx.test:core:1.7.0")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    // `createAndroidComposeRule` hosts its content in an activity the test
+    // manifest declares; without it Robolectric finds no window to render.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
