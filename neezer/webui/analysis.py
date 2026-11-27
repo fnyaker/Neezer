@@ -314,6 +314,21 @@ def plan():
     if extractor:
         cond = cond | (TrackAnalysis.embed_version < emb.EMBED_VERSION)
     todo_rows = TrackAnalysis.select().where(cond).count()
+    # A current measure whose loudness never landed (the ebur128 meter was
+    # dropped on an ffmpeg abort, or the row predates the gain coming from the
+    # measure): its Track.gain is null and only a repair brings it back. Counted
+    # here because the nightly window starts on `todo`, so without this the
+    # repair would only ever run when somebody pressed the button.
+    lost_loudness = TrackAnalysis.select().join(Track).where(
+        TrackAnalysis.version >= ANALYSIS_VERSION,
+        Track.gain.is_null(),
+        TrackAnalysis.data.is_null(False),
+        # No lufs key at all, or one stored as null — in either JSON spacing,
+        # since a payload written by another release may carry `": "`.
+        ~TrackAnalysis.data.contains('"lufs"')
+        | TrackAnalysis.data.contains('"lufs":null')
+        | TrackAnalysis.data.contains('"lufs": null'),
+    ).count()
     unmeasured = max(0, total - measured)
     return {
         "total": total,
@@ -321,8 +336,9 @@ def plan():
         "stale_measure": stale_measure,
         "stale_embed": stale_embed,
         "stale_decide": stale_decide,
-        "todo": unmeasured + todo_rows,
-        "current": max(0, total - unmeasured - todo_rows),
+        "lost_loudness": lost_loudness,
+        "todo": unmeasured + todo_rows + lost_loudness,
+        "current": max(0, total - unmeasured - todo_rows - lost_loudness),
         "version": ANALYSIS_VERSION,
         "embed_version": emb.EMBED_VERSION,
         "extractor": extractor,

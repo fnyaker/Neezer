@@ -5765,7 +5765,13 @@ class TrackAnalysisTestCase(unittest.TestCase):
         self.assertEqual(len(runs), 1)
 
     def test_a_crash_with_nothing_measured_retries_without_the_loudness_meter(self):
-        """Keep the filter there is no verdict without; drop the one with a default."""
+        """Keep the filter there is no verdict without; measure the loudness alone.
+
+        The retry is what saves the verdict, but the meter it drops carries the
+        ReplayGain — this is the exact path that used to leave a track with
+        `gain none` for good (`tests/test_gain_repair.py`). One ebur128-only
+        pass brings the loudness back, and that is the whole extra cost.
+        """
         from neezer.deezer import analysis as ana
 
         class Aborted:
@@ -5780,11 +5786,18 @@ class TrackAnalysisTestCase(unittest.TestCase):
 
         Retried.stdout = self._aspectralstats(900)
 
+        class Loudness:
+            returncode = 0
+            stdout = b""
+            stderr = b"    I:          -10.3 LUFS\n    LRA:         9.5 LU\n"
+
         runs = []
 
         def fake(cmd, **k):
             runs.append(cmd)
-            return Aborted() if len(runs) == 1 else Retried()
+            if len(runs) == 1:
+                return Aborted()
+            return Retried() if len(runs) == 2 else Loudness()
 
         orig = ana.subprocess.run
         ana.subprocess.run = fake
@@ -5793,13 +5806,16 @@ class TrackAnalysisTestCase(unittest.TestCase):
         finally:
             ana.subprocess.run = orig
 
-        self.assertEqual(len(runs), 2)
+        self.assertEqual(len(runs), 3)
         self.assertIn("ebur128", " ".join(runs[0]))
+        self.assertIn("aspectralstats", " ".join(runs[0]))
         self.assertNotIn("ebur128", " ".join(runs[1]))
         self.assertIn("aspectralstats", " ".join(runs[1]))
+        self.assertIn("ebur128", " ".join(runs[2]))
+        self.assertNotIn("aspectralstats", " ".join(runs[2]))
         self.assertEqual(feats["frames"], 900)
-        # No loudness meter, so no loudness — and `analyze_track` defaults it.
-        self.assertIsNone(feats["lra"])
+        self.assertEqual(feats["lufs"], -10.3)
+        self.assertEqual(feats["lra"], 9.5)
 
     def test_a_crash_that_measured_almost_nothing_is_still_a_failure(self):
         """Salvage is for a run that finished the track, not one that died early.

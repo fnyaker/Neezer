@@ -725,7 +725,13 @@ server's own work). Four rules came out of it, each with its number:
 **Gain and lyrics no longer come from Deezer.** `Track.gain` is the measured loudness
 (`analysis.apply_measured_gain`, `gain = lufs + GAIN_FROM_LUFS_OFFSET`; `/api/gain`, `/api/gains` read the
 database only and take UUIDs or Deezer ids; `regain_from_analyses` re-derives it from stored analyses without
-ffmpeg at the start of a backfill). Lyrics are LRCLIB only (`lyrics.ensure_lyrics`, hits more than 3 s off the
+ffmpeg at the start of a backfill). **A loudness the meter lost is repaired, not skipped**: some ffmpeg builds
+abort inside ebur128, the retry without it stores a current verdict with `lufs: null`, and nothing would ever
+measure that row again — so `_spectral` fills the loudness with one ebur128-only pass (`measure_loudness`), and
+the backfill re-measures the loudness ALONE (`repair_loudness`, one decode) for a current verdict whose gain is
+still null (`_lost_loudness`). `webui.analysis.plan()["lost_loudness"]` counts them, so the nightly window
+starts for that reason too; measured on a real 440 Hz FLAC through ffmpeg: -3.7 LUFS → gain -4.1 dB, against
+`gain none` on master. Lyrics are LRCLIB only (`lyrics.ensure_lyrics`, hits more than 3 s off the
 track's duration refused, synced replaces plain, `facts.lyrics_tried` in the sidecar stops repeat searches;
 the route searches after answering). Shared building blocks: `library.update_track_facts` (sidecar `facts`),
 `neezer/libjob.py` (resumable library job), `neezer/filetags.py` (facts read from file tags).
