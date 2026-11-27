@@ -44,6 +44,7 @@ import fr.neezer.mobile.designsystem.NzFader
 import fr.neezer.mobile.designsystem.NzGlyph
 import fr.neezer.mobile.designsystem.NzRadius
 import fr.neezer.mobile.designsystem.NzSpacing
+import fr.neezer.mobile.designsystem.NzSwap
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.Sillon
 import uniffi.nz_ffi.FxState
@@ -101,23 +102,34 @@ internal fun AudioFxPanel(model: AudioFxModel, modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(NzSpacing.m),
     ) {
-        if (state == null) {
-            // The first read is `kv` only: it lands in the frame it was asked for,
-            // and a card that cannot read says why instead of spinning.
-            Text(
-                text = model.failure ?: "Lecture des réglages…",
-                style = Sillon.type.body,
-                color = Sillon.colors.dim,
-            )
-            return@Column
+        // The panel's phase replaces in place (M7): the first read's line, then
+        // the five cards.
+        NzSwap(
+            targetState = if (state == null) AUDIOFX_LOADING else AUDIOFX_CONTENT,
+            label = "effets-audio",
+        ) { phase ->
+            if (phase == AUDIOFX_LOADING) {
+                // The first read is `kv` only: it lands in the frame it was asked
+                // for, and a card that cannot read says why instead of spinning.
+                Text(
+                    text = model.failure ?: "Lecture des réglages…",
+                    style = Sillon.type.body,
+                    color = Sillon.colors.dim,
+                )
+            } else if (state != null) {
+                OutputCard(model, state)
+                PanCard(model, state)
+                AudioCard(model, state)
+                EqualizerCard(model, state)
+                TransitionsCard(model, state)
+            }
         }
-        OutputCard(model, state)
-        PanCard(model, state)
-        AudioCard(model, state)
-        EqualizerCard(model, state)
-        TransitionsCard(model, state)
     }
 }
+
+/** The panel's phases, as the [NzSwap] target. */
+internal const val AUDIOFX_LOADING = "chargement"
+internal const val AUDIOFX_CONTENT = "contenu"
 
 // -- the cards -----------------------------------------------------------------
 
