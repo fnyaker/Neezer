@@ -268,63 +268,38 @@ player_evidence() {
         return 0
     fi
 
-    # The mid-gesture capture: the header's bounds give the finger's ROW; the
-    # finger starts at the middle of the screen (a press on a button is not a
-    # drag) and goes DOWN — the only direction the sheet accepts at rest
-    # (NowPlaying.kt: "an upward one has nowhere to go"). The swipe lasts 3 s, so
-    # a shot at 1.6 s lands mid-drag BY CONSTRUCTION: 53 % of the 1 440 px path
-    # is 43 % of the 676 dp sheet, above its 28 % dismissal threshold, and the
+    # The mid-gesture capture. The finger goes DOWN — the only direction the sheet
+    # accepts at rest (NowPlaying.kt: "an upward one has nowhere to go") — and it
+    # starts on the TITLE row, not in the header band.
+    #
+    # Measured on run 45937647741 (head ab045c0b), with both sides of the gesture
+    # instrumented: a DOWN at the header (y = 131 px, 50 dp under the status bar)
+    # never reaches the app AT ALL — a 3 s swipe from there logged zero touch
+    # events in `MainActivity.dispatchTouchEvent`, and `dumpsys window windows`
+    # names the reason (the AVD's launcher `Taskbar` and `StatusBar` windows sit
+    # above the activity and take the gesture) — while the same swipe started at
+    # 54 % of the height DOES follow the finger: `NZTOUCH act=0 x=540 y=1296` then
+    # `NZDRAG down=Offset(540,1296) … up claimed=true travelY=51 offsetY=591`.
+    # The player was never at fault: the bench's finger was not in its window.
+    #
+    # The middle x keeps the press off the chevron (a press on a button is not a
+    # drag): the title's own tap cancels itself once the finger leaves the slop.
+    # 42 % of the height of travel puts the release 987 px down — 41 % of the
+    # 676 dp sheet, above its 28 % dismissal threshold on DISTANCE alone, so the
+    # verdict does not depend on the injected velocity. The swipe lasts 3 s, so a
+    # shot at 1.6 s lands mid-drag BY CONSTRUCTION (53 % of the path, the sheet
+    # about a fifth of the screen down): the capture shows the movement, and the
     # release finishes the run. The `sleep` is inside a gesture the device is
-    # performing, and the row is the control's own — the two rules the plan
-    # forbids elsewhere do not apply here.
-    bounds="$(grep -F 'Réduire le lecteur' "$evidence/screens/08-lecteur.xml" | head -1 |
-        sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p')"
-    if [[ -z "$bounds" ]]; then
-        printf 'player=unavailable cause=no header bounds in 08-lecteur.xml\n'
-        return 0
-    fi
-    read -r x1 y1 x2 y2 <<<"$bounds"
+    # performing, so the two rules the plan forbids elsewhere do not apply here.
     read -r width height < <(ui_screen)
     x=$((width / 2))
-    y0=$(((y1 + y2) / 2))
-    y_end=$((y0 + height * 6 / 10))
-    # DIAGNOSTIC (temporary): the capture is taken ON THE DEVICE during the swipe
-    # (one shell, so `input swipe` and `screencap` start without an adb round
-    # trip), and both sides of the gesture log: the ACTIVITY's touch stream
-    # (NZTOUCH) says whether the window received it at all, the SHEET's handler
-    # (NZDRAG) says what it made of it. A second swipe, from the middle of the
-    # sheet instead of the header row, separates "the top of the screen belongs to
-    # the system" from "the handler ignores vertical drags".
-    adb_dev logcat -c >/dev/null 2>&1 || true
-    adb_dev shell dumpsys window windows 2>/dev/null |
-        grep -E "Window #|mFrame=|mTouchable" | head -30 | sed -e 's/^ *//' -e 's/^/diag win /' || true
+    y0=$((height * 54 / 100))
+    y_end=$((y0 + height * 42 / 100))
+    # The capture is taken ON THE DEVICE during the swipe: one shell, so
+    # `input swipe` and `screencap` start without an adb round trip.
     adb_dev shell "rm -f /sdcard/11-drag.png; input swipe $x $y0 $x $y_end 3000 >/dev/null 2>&1 & sleep 1.6; screencap -p /sdcard/11-drag.png" >/dev/null 2>&1 || true
     adb_dev pull /sdcard/11-drag.png "$evidence/screens/11-lecteur-glisse.png" >/dev/null 2>&1 || true
-    printf 'shot=11-lecteur-glisse direction=bas source=device\n'
-    if cmp -s "$evidence/screens/09-lecteur-suivant.png" \
-              "$evidence/screens/11-lecteur-glisse.png"; then
-        printf 'diag png=identical_to_09\n'
-    else
-        printf 'diag png=differs_from_09\n'
-    fi
-    wait 2>/dev/null || true
-    wait 2>/dev/null || true
-    adb_dev logcat -d -s NZTOUCH NZDRAG >"$evidence/nztouch.txt" 2>&1 || true
-    printf 'diag header_swipe reports=%s\n' "$(grep -c '' "$evidence/nztouch.txt" 2>/dev/null || echo 0)"
-    sed -e 's/^/diag /' "$evidence/nztouch.txt" | head -40
-    sleep 1
-    dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
-    if cmp -s "$evidence/screens/09-lecteur-suivant.xml" \
-              "$evidence/screens/11-lecteur-glisse.xml"; then
-        printf 'diag header_swipe=noeffect trying=title\n'
-        adb_dev logcat -c >/dev/null 2>&1 || true
-        adb_dev shell input swipe "$x" "$((height * 54 / 100))" "$x" "$((height * 88 / 100))" 400 >/dev/null 2>&1 || true
-        sleep 2
-        adb_dev logcat -d -s NZTOUCH NZDRAG >"$evidence/nztouch2.txt" 2>&1 || true
-        printf 'diag title_swipe reports=%s\n' "$(grep -c '' "$evidence/nztouch2.txt" 2>/dev/null || echo 0)"
-        sed -e 's/^/diag /' "$evidence/nztouch2.txt" | head -40
-        dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
-    fi
+    printf 'shot=11-lecteur-glisse direction=bas from=title\n'
     # The tree is taken AFTER the gesture on purpose: uiautomator waits for
     # inactivity, so during a drag it returns the last stable state — which is
     # how 11 came out identical to 09. After the release the sheet is closed and

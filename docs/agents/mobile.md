@@ -7725,23 +7725,28 @@ colonnes larges du lecteur, `NzBlurredBackdrop` de `NzSheet` (inchangé), le fon
   considérée puis écartée : sur un voile sombre elle ne fait que baisser la pochette claire.
   Référence de forme : Haze (<https://github.com/chrisbanes/haze>), qui capture une source et
   floute, avec un repli obligatoire.
-- **Le lecteur suit le doigt ; c'est le BANC qui glissait dans le mauvais sens.** Le geste du
-  parcours partait vers le HAUT (`y_end = y0 - height * 4 / 10`) alors que la feuille ne se ferme
-  que vers le bas et refuse explicitement un glissement vers le haut au repos (`NowPlaying.kt`,
-  « an upward one has nowhere to go »). Le suivi 1:1 est déjà tenu par `PlayerSheetGestureTest`
-  (`theSheetFollowsTheFingerOneToOne`, 60 dp de doigt = 60 dp de feuille ± 1 ; six images puis un
-  fling qui atterrit sur le cran fermé). Aucune ligne du lecteur ne change : le parcours glisse vers
-  le bas (60 % de la hauteur, 3 000 ms, capture à 1,6 s = 43 % de la feuille, au-dessus du seuil de
-  28 %), puis prend l'arbre APRÈS la relâche — `uiautomator` attend l'inactivité, donc un dump
-  pendant le geste rend le dernier état stable, ce qui avait produit un 11 identique à 09. Un garde
-  `cmp` échoue si les deux arbres sont identiques.
-  **Le voile d'une feuille garde le pointeur pendant son fondu** : `NzSheet` monte un `Box`
-  plein écran cliquable dans un `AnimatedVisibility`, FRÈRE de la feuille du lecteur ; un DOWN qui
-  tombe dessus n'atteint jamais le geste du lecteur, et la feuille ne bouge pas d'un pixel. C'est
-  pourquoi `await_text "Réduire le lecteur"` (vrai pendant tout ce temps, le lecteur est SOUS la
-  file) ne suffisait pas : le parcours attend maintenant que « File d'attente » quitte l'arbre
-  avant de glisser (mesuré sur le run 45928645086 : 11 identique à 09 à l'octet dans les deux
-  sens). Références du comportement attendu :
+- **Le lecteur suit le doigt ; c'est le BANC qui poussait le doigt hors de la fenêtre de l'app.**
+  Deux défauts du parcours, corrigés ensemble, aucun dans le lecteur. (1) Le geste du parcours
+  partait vers le HAUT (`y_end = y0 - height * 4 / 10`) alors que la feuille ne se ferme que vers
+  le bas et refuse explicitement un glissement vers le haut au repos (`NowPlaying.kt`, « an upward
+  one has nowhere to go »). (2) Il partait du milieu de la BANDE D'EN-TÊTE, à 50 dp du bord : sur
+  l'AVD, `dumpsys window windows` montre les fenêtres `Taskbar` et `StatusBar` AU-DESSUS de
+  l'activité, et un DOWN à `y = 131 px` ne parvient jamais à l'app — mesuré sur le run 45937647741
+  (tête `ab045c0b`) avec les deux côtés instrumentés : `dispatchTouchEvent` ne voit **aucun**
+  événement pour un glissement de 3 s parti de là, alors que le même glissement parti de
+  `y = 1296` (54 % de la hauteur, la ligne du titre) donne `down=Offset(540,1296)` puis `up
+  claimed=true travelY=51 offsetY=591` — la feuille a suivi le doigt sur 591 px. Le doigt part donc
+  du titre, x au milieu (le tap du titre est un lien d'album : il s'annule dès que le doigt quitte
+  le slop, une pression sur un bouton n'est pas un glissement), sur 42 % de la hauteur — la
+  relâche tombe à 41 % de la feuille, au-dessus du seuil de 28 % par la DISTANCE seule, donc le
+  verdict ne dépend pas de la vitesse injectée. Capture à 1,6 s d'un glissement de 3 000 ms (53 %
+  du trajet, la feuille déjà descendue d'un cinquième d'écran) : le PNG montre le déplacement, la
+  relâche ferme la feuille. L'arbre de 11 est pris APRÈS la relâche (`uiautomator` attend
+  l'inactivité, donc un dump pendant le geste rend le dernier état stable — ce qui avait produit un
+  11 identique à 09), et un garde `cmp` échoue si les deux arbres sont identiques.
+  Le suivi 1:1 est tenu par `PlayerSheetGestureTest` (`theSheetFollowsTheFingerOneToOne`, 60 dp de
+  doigt = 60 dp de feuille ± 1 ; six images puis un fling qui atterrit sur le cran fermé).
+  Références du comportement attendu :
   [anchoredDraggable](https://developer.android.com/develop/ui/compose/touch-input/pointer-input/drag-swipe-fling#anchoredDraggable),
   [feuilles Material 3](https://developer.android.com/develop/ui/compose/components/bottom-sheets) et
   Apple, *Designing Fluid Interfaces* (WWDC 2018, les deux ressorts 28 % / 125 dp/s).
