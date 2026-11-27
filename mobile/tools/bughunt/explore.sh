@@ -49,7 +49,7 @@ out=""
 only=""
 scenario=""
 max_nodes=700
-max_minutes=35
+max_minutes=37
 start=1
 while [[ $# -gt 0 ]]; do
     case "$1" in

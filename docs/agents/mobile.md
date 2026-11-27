@@ -735,24 +735,36 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
   `bloquant` (§4.6). Le prix mesuré est de ~2 s par silence confirmé — sur l'arbre factice, la passe
   est passée de 7 s à 22 s, et les deux harnais (web et natif) impriment le même
   `nothing=<n> named_nothing=<k>`.
-- **l'arbre déjà lu est l'« avant » de l'élément suivant, tant que l'écran n'a pas bougé** : la
-  passe relisait trois fois le même écran par élément (`resolve`, l'après-tap, la confirmation du
-  `nothing`) à ~2,5 s le dump sur SwiftShader — mesuré au run 45915988351 : **14 s par clic**,
-  1 801 s pour 118 clics, `stopped=budget` à **78,1 %**. `Walker.remember` garde l'arbre du dernier
-  dump et `resolve` le relit avant tout `uiautomator dump`; il est **jeté** dès qu'une navigation,
-  une couche, un `blank` ou un plantage veut dire que ce n'est plus l'écran (le seul cas où le
-  relire est faux).
+- **l'arbre déjà lu est l'« avant » de l'élément suivant, tant que l'écran n'a pas bougé** :
+  la passe relisait trois fois le même écran par élément (`resolve`, l'après-tap, la confirmation
+  du `nothing`) à ~2,5 s le dump. `Walker.remember` garde l'arbre du dernier dump et `resolve` le
+  relit avant tout `uiautomator dump` ; il est **jeté** dès qu'une navigation, une couche, un
+  `blank` ou un plantage veut dire que ce n'est plus l'écran. Mesure des deux runs : 118 clics en
+  1 801 s (45915988351, 15 écrans) puis **150 clics en 2 109 s** (45924564740, 17 écrans), soit
+  toujours ~14 s par clic — le dump de cet émulateur passe de 2 s à ~5 s au fil de la passe, et le
+  gain s'est vu dans les **écrans et éléments couverts** (15 → 17, 151 → 171, couverture 78,1 % →
+  87,7 %), pas dans la seconde par clic. Ne pas promettre l'inverse d'un cache de dump.
 - **une fenêtre de plus est une `opened-layer`, même quand l'arbre ne bouge pas** (§4.1) :
   `dumpsys window windows` est lu avant et après le tap (barres système et clavier exclus, ils ont
-  leurs propres verdicts). Mesuré au run 45915988351 : « Ouvrir le lecteur plein écran » lisait
-  `nothing` sur trois écrans — trois `bloquant` **faux** sur un verbe — parce que le lecteur plein
-  écran est une fenêtre que l'arbre de l'activité n'a pas crue.
+  leurs propres verdicts), et une ligne `nothing` porte le nombre de fenêtres de la confirmation
+  (`fenêtres 6`) : une porte qui ne fait rien n'ouvre aucune fenêtre. Au run 45924564740 la porte
+  « Ouvrir le lecteur plein écran » lit `navigated` sur huit écrans (le lecteur s'ouvre, sous le nom
+  « Chargement… ») ; elle lit encore `nothing` sur « Chargement… » et « Podcasts Neezer », sans
+  fenêtre de plus — deux `bloquant` à trancher, pas un défaut du harnais.
 - **le banc de la chasse rend TOUT le fonds jouable** : `--audio-all --audio-all-seconds 180`
-  (même WAV silencieux pour chaque piste, 3 min). Sans lui, aucune piste n'a de bytes : mesuré au
-  run 45915988351, le lecteur restait sur « Chargement… », la rafale rendait
-  `playing=0 title_changed=0` sur un titre qui n'a jamais existé, et les quatre scénarios du
-  propriétaire sortaient FAIL pour une raison de banc. `is_playing` lit `state=3` dans
-  `dumpsys media_session` : un mini-lecteur visible n'est pas une lecture.
+  (même WAV silencieux pour chaque piste, 3 min). Sans lui, aucune piste n'a de bytes : au run
+  45915988351 le lecteur restait sur « Chargement… » et la rafale rendait
+  `playing=0 title_changed=0` sur un titre qui n'a jamais existé.
+- **une lecture se lit `state=PLAYING`, jamais `state=3`** : Android imprime
+  `state=PLAYING(3)`. Au run 45924564740 le lecteur jouait vraiment (`Background started FGS:
+  NzMediaService` à +9 s, `BUFFERING` puis `PLAYING`) et la rafale lisait quand même `playing=0`,
+  parce que le test cherchait le littéral `state=3`. `playback_state` lit ce qu'Android imprime ;
+  `is_playing` exige `PLAYING` (un mini-lecteur visible, ou un `BUFFERING`, n'est pas une lecture).
+- **un plantage d'avant n'est pas un plantage du scénario** : les trois scénarios prennent une
+  marque du tampon de crash (`crash_mark`) et ne comptent que les lignes apparues après. Au run
+  45924564740, la rafale a fait planter l'app (Bibliothèque → Historique, `IllegalStateException`),
+  puis le scénario des réglages a lu ce même tampon et s'est arrêté à `crash=2 controls=0` — un
+  verdict qui accusait les réglages du plantage d'un autre écran.
 - **un interrupteur Compose n'est pas `checkable`** : mesuré au run 45915988351, `checkable=0` sur
   dix des onze dumps (seules les six cartes d'énergie de l'accueil le portent). Le scénario des
   réglages ouvre donc chaque section de la page Réglages et tape ses contrôles **nommés**, en
@@ -762,8 +774,8 @@ Trois règles, chacune mesurée sur un vrai run ou sur un arbre factice :
 La **passe** part de l'accueil, explore en largeur les écrans par ordre de découverte, et se restaure
 par `BACK` (une fois après une navigation, jusqu'à 3 fois sinon) puis, en dernier recours, par
 `am force-stop` + `am start` + le **chemin de taps** enregistré à la découverte. Bornes : 700 nœuds,
-**35 min** (§9.6 ; l'implémentation en tenait 30, et le run 45915988351 s'est arrêté à 78,1 % pour
-cette seule raison), 15 s par nœud, un tap par nœud. Un élément hors écran est ramené par 3
+**37 min** (§9.6 en donne 35 ; mesuré : 171 éléments en 35 min, donc 37 pour finir), 15 s par nœud,
+un tap par nœud. Un élément hors écran est ramené par 3
 glissements ; s'il n'arrive pas, il est `unreachable` et compte **trouvé mais non cliqué**
 (`coverage=416/418 (99.5%)` reste honnête, §4.4). La règle du frère échantillonne 3 lignes sur ≥ 6
 sœurs identiques (`duplicates=n`), et les captures d'anomalie sont plafonnées à **40** (§4.8,

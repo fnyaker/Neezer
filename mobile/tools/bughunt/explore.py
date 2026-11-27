@@ -1076,7 +1076,11 @@ class Walker:
                 ms = int((time.monotonic() - started) * 1000)
                 after = confirmed
                 if outcome == "nothing":
-                    detail = f"aucun changement sur 2 dumps en {ms} ms"
+                    # The window count is the other half of the verdict: a
+                    # `nothing` where no window appeared either is a door that
+                    # really did nothing, not a layer the tree cannot see.
+                    detail = (f"aucun changement sur 2 dumps en {ms} ms "
+                              f"(fenêtres {len(confirmed.get('windows', ()))})")
             else:
                 final_dump = after_dump
         self.clicked += 1
@@ -1280,6 +1284,31 @@ def media_state(adb: Adb) -> str:
     return ""
 
 
+# Android prints the state as `state=BUFFERING(6)`, never as `state=6`: run
+# 45924564740 measured a « Suivant » burst on a player that WAS playing
+# (`Background started FGS: NzMediaService` at +9 s) and still read `playing=0`,
+# because the test was a literal `"state=3" in …`. One regex, both shapes.
+PLAYBACK = re.compile(r"state=(PLAYING|PAUSED|BUFFERING|STOPPED|ERROR|ENDED|NONE|IDLE)\b")
+
+
+def playback_state(adb: Adb) -> str:
+    """The media session's state word: PLAYING, BUFFERING, PAUSED…"""
+    match = PLAYBACK.search(media_state(adb))
+    return match.group(1) if match else ""
+
+
+def crash_mark(adb: Adb) -> str:
+    """What the crash buffer already held: only what comes AFTER is ours."""
+    return "\n".join(adb.crash_lines())
+
+
+def fresh_crash(adb: Adb, mark: str) -> tuple[list[str], str]:
+    """(new crash lines, current mark) — an earlier run's crash is not this one."""
+    lines = adb.crash_lines()
+    joined = "\n".join(lines)
+    return (lines if joined != mark else []), joined
+
+
 def media_position(adb: Adb) -> int | None:
     match = re.search(r"position=(-?\d+)", media_state(adb))
     return int(match.group(1)) if match else None
@@ -1342,13 +1371,15 @@ def door_of(walker: Walker) -> "W | None":
 
 
 def is_playing(adb: Adb) -> bool:
-    """`state=3` in the media session: PLAYING, not « a mini-player exists ».
+    """PLAYING, not « a mini-player exists ».
 
-    Measured on run 45915988351: `door_of` found the mini-bar's door on an idle
-    player, the burst reported `started_by=deja-en-lecture`, tapped 40 times and
-    measured `playing=0 title_changed=0` — the door was there, nothing played.
+    Two measured lessons: run 45915988351 had `door_of` find the mini-bar's door
+    on an IDLE player and call it `deja-en-lecture`; run 45924564740 then found
+    the reverse — a real playback (`NzMediaService` foreground, `BUFFERING` then
+    `PLAYING`) read as `playing=0` because the test looked for the literal
+    `state=3`. `playback_state` reads what Android prints.
     """
-    return "state=3" in media_state(adb)
+    return playback_state(adb) == "PLAYING"
 
 
 def start_playback(walker: Walker) -> tuple["W | None", str]:
@@ -1413,6 +1444,7 @@ def scenario_burst(walker: Walker) -> dict:
     adb = walker.adb
     result = {"name": SCENARIO_LABEL["burst"], "verdict": "FAIL", "numbers": "", "evidence": ""}
     started = time.monotonic()
+    mark = crash_mark(adb)
 
     if not walker.start_app():
         result["numbers"] = "l'app ne peint pas son accueil"
@@ -1462,12 +1494,12 @@ def scenario_burst(walker: Walker) -> dict:
         adb.tap(*(next_point if index % 2 == 0 else prev_point))
         time.sleep(0.100)
     walker.dump()
-    crash = adb.crash_lines()
+    crash, _ = fresh_crash(adb, mark)
     alive = 1 if adb.pid() else 0
     changed = 1 if title_after and title_before and title_after != title_before else 0
     changed_again = 1 if title_one and title_after and title_one != title_after else 0
     advanced = 1 if (clock_a is not None and clock_b is not None and clock_b > clock_a) else 0
-    playing = 1 if "state=3" in media_state(adb) else 0
+    playing = 1 if playback_state(adb) == "PLAYING" else 0
     seconds = int(time.monotonic() - started)
     ok = bool(changed and changed_again and alive and not crash and advanced)
     result["verdict"] = "PASS" if ok else "FAIL"
@@ -1494,6 +1526,7 @@ def scenario_settings(walker: Walker) -> dict:
     adb = walker.adb
     result = {"name": SCENARIO_LABEL["settings"], "verdict": "FAIL", "numbers": "", "evidence": ""}
     started = time.monotonic()
+    mark = crash_mark(adb)
     if not walker.start_app() or not open_settings(walker):
         result["numbers"] = "« Réglages » introuvable"
         return result
@@ -1519,7 +1552,7 @@ def scenario_settings(walker: Walker) -> dict:
             if not dump.ok:
                 blanks += 1
                 break
-            crash = adb.crash_lines()
+            crash, _ = fresh_crash(adb, mark)
             if crash:
                 break
             targets = [w for w in dump.app_wraps
@@ -1570,6 +1603,7 @@ def scenario_session(walker: Walker) -> dict:
     adb = walker.adb
     result = {"name": SCENARIO_LABEL["session"], "verdict": "FAIL", "numbers": "", "evidence": ""}
     started = time.monotonic()
+    mark = crash_mark(adb)
     if not walker.start_app() or not open_settings(walker):
         result["numbers"] = "« Réglages » introuvable"
         return result
@@ -1587,7 +1621,7 @@ def scenario_session(walker: Walker) -> dict:
         logout = next((w for w in dump.app_wraps if w.word == "Déconnexion" and w.n.visible), None)
         if logout is not None:
             break
-        if attempt in (3, 6):
+        if attempt % 2 == 1:
             adb.swipe_up(dump.width, dump.height)
     if logout is None:
         result["numbers"] = f"« Déconnexion » introuvable sur « {where} »"
@@ -1611,7 +1645,7 @@ def scenario_session(walker: Walker) -> dict:
                 for w in dump.app_wraps):
             painted = True
             break
-    crash = adb.crash_lines()
+    crash, _ = fresh_crash(adb, mark)
     alive = adb.pid()
     seconds = int(time.monotonic() - started)
     ok = bool(painted and alive and not crash)
@@ -2004,7 +2038,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--scenario", choices=("burst", "settings", "session"),
                         help="ne joue qu'un scénario (§9.8)")
     parser.add_argument("--max-nodes", type=int, default=700)
-    parser.add_argument("--max-minutes", type=int, default=35)
+    parser.add_argument("--max-minutes", type=int, default=37)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--check-routes", action="store_true")
     args = parser.parse_args(argv)
