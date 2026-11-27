@@ -59,7 +59,9 @@ import fr.neezer.mobile.designsystem.NzSpacing
 import fr.neezer.mobile.designsystem.NzSwitch
 import fr.neezer.mobile.designsystem.Sillon
 import fr.neezer.mobile.designsystem.Skeleton
+import fr.neezer.mobile.designsystem.nzPaneEnter
 import fr.neezer.mobile.designsystem.rememberListWindow
+import fr.neezer.mobile.designsystem.rememberPaneEnter
 import fr.neezer.mobile.feature.offline.DownloadButton
 import kotlinx.coroutines.delay
 import uniffi.nz_ffi.AppLink
@@ -218,6 +220,13 @@ fun ShowScreen(
     toast: @Composable (String) -> Unit = {},
 ) {
     val colors = Sillon.colors
+    // The page's phases are one pane (X4's decision note, D2): the body is a
+    // `LazyColumn`, so an `AnimatedContent` around it would carry the show's
+    // header with it. The header's item stays out and every item of the panel
+    // carries `Modifier.nzPaneEnter(pane)`; a re-emit of the same phase plays
+    // nothing, and a page of the window landing does not change the phase.
+    val pane = rememberPaneEnter(showPhase(state))
+    val enter = Modifier.nzPaneEnter(pane)
     Box(
         modifier
             .fillMaxSize()
@@ -226,7 +235,7 @@ fun ShowScreen(
     ) {
         when {
             state.loading && state.show == null -> {
-                Column(Modifier.padding(NzSpacing.pageX)) {
+                Column(enter.padding(NzSpacing.pageX)) {
                     Skeleton(kind = NzSkeletonKind.Header, count = 1)
                     Skeleton(kind = NzSkeletonKind.List, count = 6)
                 }
@@ -235,17 +244,31 @@ fun ShowScreen(
                 LoadFailed(
                     cause = state.failure ?: "cause inconnue",
                     onRetry = actions.retry,
-                    modifier = Modifier.padding(NzSpacing.pageX),
+                    modifier = enter.padding(NzSpacing.pageX),
                     title = "Podcast introuvable",
                 )
             }
-            else -> ShowBody(state, actions, isAdmin, currentKey, playing, positionS)
+            else -> ShowBody(state, actions, isAdmin, currentKey, playing, positionS, enter)
         }
         state.message?.let { message ->
             toast(message)
             LaunchedEffect(message) { actions.consumeMessage() }
         }
     }
+}
+
+/**
+ * What the page is drawing: the show arrived and holds episodes, the show
+ * arrived and holds none, the read failed, or nothing yet — the pane's key (D2),
+ * from the same fields the branches above test.
+ */
+private enum class Phase { Loading, Failed, Empty, Content }
+
+private fun showPhase(state: ShowModel.State): Phase = when {
+    state.show == null && state.loading -> Phase.Loading
+    state.show == null -> Phase.Failed
+    state.loaded == 0 -> Phase.Empty
+    else -> Phase.Content
 }
 
 @Composable
@@ -256,6 +279,7 @@ private fun ShowBody(
     currentKey: String?,
     playing: Boolean,
     positionS: Double,
+    enter: Modifier,
 ) {
     val colors = Sillon.colors
     val show = state.show ?: return
@@ -283,6 +307,8 @@ private fun ShowBody(
     }
 
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+        // The header is NOT part of the panel: a phase change leaves it where it
+        // is (D2, measured ± 0 dp in the change's first frame).
         item(key = "header") {
             Column(
                 modifier = Modifier.padding(
@@ -360,7 +386,7 @@ private fun ShowBody(
                 ArchiveSwitch(
                     state = state,
                     onToggle = actions.toggleAuto,
-                    modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                    modifier = enter.padding(horizontal = NzSpacing.pageX),
                 )
             }
         }
@@ -370,7 +396,7 @@ private fun ShowBody(
                 TranscriptionCard(
                     state = state,
                     actions = actions,
-                    modifier = Modifier.padding(
+                    modifier = enter.padding(
                         horizontal = NzSpacing.pageX,
                         vertical = NzSpacing.s,
                     ),
@@ -383,7 +409,7 @@ private fun ShowBody(
                 TranscriptSearchField(
                     state = state,
                     actions = actions,
-                    modifier = Modifier.padding(
+                    modifier = enter.padding(
                         horizontal = NzSpacing.pageX,
                         vertical = NzSpacing.s,
                     ),
@@ -391,7 +417,7 @@ private fun ShowBody(
             }
             if (state.isSearching) {
                 item(key = "hits") {
-                    SearchHits(state, actions, Modifier.padding(horizontal = NzSpacing.pageX))
+                    SearchHits(state, actions, enter.padding(horizontal = NzSpacing.pageX))
                 }
             }
         }
@@ -403,13 +429,15 @@ private fun ShowBody(
                     EmptyState(
                         title = "Aucun épisode",
                         body = PodcastsCopy.NO_EPISODE,
+                        modifier = enter,
                         glyph = NzGlyph.Mic,
                     )
                 }
             } else {
                 items(count = state.loaded, key = { index -> state.cards[index]?.id ?: "skeleton:$index" }) { index ->
                     val card = state.cards[index]
-                    val motion = Modifier.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
+                    // `enter` FIRST in the item's chain (D2), then the placement.
+                    val motion = enter.animateItem(specs.fadeIn, specs.placement, specs.fadeOut)
                     if (card == null) {
                         Skeleton(
                             kind = NzSkeletonKind.List,
@@ -439,7 +467,7 @@ private fun ShowBody(
             if (state.next != null || state.loadingMore) {
                 item(key = "more") {
                     Row(
-                        modifier = Modifier
+                        modifier = enter
                             .fillMaxWidth()
                             .padding(NzSpacing.pageX),
                         horizontalArrangement = Arrangement.Center,
@@ -458,12 +486,12 @@ private fun ShowBody(
                     LoadFailed(
                         cause = state.moreFailure,
                         onRetry = actions.loadMore,
-                        modifier = Modifier.padding(horizontal = NzSpacing.pageX),
+                        modifier = enter.padding(horizontal = NzSpacing.pageX),
                         title = "Les épisodes suivants n'ont pas pu être chargés",
                     )
                 }
             }
-            item(key = "footer") { Spacer(Modifier.height(NzSpacing.pageY)) }
+            item(key = "footer") { Spacer(enter.height(NzSpacing.pageY)) }
         }
     }
 }
