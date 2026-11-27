@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -68,6 +69,8 @@ private const val LARGE_TEXT_SCALE = 1.3f
  * The history's own scrolling list, for S2's tail assertion: the day headings and
  * the event rows live in ONE `LazyColumn`, and a tag is invisible to TalkBack.
  */
+private const val HISTORY_HEAD_KEY = "history-head"
+
 const val HISTORY_LIST_TAG = "history-list"
 
 /**
@@ -124,14 +127,7 @@ fun HistoryScreen(
 ) {
     val colors = Sillon.colors
     val listState = rememberLazyListState()
-    val largeText = LocalDensity.current.fontScale >= LARGE_TEXT_SCALE
-    val days = remember(state.events, today, zone) { groupByDay(state.events, zone, today) }
-    val rows = remember(days) { flattenDays(days) }
-    val failure = state.failure
-    // The history's body is one pane (D2): its key is the phase, so a skeleton →
-    // list and a failure → list fade the CONTENT in while the head and the filter
-    // chips stay put.
-    val pane = rememberPaneEnter(historyPhase(state))
+    val content = rememberHistoryItems(state, actions, showHead = true, today = today, zone = zone)
 
     Box(
         modifier
@@ -144,109 +140,147 @@ fun HistoryScreen(
             modifier = Modifier.fillMaxSize().testTag(HISTORY_LIST_TAG),
             contentPadding = PaddingValues(bottom = NzSpacing.pageBottom),
         ) {
-            item(key = "head") {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = NzSpacing.pageX, end = NzSpacing.pageX, top = NzSpacing.pageY),
-                    verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
-                ) {
-                    Text(
-                        text = "Historique",
-                        style = Sillon.type.displaySmall,
-                        color = colors.tx,
-                    )
-                    if (state.stale) LibraryStaleNote()
-                }
+            content()
+        }
+    }
+}
+
+/**
+ * The history's rows as `LazyColumn` items, to be spliced into a list that exists
+ * already.
+ *
+ * `HistoryScreen` is a `LazyColumn` of its own; drawn as an `item` of the
+ * library's `LazyColumn` it is measured with an unbounded height and Compose
+ * throws « Vertically scrollable component was measured with an infinity maximum
+ * height constraints » — the app died the moment the « Historique » leaf opened.
+ * The leaf therefore adds THESE items to the library's own list (one scroll, still
+ * windowed), without the page title the library's head already carries
+ * ([showHead] `false`). Every key is prefixed `history-`: the library's list has
+ * its own « head » and a repeated key crashes a `LazyColumn` too.
+ *
+ * Composition-scoped reads (the pane, the day grouping) happen HERE, in the
+ * composition; the returned block only declares items.
+ */
+@Composable
+fun rememberHistoryItems(
+    state: HistoryModel.State,
+    actions: HistoryActions,
+    showHead: Boolean,
+    today: LocalDate = LocalDate.now(),
+    zone: ZoneId = ZoneId.systemDefault(),
+): LazyListScope.() -> Unit {
+    val colors = Sillon.colors
+    val days = remember(state.events, today, zone) { groupByDay(state.events, zone, today) }
+    val rows = remember(days) { flattenDays(days) }
+    val failure = state.failure
+    // The history's body is one pane (D2): its key is the phase, so a skeleton →
+    // list and a failure → list fade the CONTENT in while the head and the filter
+    // chips stay put.
+    val pane = rememberPaneEnter(historyPhase(state))
+
+    return {
+        if (showHead) item(key = HISTORY_HEAD_KEY) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = NzSpacing.pageX, end = NzSpacing.pageX, top = NzSpacing.pageY),
+                verticalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+            ) {
+                Text(
+                    text = "Historique",
+                    style = Sillon.type.displaySmall,
+                    color = colors.tx,
+                )
+                if (state.stale) LibraryStaleNote()
             }
-            item(key = "summary") {
-                val summary = state.summary
-                when {
-                    summary != null && !state.emptyHistory ->
-                        SummaryCard(summary, actions, modifier = Modifier.nzPaneEnter(pane))
-                    failure == null && !state.emptyHistory && state.screen is ScreenState.Loading ->
-                        Skeleton(
-                            kind = NzSkeletonKind.Header,
-                            modifier = Modifier.padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
-                        )
-                    else -> Unit
-                }
-            }
-            item(key = "filters") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
-                    horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
-                ) {
-                    HistoryFilter.entries.forEach { filter ->
-                        NzChip(
-                            text = filter.label,
-                            selected = state.filter == filter,
-                            onClick = { actions.setFilter(filter) },
-                        )
-                    }
-                }
-            }
-            if (failure != null) {
-                item(key = "fail") {
-                    LoadFailed(
-                        cause = failure.cause,
-                        onRetry = actions.retry,
-                        title = "Historique indisponible",
-                        modifier = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX),
-                    )
-                }
-            } else if (state.screen is ScreenState.Loading && state.summary == null) {
-                item(key = "skeleton") {
+        }
+        item(key = "history-summary") {
+            val summary = state.summary
+            when {
+                summary != null && !state.emptyHistory ->
+                    SummaryCard(summary, actions, modifier = Modifier.nzPaneEnter(pane))
+                failure == null && !state.emptyHistory && state.screen is ScreenState.Loading ->
                     Skeleton(
-                        kind = NzSkeletonKind.List,
-                        count = 8,
-                        modifier = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX),
+                        kind = NzSkeletonKind.Header,
+                        modifier = Modifier.padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
+                    )
+                else -> Unit
+            }
+        }
+        item(key = "history-filters") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = NzSpacing.pageX, vertical = NzSpacing.s),
+                horizontalArrangement = Arrangement.spacedBy(NzSpacing.xs),
+            ) {
+                HistoryFilter.entries.forEach { filter ->
+                    NzChip(
+                        text = filter.label,
+                        selected = state.filter == filter,
+                        onClick = { actions.setFilter(filter) },
                     )
                 }
-            } else if (rows.isEmpty()) {
-                item(key = "empty") {
-                    EmptyState(
-                        title = when (state.filter) {
-                            HistoryFilter.Listen -> "Aucune écoute dans l'historique"
-                            HistoryFilter.Skip -> "Aucun saut dans l'historique"
-                            HistoryFilter.All -> "Aucune écoute pour l'instant"
-                        },
-                        body = if (state.filter == HistoryFilter.All) {
-                            "Lance un titre : ce que tu écoutes et ce que tu passes apparaîtra ici, jour par jour."
-                        } else {
-                            "Change de filtre pour revoir tout ton historique."
-                        },
-                        glyph = NzGlyph.Timer,
-                        actionLabel = if (state.filter == HistoryFilter.All) "Explorer" else "Voir tout l'historique",
-                        onAction = if (state.filter == HistoryFilter.All) {
-                            actions.openSearch
-                        } else {
-                            { actions.setFilter(HistoryFilter.All) }
-                        },
-                        modifier = Modifier.nzPaneEnter(pane),
+            }
+        }
+        if (failure != null) {
+            item(key = "history-fail") {
+                LoadFailed(
+                    cause = failure.cause,
+                    onRetry = actions.retry,
+                    title = "Historique indisponible",
+                    modifier = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX),
+                )
+            }
+        } else if (state.screen is ScreenState.Loading && state.summary == null) {
+            item(key = "history-skeleton") {
+                Skeleton(
+                    kind = NzSkeletonKind.List,
+                    count = 8,
+                    modifier = Modifier.nzPaneEnter(pane).padding(horizontal = NzSpacing.pageX),
+                )
+            }
+        } else if (rows.isEmpty()) {
+            item(key = "history-empty") {
+                EmptyState(
+                    title = when (state.filter) {
+                        HistoryFilter.Listen -> "Aucune écoute dans l'historique"
+                        HistoryFilter.Skip -> "Aucun saut dans l'historique"
+                        HistoryFilter.All -> "Aucune écoute pour l'instant"
+                    },
+                    body = if (state.filter == HistoryFilter.All) {
+                        "Lance un titre : ce que tu écoutes et ce que tu passes apparaîtra ici, jour par jour."
+                    } else {
+                        "Change de filtre pour revoir tout ton historique."
+                    },
+                    glyph = NzGlyph.Timer,
+                    actionLabel = if (state.filter == HistoryFilter.All) "Explorer" else "Voir tout l'historique",
+                    onAction = if (state.filter == HistoryFilter.All) {
+                        actions.openSearch
+                    } else {
+                        { actions.setFilter(HistoryFilter.All) }
+                    },
+                    modifier = Modifier.nzPaneEnter(pane),
+                )
+            }
+        } else {
+            items(rows.size, key = { index -> rows[index].key }) { index ->
+                val enter = Modifier.nzPaneEnter(pane)
+                when (val row = rows[index]) {
+                    is HistoryRowView.Day -> DayHeading(row.day, modifier = enter)
+                    is HistoryRowView.Event -> EventRow(
+                        event = row.event,
+                        today = today,
+                        zone = zone,
+                        onPlay = { actions.play(row.event) },
+                        onMore = { actions.more(row.event.track) },
+                        modifier = enter,
                     )
                 }
-            } else {
-                items(rows.size, key = { index -> rows[index].key }) { index ->
-                    val enter = Modifier.nzPaneEnter(pane)
-                    when (val row = rows[index]) {
-                        is HistoryRowView.Day -> DayHeading(row.day, modifier = enter)
-                        is HistoryRowView.Event -> EventRow(
-                            event = row.event,
-                            today = today,
-                            zone = zone,
-                            onPlay = { actions.play(row.event) },
-                            onMore = { actions.more(row.event.track) },
-                            modifier = enter,
-                        )
-                    }
-                }
-                item(key = "more") {
-                    MoreBlock(state, actions, modifier = Modifier.nzPaneEnter(pane))
-                }
+            }
+            item(key = "history-more") {
+                MoreBlock(state, actions, modifier = Modifier.nzPaneEnter(pane))
             }
         }
     }
