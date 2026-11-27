@@ -55,10 +55,14 @@ import kotlinx.coroutines.launch
  * [page] is the item's place in the pager — one page per tab, in the bar's order,
  * so « a page settled » and « the route the person is on » are the same fact from
  * two sides.
+ *
+ * The search tab's LABEL is « Explorer », the SPA's own word
+ * (`MobileNav.svelte:48`); its enum constant stays [Rechercher] because the
+ * route, the tests and the lot notes name it by the screen it opens.
  */
 enum class Tab(val label: String, val glyph: NzGlyph, val page: Int) {
     Accueil("Accueil", NzGlyph.Home, 0),
-    Rechercher("Rechercher", NzGlyph.Compass, 1),
+    Rechercher("Explorer", NzGlyph.Compass, 1),
     Bibliotheque("Biblio", NzGlyph.Library, 2),
     Podcasts("Podcasts", NzGlyph.Mic, 3),
 }

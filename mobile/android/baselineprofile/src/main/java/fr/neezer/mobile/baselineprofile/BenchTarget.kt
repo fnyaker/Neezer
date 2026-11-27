@@ -46,7 +46,7 @@ object BenchTarget {
 
     /** The tab bar's four labels, as the shell paints them (French UI copy). */
     const val TAB_HOME = "Accueil"
-    const val TAB_SEARCH = "Rechercher"
+    const val TAB_SEARCH = "Explorer"
 
     // « Biblio », not « Bibliothèque »: the bar's own label since L1, which made
     // the four items fit a 360 dp bar (Shell.kt; `ci-emulator.sh` taps the same

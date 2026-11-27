@@ -8,7 +8,7 @@
 # It signs in first (`release-signin.sh`: the platform trust store, then HTTPS,
 # then the home with real covers) and then walks the screens a person uses:
 #
-#   Accueil → Rechercher → Bibliothèque → Podcasts → Accueil
+#   Accueil → Explorer → Bibliothèque → Podcasts → Accueil
 #   → Réglages → Lecture & son → Mode voiture
 #
 # Eight doors. Each one is a tap plus the literal ONLY that screen draws, so a
@@ -408,7 +408,7 @@ if [[ -n "$evidence" ]]; then
     fi
 fi
 
-open_door "Rechercher" "Rechercher" "Recherche Neezer"
+open_door "Explorer" "Explorer" "Recherche Neezer"
 shot 02-rechercher
 open_door "Bibliothèque" "Biblio" "Bibliothèque Neezer"
 shot 03-bibliotheque
