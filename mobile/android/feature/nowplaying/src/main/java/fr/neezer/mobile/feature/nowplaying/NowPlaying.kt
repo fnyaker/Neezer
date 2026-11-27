@@ -557,6 +557,7 @@ internal fun PlayerSheetFrame(
                     var travelY = 0f
                     var travelX = 0f
                     val down = awaitFirstDown(requireUnconsumed = false)
+                    android.util.Log.i("NZDRAG", "down=${down.position} h=$sheetHeight start=$start")
                     tracker.resetTracking()
                     tracker.addPosition(down.uptimeMillis, down.position)
                     try {
@@ -608,9 +609,15 @@ internal fun PlayerSheetFrame(
                         // system gesture, a call, another window taking the pointer):
                         // the sheet must not be left half-open, so the cancel still
                         // returns it, then the cancellation continues.
+                        android.util.Log.i("NZDRAG", "cancelled claimed=$claimed")
                         if (claimed) settleTo(start, 0f, RETURN_DAMPING)
                         throw interrupted
                     }
+                    android.util.Log.i(
+                        "NZDRAG",
+                        "up claimed=$claimed cancelled=$cancelled travelY=${travelY.toInt()} " +
+                            "travelX=${travelX.toInt()} offsetY=${offsetY.toInt()}",
+                    )
                     if (!claimed) return@awaitEachGesture
                     if (cancelled) {
                         // A cancel is never a decision: back to where it started.

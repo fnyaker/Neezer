@@ -290,9 +290,14 @@ player_evidence() {
     y_end=$((y0 + height * 6 / 10))
     # DIAGNOSTIC (temporary): the capture is taken ON THE DEVICE during the swipe
     # (one shell, so `input swipe` and `screencap` start without an adb round
-    # trip), and if the sheet still did not move we replay the same direction
-    # with a fast swipe, to tell "the gesture is dead" from "a long injection is
-    # lost". Both outcomes are printed, then the guard fails as before.
+    # trip), and both sides of the gesture log: the ACTIVITY's touch stream
+    # (NZTOUCH) says whether the window received it at all, the SHEET's handler
+    # (NZDRAG) says what it made of it. A second swipe, from the middle of the
+    # sheet instead of the header row, separates "the top of the screen belongs to
+    # the system" from "the handler ignores vertical drags".
+    adb_dev logcat -c >/dev/null 2>&1 || true
+    adb_dev shell dumpsys window windows 2>/dev/null |
+        grep -E "Window #|mFrame=|mTouchable" | head -30 | sed -e 's/^ *//' -e 's/^/diag win /' || true
     adb_dev shell "rm -f /sdcard/11-drag.png; input swipe $x $y0 $x $y_end 3000 >/dev/null 2>&1 & sleep 1.6; screencap -p /sdcard/11-drag.png" >/dev/null 2>&1 || true
     adb_dev pull /sdcard/11-drag.png "$evidence/screens/11-lecteur-glisse.png" >/dev/null 2>&1 || true
     printf 'shot=11-lecteur-glisse direction=bas source=device\n'
@@ -302,21 +307,22 @@ player_evidence() {
     else
         printf 'diag png=differs_from_09\n'
     fi
+    wait 2>/dev/null || true
+    wait 2>/dev/null || true
+    adb_dev logcat -d -s NZTOUCH NZDRAG >"$evidence/nztouch.txt" 2>&1 || true
+    printf 'diag header_swipe reports=%s\n' "$(grep -c '' "$evidence/nztouch.txt" 2>/dev/null || echo 0)"
+    sed -e 's/^/diag /' "$evidence/nztouch.txt" | head -40
     sleep 1
     dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
     if cmp -s "$evidence/screens/09-lecteur-suivant.xml" \
               "$evidence/screens/11-lecteur-glisse.xml"; then
-        printf 'diag long_swipe=noeffect\n'
-        adb_dev shell input swipe "$x" "$y0" "$x" "$((y0 + height * 4 / 10))" 300 >/dev/null 2>&1 || true
+        printf 'diag header_swipe=noeffect trying=title\n'
+        adb_dev logcat -c >/dev/null 2>&1 || true
+        adb_dev shell input swipe "$x" "$((height * 54 / 100))" "$x" "$((height * 88 / 100))" 400 >/dev/null 2>&1 || true
         sleep 2
-        if dump_ui | grep -qF "Réduire le lecteur"; then
-            printf 'diag fast_swipe=noeffect tap=next\n'
-            adb_dev shell input tap "$x" "$y0" >/dev/null 2>&1 || true
-            sleep 2
-            dump_ui | grep -qF "Réduire le lecteur" && printf 'diag tap=stays\n' || printf 'diag tap=left\n'
-        else
-            printf 'diag fast_swipe=closed\n'
-        fi
+        adb_dev logcat -d -s NZTOUCH NZDRAG >"$evidence/nztouch2.txt" 2>&1 || true
+        printf 'diag title_swipe reports=%s\n' "$(grep -c '' "$evidence/nztouch2.txt" 2>/dev/null || echo 0)"
+        sed -e 's/^/diag /' "$evidence/nztouch2.txt" | head -40
         dump_ui >"$evidence/screens/11-lecteur-glisse.xml" || true
     fi
     # The tree is taken AFTER the gesture on purpose: uiautomator waits for
