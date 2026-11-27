@@ -74,6 +74,37 @@ whole-file preload already wins (**0.3 s**, 0 stream request at the tap) and the
 source opened at an offset carries only what is LEFT of the track, so `shownDuration` keeps the
 track's own length on the bar and in the media session.
 
+**Depth 2 wins no tap the window does not already win, and the head is worth its 47 KB**
+(`node test/prefetch/run.mjs --depth 1|2`, 2026-11-27, median of 3, the same 40 s noise tracks on a
+FLAC archive, CDP 150 ms, three taps per run: cold at 1 s, hot at 14 s, and a third 8 s after the
+hot one landed). Two depths × three links:
+
+| link | depth | cold (1 s) | hot (14 s) | preloaded | 3rd tap (+8 s) | on the device |
+|---|---|---|---|---|---|---|
+| LAN | 1 | 0.3 s | 0.3 s, 0 req | 360 KB | 0.3 s | blob |
+| LAN | 2 | 0.3 s | 0.3 s, 0 req | 673 KB | 0.3 s | 2 blobs |
+| 16 KB/s | 1 | 21.0 s | 26.9 s, 1 req | 23 KB | 23.1 s | nothing |
+| 16 KB/s | 2 | 20.7 s | 26.7 s, 1 req | 22 KB | 19.4 s | nothing |
+| 64 KB/s | 1 | 3.9 s | 0.3 s, 0 req | 360 KB | 0.2 s | head |
+| 64 KB/s | 2 | 3.9 s | 0.3 s, 0 req | 509 KB | 0.3 s | blob |
+
+On a slow link the depth changes nothing — the link, not the window, is the limit, and the track
+after next is never reached before the tap — and the third tap streams as the second did. On LAN
+depth 2 does hold two whole tracks (673 KB against 360 KB), yet depth 1 answers the third tap in
+0.3 s too, from the head the re-armed window fetched during the 8 s between the two taps; at
+64 KB/s depth 1's head answers it in 0.2 s, faster than depth 2's complete blob. **Recommendation:
+keep depth 1**, the default (`cache.prefetchCount`): depth 2 spends up to **313 KB more per track
+played** and has not won a single tap in these traces.
+
+The head, measured at the SAME tap moment with and without it (`--head 0` aborts every
+`/api/stream/<id>/head`; the full preload still runs): at 16 KB/s a tap sounds in **0.2 s** on the
+head against **4.5 s** without it, the hand-over opens **20 ms** with no `waiting` over 100 ms and
+continues on `?start=`; on LAN both are 0.3 s because the whole blob wins and the head is unused.
+The measured head is **47 KB**. Six seconds are therefore enough and a longer one buys nothing:
+each extra second costs 8 KB (half a second of a 16 KB/s link), there is no hole left to remove,
+and a longer head arrives *later* — the playing element keeps the link until its own file is ahead
+(33.3 s here), so the extra seconds delay the moment a tap could use it.
+
 **Crossfade + silence trimming** (`components/Player.svelte`, `lib/edges.js`,
 `neezer/webui/edges.py`). Two ideas that need each other: masters carry a beat of digital silence
 at each end, and a crossfade that ignores them fades one track's silence into another's — the gap it

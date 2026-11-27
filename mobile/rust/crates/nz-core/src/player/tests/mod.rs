@@ -17,6 +17,7 @@
 #![allow(dead_code)]
 
 mod audio;
+mod preload;
 mod rules;
 
 use std::collections::HashMap;
@@ -802,6 +803,11 @@ pub enum Fixture {
     Silence40,
     /// 8 s of silence: a finished file to seek in.
     Silence8,
+    /// 45 s of pink noise at 6 kHz, mono: 729 093 B, more than the 512 KiB a
+    /// prefetch may spool, so the cap and not the file is what stops it. Made
+    /// once with `ffmpeg -f lavfi -i "anoisesrc=c=pink:r=6000:a=0.5:d=45" -ac 1
+    /// -c:a flac noise45.flac` (lot 6 measures a preload's bytes with it).
+    Noise45,
 }
 
 impl Fixture {
@@ -815,6 +821,7 @@ impl Fixture {
             Fixture::Tone610 => include_bytes!("fixtures/tone610.flac"),
             Fixture::Silence40 => include_bytes!("fixtures/silence40.flac"),
             Fixture::Silence8 => include_bytes!("fixtures/silence8.flac"),
+            Fixture::Noise45 => include_bytes!("fixtures/noise45.flac"),
         }
     }
 
@@ -828,6 +835,7 @@ impl Fixture {
             Fixture::Tone440 | Fixture::Tone610 => 3,
             Fixture::Silence40 => 40,
             Fixture::Silence8 => 8,
+            Fixture::Noise45 => 45,
         }
     }
 
@@ -843,6 +851,7 @@ impl Fixture {
             Fixture::Tone610 => "tone610.flac",
             Fixture::Silence40 => "silence40.flac",
             Fixture::Silence8 => "silence8.flac",
+            Fixture::Noise45 => "noise45.flac",
         };
         let path = dir.join(name);
         std::fs::write(&path, self.bytes()).expect("the fixture is written");
