@@ -445,6 +445,11 @@ pub struct Player {
     sink: Mutex<Option<ExternalSink>>,
     opener: Arc<ServerOpener>,
     listeners: Mutex<Vec<Arc<dyn Sink>>>,
+    /// One delivery at a time, the snapshot taken INSIDE it: the worker (after a
+    /// skip) and the platform's callbacks (focus, route, sleep) all push, and a
+    /// snapshot taken earlier but delivered later would be the screen's last
+    /// word until the next change.
+    delivery: Mutex<()>,
     stopped: AtomicBool,
     /// The measured rate of the last streams, in bits of an `f64` (0 = none):
     /// what the Auto ladder reads without a lock.
@@ -774,6 +779,7 @@ impl Player {
             sink: Mutex::new(Some(sink)),
             opener,
             listeners: Mutex::new(Vec::new()),
+            delivery: Mutex::new(()),
             stopped: AtomicBool::new(false),
             rate,
             streaming,
@@ -872,7 +878,9 @@ impl Player {
         // dropping it left no voice at all (`a_jump_after_a_pause_and_a_seek_renders`).
         let was_queue = matches!(&cmd, Command::PlayQueue { .. });
         let was_jump = matches!(&cmd, Command::Jump { .. });
+        let was_step = matches!(&cmd, Command::Next | Command::Prev);
         let engine_before = self.engine.current_id();
+        let preloaded = self.engine.preloaded_id();
         let (action, playing, replacing) = {
             let mut machine = self.lock();
             let action = machine.apply_command(cmd, now);
@@ -881,8 +889,19 @@ impl Player {
                 .current()
                 .and_then(|entry| entry.reference())
                 .map(str::to_owned);
-            let replacing =
-                was_queue || (was_jump && engine_before.is_some() && engine_before != new_row);
+            // A skip onto the row the engine already decoded is a promotion in
+            // the mixer (no gap, no reopen). A skip onto any other row opens
+            // it, and the voice left behind must not go on playing under the
+            // new title and cover for as long as the stream takes to open: the
+            // screen names the row the person chose, so that is the one the
+            // speaker serves or the silence of "loading".
+            let steps_away = was_step
+                && engine_before.is_some()
+                && engine_before != new_row
+                && preloaded != new_row;
+            let replacing = was_queue
+                || (was_jump && engine_before.is_some() && engine_before != new_row)
+                || steps_away;
             if replacing {
                 // The pending load named a voice this command just dropped.
                 machine.pending_load = None;
@@ -1863,7 +1882,14 @@ impl Player {
         // engine is already on the jumped row (measured: trial 2 of
         // `a_jump_after_a_pause_and_a_seek_renders` skipped row 0).
         let engine_current = self.engine.current_id();
-        let next_handover = next.as_deref() == Some(id) && engine_current.as_deref() == Some(id);
+        // A handover happens while NO load is outstanding: with one pending the
+        // machine is waiting for that row's own `Started`, and a start of the
+        // next row is the late announcement of a voice a skip promoted before a
+        // Previous moved the queue back (measured: Next then Prev at once ended
+        // on the row after, the speaker on the one before).
+        let next_handover = pending.is_none()
+            && next.as_deref() == Some(id)
+            && engine_current.as_deref() == Some(id);
         if current.as_deref() != Some(id) && pending.as_deref() != Some(id) && !next_handover {
             tracing::debug!(
                 id = %id,
@@ -2133,9 +2159,17 @@ impl Player {
         }
     }
 
-    /// Pushes the snapshot to every listener. **No lock is held while calling
-    /// them**: a Kotlin callback that re-enters the player must not deadlock.
+    /// Pushes the snapshot to every listener, in order. **The machine's lock is
+    /// not held while calling them**; the delivery lock is, so a listener must
+    /// not push (`set_audio`, `set_ducked`...) from inside its own callback —
+    /// the FFI boundary's rule already says a listener writes its state and
+    /// returns.
     fn emit_change(&self) {
+        // Held across the take AND the calls, so two pushes reach every
+        // listener in the order their snapshots were taken. The machine's lock
+        // is NOT held (`snapshot` takes and releases it), and a listener only
+        // writes its state and returns (the FFI boundary's rule).
+        let _delivery = self.delivery.lock().unwrap_or_else(|err| err.into_inner());
         let snapshot = self.snapshot();
         for sink in self.listeners_snapshot() {
             sink.on_snapshot(snapshot.clone());

@@ -58,9 +58,13 @@ internal const val PLAYER_BACKDROP_TAG = "player-backdrop"
 internal fun PlayerBackdrop(cover: String?, seed: String?) {
     val loader = LocalNzCoverLoader.current
     val field by produceState<ImageBitmap?>(null, cover, seed) {
-        value = withContext(Dispatchers.Default) {
-            val source = if (cover != null) loader?.bitmap(cover, BACKDROP_PX) else null
-            nzBlurBitmap(source ?: nzGrooveBitmap(seed, BACKDROP_PX))
+        // The title's own groove FIRST: `produceState` keeps the previous value
+        // while a new one is computed, and a slow sleeve (a mobile link) left the
+        // PREVIOUS track's cover behind the new title for seconds.
+        value = withContext(Dispatchers.Default) { nzBlurBitmap(nzGrooveBitmap(seed, BACKDROP_PX)) }
+        if (cover != null) {
+            val source = withContext(Dispatchers.Default) { loader?.bitmap(cover, BACKDROP_PX) }
+            if (source != null) value = withContext(Dispatchers.Default) { nzBlurBitmap(source) }
         }
     }
     Box(Modifier.fillMaxSize()) {
